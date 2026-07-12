@@ -15,6 +15,12 @@ PROFILE_COMMANDS: dict[str, list[list[str]]] = {
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_quality_gate.py", "-v"],
         [sys.executable, "scripts/agent_status.py", ".agent/tasks"],
     ],
+    "intraday": [
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_source.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_validator.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_cache.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_service.py", "-v"],
+    ],
     "backend": [
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
     ],
@@ -27,7 +33,7 @@ PROFILE_COMMANDS: dict[str, list[list[str]]] = {
 def _full_commands() -> list[list[str]]:
     commands: list[list[str]] = []
     seen: set[tuple[str, ...]] = set()
-    for profile in ("control-plane", "backend", "frontend"):
+    for profile in ("control-plane", "intraday", "backend", "frontend"):
         for command in PROFILE_COMMANDS[profile]:
             key = tuple(command)
             if key not in seen:
@@ -77,4 +83,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

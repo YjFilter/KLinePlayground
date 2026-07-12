@@ -8,3 +8,4 @@ mootdx
 requests
 openai
 lightweight-charts
+baostock==0.9.3

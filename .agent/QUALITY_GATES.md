@@ -41,3 +41,17 @@ Record commands actually executed, exit codes, test counts, failures, warnings, 
 
 ## Failure Policy
 A mandatory gate failure keeps the task in review or returns it to ready. A pre-existing failure must be reproduced, documented, and approved before it can be excluded.
+
+### intraday
+Run:
+```powershell
+python -m unittest discover -s tests -p test_intraday_source.py -v
+python -m unittest discover -s tests -p test_intraday_validator.py -v
+python -m unittest discover -s tests -p test_intraday_cache.py -v
+python -m unittest discover -s tests -p test_intraday_service.py -v
+```
+Required for BaoStock source, intraday validation, cache, synchronization, or live verification changes. Live network verification is separate and optional for CI:
+
+```powershell
+python scripts/verify_baostock_30m.py --years 5 600000 600519 300750
+```
