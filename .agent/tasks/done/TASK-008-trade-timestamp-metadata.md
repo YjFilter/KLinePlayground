@@ -1,9 +1,9 @@
 ---
 id: TASK-008
 title: Add trade timestamp and display-period metadata
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-8
 depends_on:
   - TASK-005
 write_scope:
@@ -32,3 +32,8 @@ Extend simulator trade records with full `trade_time` and `display_period` while
 
 ## Constraints
 Do not modify app, history manager, order manager, market rules, replay modules, frontend, existing tests, or quality gates. Do not change fees, accounting, T+1 behavior, or same-day merge behavior except where required to preserve distinct timestamped trades. Do not commit.
+
+## Codex Acceptance
+- Scope reviewed and accepted.
+- Focused WorkBuddy tests and legacy trading regressions passed.
+- Integrated through `backend/intraday/trading_engine.py` without modifying Flask or frontend behavior.

@@ -30,11 +30,12 @@ Phase 2 intentionally does not modify `KLineProcessorEnhanced`, Flask routes, tr
 ## Known Limitation
 BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or import path remains required for prefixes `43`, `83`, `87`, and `92`.
 
-## Phase 3 Ready Work
-- `TASK-006`: previous-trading-day close index.
-- `TASK-007`: sequential base-bar advance executor.
-- `TASK-008`: trade timestamp and display-period metadata.
-- These three tasks have disjoint production and test write scopes and may run concurrently.
+## Phase 3 Progress
+- `TASK-006`: previous-trading-day close index accepted.
+- `TASK-007`: sequential base-bar executor accepted.
+- `TASK-008`: trade timestamp and display-period metadata accepted.
+- Codex added the critical integration adapter in `backend/intraday/trading_engine.py`.
+- `TASK-009` is ready for independent black-box equivalence testing.
 
 ## Next Action
-Run TASK-006, TASK-007, and TASK-008 with external WorkBuddy agents in parallel. Codex then reviews and integrates them into the training flow.
+Run TASK-009 with one external WorkBuddy agent. Codex will review any discovered trading-semantic defect, add the Phase 3 quality gate, and close the phase.

@@ -1,9 +1,9 @@
 ---
 id: TASK-007
 title: Build sequential base-bar advance executor
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-7
 depends_on:
   - TASK-005
 write_scope:
@@ -33,3 +33,8 @@ Provide a framework-independent executor that consumes a ReplayAdvance plan and 
 
 ## Constraints
 Use dependency-injected callbacks. Do not import Flask or mutate simulator/order-manager production code. Do not modify replay_clock, models, app, simulator, frontend, existing tests, or quality gates. Do not commit.
+
+## Codex Acceptance
+- Scope reviewed and accepted.
+- Focused WorkBuddy tests and legacy trading regressions passed.
+- Integrated through `backend/intraday/trading_engine.py` without modifying Flask or frontend behavior.

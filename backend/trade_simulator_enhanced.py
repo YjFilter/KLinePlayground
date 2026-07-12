@@ -135,6 +135,14 @@ class TradeSimulatorEnhanced:
         trade_columns = {row[1] for row in cursor.fetchall()}
         if 'reason' not in trade_columns:
             cursor.execute("ALTER TABLE trades ADD COLUMN reason TEXT DEFAULT ''")
+        # Incremental, repeatable migration for minute-level replay metadata.
+        # Each ALTER is guarded by a column existence check so re-running
+        # _init_database (including across upgrades) never raises and never
+        # rebuilds or clears the existing trades table.
+        if 'trade_time' not in trade_columns:
+            cursor.execute("ALTER TABLE trades ADD COLUMN trade_time TEXT DEFAULT ''")
+        if 'display_period' not in trade_columns:
+            cursor.execute("ALTER TABLE trades ADD COLUMN display_period TEXT DEFAULT ''")
         
         # 创建持仓批次表
         cursor.execute('''
@@ -212,8 +220,18 @@ class TradeSimulatorEnhanced:
         
         return max_quantity
     
-    def buy(self, quantity: int, price: float, trade_date: str, reason: str = '') -> Dict:
-        """买入股票（quantity为手数）"""
+    def buy(self, quantity: int, price: float, trade_date: str, reason: str = '',
+            trade_time: str = '', display_period: str = '') -> Dict:
+        """买入股票（quantity为手数）
+
+        ``trade_date`` 继续作为 T+1 判断依据，不得被 ``trade_time`` 替代。
+        ``trade_time`` 和 ``display_period`` 为可选元数据，用于分钟级回放场景
+        保留同日不同时刻的独立成交顺序。未提供时使用安全默认值，旧调用保持兼容。
+        """
+        # Normalize optional metadata to safe defaults so legacy callers behave
+        # exactly like before while new callers can pass explicit values.
+        trade_time = trade_time or ''
+        display_period = display_period or ''
         try:
             # 验证买入数量
             if quantity <= 0:
@@ -278,10 +296,15 @@ class TradeSimulatorEnhanced:
             self.position_lots.append(position_lot)
             
             # 记录交易 (检查是否同日有相同的买入操作，如果有则合并)
+            # 仅当 trade_time 也一致时才合并：具有不同 trade_time 的成交必须保留为独立记录，
+            # 以支持分钟级回放；旧的无 trade_time 调用 trade_time 为 ''，仍按原逻辑合并。
             merged = False
             if self.trade_history:
                 last_trade = self.trade_history[-1]
-                if last_trade['trade_date'] == trade_date and last_trade['action'] == 'buy':
+                last_trade_time = last_trade.get('trade_time', '')
+                if (last_trade['trade_date'] == trade_date
+                        and last_trade['action'] == 'buy'
+                        and last_trade_time == trade_time):
                     # 合并记录
                     old_amount = last_trade['amount']
                     last_trade['quantity'] += quantity
@@ -307,6 +330,8 @@ class TradeSimulatorEnhanced:
                     'stamp_tax': 0.0,  # 买入无印花税
                     'net_amount': total_cost,
                     'trade_date': trade_date,
+                    'trade_time': trade_time,
+                    'display_period': display_period,
                     'bar_id': self.current_bar_id,
                     'reason': reason or '',
                     'timestamp': datetime.now().isoformat()
@@ -328,8 +353,18 @@ class TradeSimulatorEnhanced:
                 'message': f'买入失败: {str(e)}'
             }
     
-    def sell(self, quantity: int, price: float, trade_date: str, reason: str = '') -> Dict:
-        """卖出股票（quantity为手数）"""
+    def sell(self, quantity: int, price: float, trade_date: str, reason: str = '',
+             trade_time: str = '', display_period: str = '') -> Dict:
+        """卖出股票（quantity为手数）
+
+        ``trade_date`` 继续作为 T+1 判断依据，不得被 ``trade_time`` 替代。
+        ``trade_time`` 和 ``display_period`` 为可选元数据，用于分钟级回放场景
+        保留同日不同时刻的独立成交顺序。未提供时使用安全默认值，旧调用保持兼容。
+        """
+        # Normalize optional metadata to safe defaults so legacy callers behave
+        # exactly like before while new callers can pass explicit values.
+        trade_time = trade_time or ''
+        display_period = display_period or ''
         try:
             # 验证卖出数量
             if quantity <= 0:
@@ -366,10 +401,15 @@ class TradeSimulatorEnhanced:
             self._reduce_positions(total_shares, trade_date)
             
             # 记录交易 (检查是否同日有相同的卖出操作，如果有则合并)
+            # 仅当 trade_time 也一致时才合并：具有不同 trade_time 的成交必须保留为独立记录，
+            # 以支持分钟级回放；旧的无 trade_time 调用 trade_time 为 ''，仍按原逻辑合并。
             merged = False
             if self.trade_history:
                 last_trade = self.trade_history[-1]
-                if last_trade['trade_date'] == trade_date and last_trade['action'] == 'sell':
+                last_trade_time = last_trade.get('trade_time', '')
+                if (last_trade['trade_date'] == trade_date
+                        and last_trade['action'] == 'sell'
+                        and last_trade_time == trade_time):
                     # 合并记录
                     last_trade['quantity'] += quantity
                     last_trade['amount'] += amount
@@ -395,6 +435,8 @@ class TradeSimulatorEnhanced:
                     'stamp_tax': stamp_tax,
                     'net_amount': net_amount,
                     'trade_date': trade_date,
+                    'trade_time': trade_time,
+                    'display_period': display_period,
                     'bar_id': self.current_bar_id,
                     'reason': reason or '',
                     'timestamp': datetime.now().isoformat()
@@ -545,6 +587,8 @@ class TradeSimulatorEnhanced:
             trade_details.append({
                 'bar_id': trade['bar_id'],
                 'date': trade['trade_date'],
+                'trade_time': trade.get('trade_time', ''),
+                'display_period': trade.get('display_period', ''),
                 'action': trade['action'],
                 'price': trade['price'],
                 'quantity': trade['quantity'],
@@ -606,23 +650,29 @@ class TradeSimulatorEnhanced:
             
             if update:
                 # 如果是更新，根据trade_date和action更新最后一条记录
+                # 合并仅发生在 trade_time 一致时，因此按 stock_code + trade_date +
+                # action + trade_time 定位最后一条记录，避免误更新不同时刻的独立成交。
                 cursor.execute('''
                     UPDATE trades 
-                    SET quantity = ?, price = ?, amount = ?, commission = ?, stamp_tax = ?, net_amount = ?, reason = ?, created_at = ?
+                    SET quantity = ?, price = ?, amount = ?, commission = ?, stamp_tax = ?, net_amount = ?, reason = ?, trade_time = ?, display_period = ?, created_at = ?
                     WHERE id = (
                         SELECT id FROM trades 
                         WHERE stock_code = ? AND trade_date = ? AND action = ? 
+                        AND trade_time = ?
                         ORDER BY id DESC LIMIT 1
                     )
                 ''', (
                     trade['quantity'], trade['price'], trade['amount'], trade['commission'], 
-                    trade['stamp_tax'], trade['net_amount'], trade.get('reason', ''), trade['timestamp'],
-                    trade['stock_code'], trade['trade_date'], trade['action']
+                    trade['stamp_tax'], trade['net_amount'], trade.get('reason', ''),
+                    trade.get('trade_time', ''), trade.get('display_period', ''),
+                    trade['timestamp'],
+                    trade['stock_code'], trade['trade_date'], trade['action'],
+                    trade.get('trade_time', '')
                 ))
             else:
                 cursor.execute('''
-                    INSERT INTO trades (stock_code, action, quantity, price, amount, commission, stamp_tax, net_amount, trade_date, bar_id, reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO trades (stock_code, action, quantity, price, amount, commission, stamp_tax, net_amount, trade_date, trade_time, display_period, bar_id, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     trade['stock_code'],
                     trade['action'],
@@ -633,6 +683,8 @@ class TradeSimulatorEnhanced:
                     trade['stamp_tax'],
                     trade['net_amount'],
                     trade['trade_date'],
+                    trade.get('trade_time', ''),
+                    trade.get('display_period', ''),
                     trade['bar_id'],
                     trade.get('reason', '')
                 ))

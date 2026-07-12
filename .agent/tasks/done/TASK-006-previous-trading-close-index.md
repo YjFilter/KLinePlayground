@@ -1,9 +1,9 @@
 ---
 id: TASK-006
 title: Build previous trading day close index
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-6
 depends_on:
   - TASK-005
 write_scope:
@@ -31,3 +31,8 @@ Provide a pure previous-trading-day close lookup for normalized 30-minute bars s
 
 ## Constraints
 Do not modify market rules, replay clock, aggregator, simulator, order manager, Flask, frontend, existing tests, or quality gates. Do not commit.
+
+## Codex Acceptance
+- Scope reviewed and accepted.
+- Focused WorkBuddy tests and legacy trading regressions passed.
+- Integrated through `backend/intraday/trading_engine.py` without modifying Flask or frontend behavior.
