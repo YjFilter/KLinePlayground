@@ -1,33 +1,34 @@
 # Current Project State
 
 ## Active Milestone
-Phase 1 - Intraday data foundation is complete on `feature/intraday-data-foundation` and awaiting commit or integration approval.
-
-## Working Tree
-- The shared `master` business baseline was committed before this phase.
-- Phase 1 changes are isolated in the dedicated intraday data foundation worktree.
-- No replay, trading, API, frontend, report, or persistence behavior was changed.
+Phase 2 - Aggregation and replay-clock core is complete on `feature/phase2-replay-clock` and awaiting integration approval.
 
 ## Completed Foundation
-- Multi-agent collaboration constitution, task lifecycle, ownership rules, safety boundaries, and project snapshot tooling.
-- Named control-plane, backend, frontend, intraday, and full quality profiles.
-- BaoStock-backed normalized 30-minute data source for Shanghai and Shenzhen stocks.
-- Structured validation for schema, duplicates, sessions, complete trading days, OHLC, and volume.
-- CSV cache with metadata, deterministic merge, coverage checks, and cache-first synchronization.
-- Offline unit coverage plus optional live five-year verification for representative stocks.
+- Multi-agent collaboration control plane and quality profiles.
+- BaoStock-backed five-year normalized 30-minute source, validation, cache, and synchronization.
+- `ReplayPeriod` contracts for `30m`, `4h_session`, `daily`, and `weekly`.
+- Revealed-only aggregation with partial-candle completion state and no future OHLCV leakage.
+- Replay clock using actual base timestamps for lunch, weekends, holidays, suspensions, short weeks, and incomplete sessions.
+- Pure advance plans containing each underlying 30-minute timestamp in `(current_time, target_time]`.
 
-## Verification Evidence
-- `python scripts/quality_gate.py intraday`: passed.
-- `python scripts/quality_gate.py full`: passed, 45 tests total.
-- Intraday foundation: 24 focused tests passed.
-- Live five-year checks: `600000`, `600519`, and `300750` each returned 9,688 rows across 1,211 trading days with zero validation issues.
+## Phase 2 Verification
+- Aggregator tests: 8 passed.
+- Replay-clock tests: 11 passed.
+- Independent no-future-leakage tests: 6 passed.
+- `python scripts/quality_gate.py phase2`: passed, 25 focused tests.
+- Full quality profile passed after integration.
+
+## Multi-Agent Outcome
+- One Agent implemented and tested aggregation.
+- One Agent implemented and tested the replay clock.
+- One independent Agent wrote black-box future-leakage tests.
+- Codex fixed public contracts, integrated outputs, extended quality gates, and performed final review.
+
+## Scope Boundary
+Phase 2 intentionally does not modify `KLineProcessorEnhanced`, Flask routes, trading execution, frontend, reports, or persistence. Those components will consume these stable boundaries in Phases 3 and 4.
 
 ## Known Limitation
-BaoStock 0.9.3 does not provide Beijing Exchange 30-minute data. Codes beginning with `43`, `83`, `87`, or `92` fail explicitly; a later fallback source or import path is required.
-
-## Completed Parallel Work
-- `TASK-003`: intraday operations documentation accepted.
-- `TASK-004`: validator edge-case coverage accepted; its reported null/nonnumeric volume and amount defect was fixed by Codex.
+BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or import path remains required for prefixes `43`, `83`, `87`, and `92`.
 
 ## Next Action
-Codex owns Phase 2 aggregation and replay-clock architecture for `30m`, `4h_session`, `daily`, and `weekly`; external Agents may independently claim `TASK-003` and `TASK-004`.
+Integrate Phase 2, then begin Phase 3 trading-engine adaptation: full trade timestamps, previous-trading-day close, and sequential hidden-bar order processing.

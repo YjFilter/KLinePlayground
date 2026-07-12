@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
+from typing import Final
 
 
 @dataclass(frozen=True)
@@ -27,3 +29,50 @@ class ValidationResult:
     @property
     def is_valid(self) -> bool:
         return not self.issues
+
+
+class ReplayPeriod(str, Enum):
+    MINUTE_30 = "30m"
+    SESSION_4H = "4h_session"
+    DAILY = "daily"
+    WEEKLY = "weekly"
+
+    @classmethod
+    def parse(cls, value: "ReplayPeriod | str") -> "ReplayPeriod":
+        return value if isinstance(value, cls) else cls(value)
+
+
+BASE_INTERVAL: Final[ReplayPeriod] = ReplayPeriod.MINUTE_30
+AGGREGATED_COLUMNS: Final[tuple[str, ...]] = (
+    "period",
+    "start_time",
+    "end_time",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "amount",
+    "source_bar_count",
+    "complete",
+)
+
+
+@dataclass(frozen=True)
+class PeriodBoundaryIndex:
+    timestamps: tuple[datetime, ...]
+    session_ends: frozenset[datetime]
+    week_ends: frozenset[datetime]
+    incomplete_sessions: frozenset[object] = frozenset()
+
+
+@dataclass(frozen=True)
+class ReplayAdvance:
+    period: ReplayPeriod
+    current_time: datetime
+    target_time: datetime | None
+    base_bar_times: tuple[datetime, ...]
+
+    @property
+    def finished(self) -> bool:
+        return self.target_time is None
