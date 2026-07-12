@@ -1,29 +1,29 @@
-﻿# Current Project State
+# Current Project State
 
 ## Active Milestone
-M1 - Agent Control Plane complete. M2 - Quality and CI is next.
+Phase 1 - Intraday data foundation is complete on `feature/intraday-data-foundation` and awaiting commit or integration approval.
 
 ## Working Tree
-The repository still contains the pre-existing uncommitted training-review redesign. Treat every pre-existing business modification as user-owned and do not overwrite, discard, move, or reformat it without explicit review.
+- The shared `master` business baseline was committed before this phase.
+- Phase 1 changes are isolated in the dedicated intraday data foundation worktree.
+- No replay, trading, API, frontend, report, or persistence behavior was changed.
 
 ## Completed Foundation
-- Repository collaboration constitution and project memory.
-- Task lifecycle, templates, ownership rules, and safety boundaries.
-- Automatic task metadata and write-scope conflict validation.
-- Generated project restoration snapshot.
-- Named control-plane, backend, frontend, and full quality profiles.
-- Windows GitHub Actions quality workflow.
-- First task lifecycle completed through Codex review.
+- Multi-agent collaboration constitution, task lifecycle, ownership rules, safety boundaries, and project snapshot tooling.
+- Named control-plane, backend, frontend, intraday, and full quality profiles.
+- BaoStock-backed normalized 30-minute data source for Shanghai and Shenzhen stocks.
+- Structured validation for schema, duplicates, sessions, complete trading days, OHLC, and volume.
+- CSV cache with metadata, deterministic merge, coverage checks, and cache-first synchronization.
+- Offline unit coverage plus optional live five-year verification for representative stocks.
 
-## Current Priorities
-1. Review and accept the pre-existing training-review redesign as a separately scoped task.
-2. Expand API, startup, and packaging verification for M2.
-3. Create the first low-risk WorkBuddy task packet to validate external handoff.
-4. Plan hotspot decomposition only after the business baseline is accepted.
+## Verification Evidence
+- `python scripts/quality_gate.py intraday`: passed.
+- `python scripts/quality_gate.py full`: passed, 45 tests total.
+- Intraday foundation: 24 focused tests passed.
+- Live five-year checks: `600000`, `600519`, and `300750` each returned 9,688 rows across 1,211 trading days with zero validation issues.
 
-## Blockers
-- The pre-existing business redesign has automated regression coverage but no recorded product-level acceptance result.
-- CI configuration exists locally but has not run remotely because no commit or push was requested.
+## Known Limitation
+BaoStock 0.9.3 does not provide Beijing Exchange 30-minute data. Codes beginning with `43`, `83`, `87`, or `92` fail explicitly; a later fallback source or import path is required.
 
 ## Next Action
-Create and execute a dedicated baseline-review task for the existing training-review redesign, without mixing it with control-plane changes.
+Commit or integrate Phase 1 after owner approval, then implement Phase 2 aggregation and replay-clock behavior for `30m`, `4h_session`, `daily`, and `weekly`.
