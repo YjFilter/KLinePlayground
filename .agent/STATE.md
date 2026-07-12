@@ -1,7 +1,7 @@
 # Current Project State
 
 ## Active Milestone
-Phase 2 - Aggregation and replay-clock core is complete on `feature/phase2-replay-clock` and awaiting integration approval.
+Phase 3 - Trading-engine adaptation is ready for WorkBuddy implementation and Codex integration review.
 
 ## Completed Foundation
 - Multi-agent collaboration control plane and quality profiles.
@@ -30,5 +30,11 @@ Phase 2 intentionally does not modify `KLineProcessorEnhanced`, Flask routes, tr
 ## Known Limitation
 BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or import path remains required for prefixes `43`, `83`, `87`, and `92`.
 
+## Phase 3 Ready Work
+- `TASK-006`: previous-trading-day close index.
+- `TASK-007`: sequential base-bar advance executor.
+- `TASK-008`: trade timestamp and display-period metadata.
+- These three tasks have disjoint production and test write scopes and may run concurrently.
+
 ## Next Action
-Integrate Phase 2, then begin Phase 3 trading-engine adaptation: full trade timestamps, previous-trading-day close, and sequential hidden-bar order processing.
+Run TASK-006, TASK-007, and TASK-008 with external WorkBuddy agents in parallel. Codex then reviews and integrates them into the training flow.
