@@ -6531,3 +6531,12 @@ __pycache__/
 *.exe
 *.7z
 chart_render_temp.html
+# Local AI collaboration and build artifacts
+.superpowers/
+.agent/generated/
+*.py[cod]
+.env
+.env.*
+!.env.example
+build/
+dist/
