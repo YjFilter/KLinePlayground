@@ -55,3 +55,10 @@ Required for BaoStock source, intraday validation, cache, synchronization, or li
 ```powershell
 python scripts/verify_baostock_30m.py --years 5 600000 600519 300750
 ```
+
+
+## Phase 2
+```powershell
+python scripts/quality_gate.py phase2
+```
+Runs aggregation, replay-clock, and no-future-leakage tests. It is included in `full`.

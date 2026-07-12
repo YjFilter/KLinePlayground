@@ -45,6 +45,23 @@ class QualityGateTests(unittest.TestCase):
         for command in intraday_commands:
             self.assertIn(command, full_commands)
             self.assertEqual(full_commands.count(command), 1)
+    def test_phase2_profile_includes_clock_aggregation_and_leakage_tests(self):
+        from scripts.quality_gate import PROFILE_COMMANDS
+
+        phase2_commands = [tuple(command) for command in PROFILE_COMMANDS["phase2"]]
+        phase2_text = "\n".join(" ".join(command) for command in PROFILE_COMMANDS["phase2"])
+        full_commands = [tuple(command) for command in PROFILE_COMMANDS["full"]]
+
+        for filename in (
+            "test_intraday_aggregator.py",
+            "test_intraday_replay_clock.py",
+            "test_intraday_no_future_leakage.py",
+        ):
+            self.assertIn(filename, phase2_text)
+        for command in phase2_commands:
+            self.assertIn(command, full_commands)
+            self.assertEqual(full_commands.count(command), 1)
+
     def test_first_failure_produces_nonzero_exit(self):
         from scripts.quality_gate import run_profile
 
