@@ -14,6 +14,7 @@ class KLineProcessorEnhanced:
         start_date: str,
         source: str = "akshare",
         interval: str = "daily",
+        max_training_bars: int = 0,
     ):
         self.data_manager = data_manager
         self.stock_code = stock_code
@@ -44,6 +45,17 @@ class KLineProcessorEnhanced:
         self.preview_bars = min(80, self.start_index - self.preview_start_index)
         self.current_index = self.preview_bars
         self.max_index = len(self.full_data) - 1
+
+        # K线数量限制：截断训练数据
+        if max_training_bars and max_training_bars > 0:
+            target_end = self.preview_bars + max_training_bars - 1
+            if target_end <= self.max_index:
+                self.max_index = target_end
+                self.full_data = self.full_data.iloc[: target_end + 1].copy().reset_index(drop=True)
+            else:
+                available_bars = self.max_index - self.preview_bars + 1
+                raise ValueError(f"训练K线不足：需要 {max_training_bars} 根，实际只有 {available_bars} 根")
+
         self.bar_id_offset = -self.preview_bars + 1
         self.trade_markers: List[Dict] = []
 
@@ -289,12 +301,14 @@ class KLineProcessorEnhanced:
 
     def get_progress(self) -> Dict:
         training_current = max(0, self.current_index - self.preview_bars)
-        training_total = max(1, self.max_index - self.preview_bars)
+        training_total_bars = max(1, self.max_index - self.preview_bars + 1)
+        training_steps = max(1, training_total_bars - 1)
         return {
             "current_bar_id": self.get_current_bar_id(),
             "current_index": self.current_index,
             "total_bars": len(self.full_data),
-            "training_progress": (training_current / training_total) * 100,
+            "training_total_bars": training_total_bars,
+            "training_progress": (training_current / training_steps) * 100,
             "current_date": self.get_current_date(),
             "start_date": self.start_date.strftime("%Y-%m-%d"),
             "end_date": self.full_data.iloc[-1]["date"].strftime("%Y-%m-%d"),

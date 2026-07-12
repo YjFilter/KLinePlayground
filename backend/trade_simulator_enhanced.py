@@ -131,6 +131,10 @@ class TradeSimulatorEnhanced:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        cursor.execute("PRAGMA table_info(trades)")
+        trade_columns = {row[1] for row in cursor.fetchall()}
+        if 'reason' not in trade_columns:
+            cursor.execute("ALTER TABLE trades ADD COLUMN reason TEXT DEFAULT ''")
         
         # 创建持仓批次表
         cursor.execute('''
@@ -208,7 +212,7 @@ class TradeSimulatorEnhanced:
         
         return max_quantity
     
-    def buy(self, quantity: int, price: float, trade_date: str) -> Dict:
+    def buy(self, quantity: int, price: float, trade_date: str, reason: str = '') -> Dict:
         """买入股票（quantity为手数）"""
         try:
             # 验证买入数量
@@ -286,6 +290,8 @@ class TradeSimulatorEnhanced:
                     last_trade['net_amount'] += total_cost
                     # 重新计算平均价格
                     last_trade['price'] = last_trade['amount'] / (last_trade['quantity'] * 100)
+                    if reason:
+                        last_trade['reason'] = (last_trade.get('reason') or '') + ('\n' if last_trade.get('reason') else '') + reason
                     last_trade['timestamp'] = datetime.now().isoformat()
                     trade_record = last_trade
                     merged = True
@@ -302,6 +308,7 @@ class TradeSimulatorEnhanced:
                     'net_amount': total_cost,
                     'trade_date': trade_date,
                     'bar_id': self.current_bar_id,
+                    'reason': reason or '',
                     'timestamp': datetime.now().isoformat()
                 }
                 self.trade_history.append(trade_record)
@@ -321,7 +328,7 @@ class TradeSimulatorEnhanced:
                 'message': f'买入失败: {str(e)}'
             }
     
-    def sell(self, quantity: int, price: float, trade_date: str) -> Dict:
+    def sell(self, quantity: int, price: float, trade_date: str, reason: str = '') -> Dict:
         """卖出股票（quantity为手数）"""
         try:
             # 验证卖出数量
@@ -371,6 +378,8 @@ class TradeSimulatorEnhanced:
                     last_trade['net_amount'] += net_amount
                     # 重新计算平均价格
                     last_trade['price'] = last_trade['amount'] / (last_trade['quantity'] * 100)
+                    if reason:
+                        last_trade['reason'] = (last_trade.get('reason') or '') + ('\n' if last_trade.get('reason') else '') + reason
                     last_trade['timestamp'] = datetime.now().isoformat()
                     trade_record = last_trade
                     merged = True
@@ -387,6 +396,7 @@ class TradeSimulatorEnhanced:
                     'net_amount': net_amount,
                     'trade_date': trade_date,
                     'bar_id': self.current_bar_id,
+                    'reason': reason or '',
                     'timestamp': datetime.now().isoformat()
                 }
                 self.trade_history.append(trade_record)
@@ -541,7 +551,8 @@ class TradeSimulatorEnhanced:
                 'amount': trade['amount'],
                 'commission': trade['commission'],
                 'stamp_tax': trade['stamp_tax'],
-                'net_amount': trade['net_amount']
+                'net_amount': trade['net_amount'],
+                'reason': trade.get('reason', '')
             })
         
         return {
@@ -597,7 +608,7 @@ class TradeSimulatorEnhanced:
                 # 如果是更新，根据trade_date和action更新最后一条记录
                 cursor.execute('''
                     UPDATE trades 
-                    SET quantity = ?, price = ?, amount = ?, commission = ?, stamp_tax = ?, net_amount = ?, created_at = ?
+                    SET quantity = ?, price = ?, amount = ?, commission = ?, stamp_tax = ?, net_amount = ?, reason = ?, created_at = ?
                     WHERE id = (
                         SELECT id FROM trades 
                         WHERE stock_code = ? AND trade_date = ? AND action = ? 
@@ -605,13 +616,13 @@ class TradeSimulatorEnhanced:
                     )
                 ''', (
                     trade['quantity'], trade['price'], trade['amount'], trade['commission'], 
-                    trade['stamp_tax'], trade['net_amount'], trade['timestamp'],
+                    trade['stamp_tax'], trade['net_amount'], trade.get('reason', ''), trade['timestamp'],
                     trade['stock_code'], trade['trade_date'], trade['action']
                 ))
             else:
                 cursor.execute('''
-                    INSERT INTO trades (stock_code, action, quantity, price, amount, commission, stamp_tax, net_amount, trade_date, bar_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO trades (stock_code, action, quantity, price, amount, commission, stamp_tax, net_amount, trade_date, bar_id, reason)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     trade['stock_code'],
                     trade['action'],
@@ -622,7 +633,8 @@ class TradeSimulatorEnhanced:
                     trade['stamp_tax'],
                     trade['net_amount'],
                     trade['trade_date'],
-                    trade['bar_id']
+                    trade['bar_id'],
+                    trade.get('reason', '')
                 ))
             conn.commit()
     

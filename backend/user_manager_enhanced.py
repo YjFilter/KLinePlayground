@@ -150,6 +150,12 @@ class UserManagerEnhanced:
     def get_session_detail(self, username: str, session_id: str) -> Optional[Dict]:
         """获取训练会话详情"""
         return self.history_manager.get_session_detail(username, session_id)
+
+    def get_session_report(self, username: str, session_id: str) -> Optional[Dict]:
+        return self.history_manager.get_session_report(username, session_id)
+
+    def save_review_summary(self, username: str, session_id: str, summary: str) -> bool:
+        return self.history_manager.save_review_summary(username, session_id, summary)
     
     def get_performance_analysis(self, username: str, days: int = 30) -> Dict:
         """获取用户表现分析"""

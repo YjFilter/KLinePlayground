@@ -49,6 +49,12 @@ class HistoryManager:
                 completed_at TIMESTAMP
             )
         ''')
+        cursor.execute("PRAGMA table_info(training_sessions)")
+        session_columns = {row[1] for row in cursor.fetchall()}
+        if 'report_data' not in session_columns:
+            cursor.execute("ALTER TABLE training_sessions ADD COLUMN report_data TEXT DEFAULT ''")
+        if 'review_summary' not in session_columns:
+            cursor.execute("ALTER TABLE training_sessions ADD COLUMN review_summary TEXT DEFAULT ''")
         
         # 创建K线历史表（记录每个bar的状态）
         cursor.execute('''
@@ -93,6 +99,10 @@ class HistoryManager:
                 FOREIGN KEY (session_id) REFERENCES training_sessions (session_id)
             )
         ''')
+        cursor.execute("PRAGMA table_info(trade_history)")
+        trade_columns = {row[1] for row in cursor.fetchall()}
+        if 'reason' not in trade_columns:
+            cursor.execute("ALTER TABLE trade_history ADD COLUMN reason TEXT DEFAULT ''")
         
         # 创建用户统计表
         cursor.execute('''
@@ -150,6 +160,7 @@ class HistoryManager:
     def record_bar_state(self, username: str, session_id: str, bar_data: Dict) -> bool:
         """记录每个bar的状态"""
         try:
+            self._init_user_history_db(username)
             db_path = self._get_user_db_path(username)
             
             conn = sqlite3.connect(db_path)
@@ -223,8 +234,6 @@ class HistoryManager:
     
     def complete_training_session(self, username: str, session_id: str, completion_data: Dict) -> bool:
         """完成训练会话"""
-        if completion_data['total_trades']==0:
-            return True
         try:
             db_path = self._get_user_db_path(username)
             
@@ -236,7 +245,7 @@ class HistoryManager:
                 UPDATE training_sessions 
                 SET end_date = ?, final_capital = ?, total_return = ?, max_drawdown = ?, 
                     total_trades = ?, trade_win_rate = ?, session_win_rate = ?, total_bars = ?, completed_bars = ?, 
-                    status = ?, completed_at = ?
+                    status = ?, completed_at = ?, report_data = ?, review_summary = ?
                 WHERE session_id = ?
             ''', (
                 completion_data['end_date'],
@@ -250,6 +259,8 @@ class HistoryManager:
                 completion_data.get('completed_bars', 0),
                 'completed',
                 datetime.now().isoformat(),
+                json.dumps(completion_data.get('report_data', {}), ensure_ascii=False),
+                completion_data.get('review_summary', ''),
                 session_id
             ))
             
@@ -286,7 +297,7 @@ class HistoryManager:
             new_total_return_sum = total_return_sum + completion_data['total_return']
             new_best_return = max(best_return, completion_data['total_return'])
             new_worst_return = min(worst_return, completion_data['total_return'])
-            new_avg_trade_win_rate = (avg_trade_win_rate * total_trades + completion_data['trade_win_rate']*completion_data['total_trades']) / new_total_trades
+            new_avg_trade_win_rate = 0 if new_total_trades == 0 else (avg_trade_win_rate * total_trades + completion_data['trade_win_rate'] * completion_data['total_trades']) / new_total_trades
             new_avg_session_win_rate = (avg_session_win_rate * completed_sessions + completion_data[
                 'session_win_rate']) / new_completed_sessions
             new_total_commission_paid = total_commission_paid + completion_data.get('total_commission', 0)
@@ -363,6 +374,7 @@ class HistoryManager:
     def get_training_history(self, username: str, limit: int = 20) -> List[Dict]:
         """获取训练历史"""
         try:
+            self._init_user_history_db(username)
             db_path = self._get_user_db_path(username)
             if not os.path.exists(db_path):
                 return []
@@ -373,7 +385,7 @@ class HistoryManager:
             cursor.execute('''
                 SELECT session_id, stock_code, stock_name, start_date, end_date, mode,
                        initial_capital, final_capital, total_return, total_trades, trade_win_rate, session_win_rate, 
-                       status, created_at, completed_at
+                       status, created_at, completed_at, review_summary
                 FROM training_sessions
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -399,7 +411,8 @@ class HistoryManager:
                     'session_win_rate': row[11],
                     'status': row[12],
                     'created_at': row[13],
-                    'completed_at': row[14]
+                    'completed_at': row[14],
+                    'review_summary': row[15] if len(row) > 15 else ''
                 })
             
             return history
@@ -452,6 +465,80 @@ class HistoryManager:
             print(f"获取会话详情失败: {e}")
             return None
     
+    def get_session_report(self, username: str, session_id: str) -> Optional[Dict]:
+        try:
+            self._init_user_history_db(username)
+            db_path = self._get_user_db_path(username)
+            if not os.path.exists(db_path):
+                return None
+
+            with sqlite3.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT session_id, stock_code, stock_name, start_date, end_date, mode,
+                           initial_capital, final_capital, total_return, total_trades,
+                           trade_win_rate, session_win_rate, status, created_at, completed_at,
+                           report_data, review_summary
+                    FROM training_sessions
+                    WHERE session_id = ?
+                ''', (session_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+
+            report = {}
+            if row['report_data']:
+                try:
+                    report = json.loads(row['report_data'])
+                except json.JSONDecodeError:
+                    report = {}
+
+            if not report:
+                report = {
+                    'session_id': row['session_id'],
+                    'stock_code': row['stock_code'],
+                    'stock_name': row['stock_name'],
+                    'start_date': row['start_date'],
+                    'end_date': row['end_date'],
+                    'initial_capital': row['initial_capital'],
+                    'final_capital': row['final_capital'],
+                    'total_return': row['total_return'],
+                    'total_trades': row['total_trades'],
+                    'trade_win_rate': row['trade_win_rate'],
+                    'session_win_rate': row['session_win_rate'],
+                    'trade_details': [],
+                }
+
+            report['review_summary'] = row['review_summary'] or report.get('review_summary', '')
+            report['history_meta'] = {
+                'mode': row['mode'],
+                'status': row['status'],
+                'created_at': row['created_at'],
+                'completed_at': row['completed_at'],
+            }
+            return report
+        except Exception as e:
+            print(f"获取历史复盘报告失败: {e}")
+            return None
+
+    def save_review_summary(self, username: str, session_id: str, summary: str) -> bool:
+        try:
+            self._init_user_history_db(username)
+            db_path = self._get_user_db_path(username)
+            with sqlite3.connect(db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE training_sessions
+                    SET review_summary = ?
+                    WHERE session_id = ?
+                ''', (summary, session_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            print(f"保存复盘总结失败: {e}")
+            return False
+
     def get_performance_analysis(self, username: str, days: int = 30) -> Dict:
         """获取用户表现分析"""
         try:

@@ -22,11 +22,15 @@ let isShiftClicked = false;
 let isShiftKeyPressed = false;
 let currentTheme = localStorage.getItem('uiTheme') || 'light';
 let currentPeriod = 'daily';
+let currentOrderType = 'market';
 let availableDataSources = [];
 let latestRenderedKlineData = [];
 let trainingSetupReturnScreen = 'main';
 let currentReportData = null;
+let currentHistoryFilter = 'all';
 let isViewOnlyMode = false;
+let skipTradeReasonPrompt = false;
+let pendingTradeReasonAction = null;
 
 const THEME_PALETTES = {
     light: {
@@ -453,7 +457,9 @@ function ensureBackToReportButton() {
     backBtn.onclick = () => {
         setTrainingViewOnlyMode(false, { showBackToReport: false });
         document.getElementById('training-interface').classList.add('hidden');
-        document.getElementById('report-interface').classList.remove('hidden');
+    const reportInterface = document.getElementById('report-interface');
+    reportInterface.classList.remove('hidden');
+    reportInterface.scrollTop = 0;
         toggleToolbarForTraining(false);
     };
     controlsSection.appendChild(backBtn);
@@ -657,6 +663,19 @@ function setupEventListeners() {
     // 用户选择相关
     document.getElementById('create-user-btn').addEventListener('click', createUser);
     document.getElementById('switch-user-btn').addEventListener('click', showUserSelection);
+    document.getElementById('dashboard-new-training-btn')?.addEventListener('click', () => showTrainingSetup('main'));
+    document.getElementById('refresh-history-btn')?.addEventListener('click', loadHistoryDashboard);
+    document.querySelectorAll('.history-filter-btn').forEach((button) => {
+        button.addEventListener('click', () => {
+            currentHistoryFilter = button.dataset.historyFilter || 'all';
+            document.querySelectorAll('.history-filter-btn').forEach((item) => item.classList.toggle('active', item === button));
+            loadHistoryDashboard();
+        });
+    });
+    document.getElementById('close-trade-reason-btn')?.addEventListener('click', closeTradeReasonModal);
+    document.getElementById('cancel-trade-reason-btn')?.addEventListener('click', cancelTradeReasonPrompt);
+    document.getElementById('save-trade-reason-btn')?.addEventListener('click', submitTradeReasonPrompt);
+    document.getElementById('trade-reason-text')?.addEventListener('input', updateTradeReasonCount);
 
     // 训练设置相关
     document.getElementById('new-training-btn').addEventListener('click', showTrainingSetup);
@@ -703,18 +722,43 @@ function setupEventListeners() {
         updatePriceMode();
     });
 
-    document.getElementById('buy-btn')?.addEventListener('click', () => {
-        executeBuy((isShiftClicked || isShiftKeyPressed) ? 'open' : 'close');
+        document.getElementById('buy-btn')?.addEventListener('click', () => {
+        requestTradeWithReason('buy', (isShiftClicked || isShiftKeyPressed) ? 'open' : 'close');
     });
 
     document.getElementById('sell-btn')?.addEventListener('click', () => {
-        executeSell((isShiftClicked || isShiftKeyPressed) ? 'open' : 'close');
+        requestTradeWithReason('sell', (isShiftClicked || isShiftKeyPressed) ? 'open' : 'close');
     });
 
     // 交易数量输入限制
     document.getElementById('trade-quantity').addEventListener('input', limitTradeQuantity);
+    document.getElementById('sell-quantity')?.addEventListener('input', limitSellQuantity);
+
+    document.querySelectorAll('.order-type-btn').forEach(btn => {
+        btn.addEventListener('click', () => setOrderType(btn.dataset.orderType || 'market'));
+    });
+
+    // 仓位比例按钮
+    document.querySelectorAll('.btn-fraction').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const fraction = parseInt(btn.dataset.fraction);
+            const target = btn.dataset.target || 'buy';
+            const quantityInput = document.getElementById(target === 'sell' ? 'sell-quantity' : 'trade-quantity');
+            const maxElement = document.getElementById(target === 'sell' ? 'max-sell-quantity' : 'max-buy-quantity');
+            const maxQty = parseInt(maxElement?.textContent) || 0;
+            // 根据当前是否有持仓来决定用买入还是卖出的最大值
+            quantityInput.value = Math.max(Math.floor(maxQty / fraction), maxQty > 0 ? 1 : 0);
+            quantityInput.dispatchEvent(new Event('input'));
+            // 高亮选中的按钮
+            document.querySelectorAll('.btn-fraction').forEach(b => {
+                if ((b.dataset.target || 'buy') === target) b.classList.remove('active');
+            });
+            btn.classList.add('active');
+        });
+    });
 
     // 训练控制
+    setOrderType('market');
     document.getElementById('end-training-btn').addEventListener('click', endTraining);
     document.getElementById('reset-training-btn').addEventListener('click', resetTraining);
 
@@ -947,6 +991,7 @@ function selectUser(username) {
     document.getElementById('current-username').textContent = username;
     showMainApp();
     loadUserStatistics();
+    loadHistoryDashboard();
 
     // 初始化 AI API 状态
     fetch(`${API_BASE}/users/${username}/settings`)
@@ -1072,6 +1117,14 @@ function resetToMainAppState() {
     document.getElementById('max-buy-quantity').textContent = '0';
     document.getElementById('max-sell-quantity').textContent = '0';
     document.getElementById('trade-quantity').value = '1'; // 重置交易数量
+    document.getElementById('sell-quantity').value = '1';
+    document.getElementById('trigger-price').value = '';
+    document.getElementById('take-profit-price').value = '';
+    document.getElementById('stop-loss-price').value = '';
+    skipTradeReasonPrompt = false;
+    pendingTradeReasonAction = null;
+    renderPendingOrders(null);
+    setOrderType('market');
     // 清理K线信息
     document.getElementById('stock-name').textContent = '未知股票';
     document.getElementById('current-date').textContent = 'YYYY/MM/DD';
@@ -1093,6 +1146,7 @@ function resetToMainAppState() {
     document.getElementById('main-app').classList.remove('hidden');
 
     setTrainingViewOnlyMode(false, { showBackToReport: false });
+    document.getElementById('history-dashboard')?.classList.remove('hidden');
 
     // 清理后端的训练会话
     if (cleanupTrainingId) {
@@ -1106,6 +1160,7 @@ function resetToMainAppState() {
 
     // 7. 确保主界面的工具栏是可见的
     toggleToolbarForTraining(false);
+    loadHistoryDashboard();
 }
 
 // 界面切换
@@ -1121,6 +1176,7 @@ function showUserSelection() {
 function showMainApp() {
     document.getElementById('user-selection').classList.add('hidden');
     document.getElementById('main-app').classList.remove('hidden');
+    document.getElementById('history-dashboard')?.classList.remove('hidden');
     document.getElementById('training-interface').classList.add('hidden');
     document.getElementById('report-interface').classList.add('hidden');
     updatePeriodBadge('daily');
@@ -1128,6 +1184,7 @@ function showMainApp() {
 
     // 确保按钮和标题是可见的
     toggleToolbarForTraining(false);
+    loadHistoryDashboard();
 }
 
 async function showTrainingSetup(returnScreen = null) {
@@ -1702,7 +1759,8 @@ async function startTraining() {
         initial_capital: initialCapital,
         mode: isRandomMode ? 'random' : 'specified',
         data_source: dataSource,
-        period: period
+        period: period,
+        max_bars: parseInt(document.getElementById('max-training-bars')?.value) || 0
     };
 
     if (isRandomMode) {
@@ -1767,6 +1825,7 @@ async function startTraining() {
 }
 
 function showTrainingInterface() {
+    document.getElementById('history-dashboard')?.classList.add('hidden');
     document.getElementById('training-interface').classList.remove('hidden');
     setTrainingViewOnlyMode(false, { showBackToReport: false });
     updateAccountInfo();
@@ -2350,7 +2409,69 @@ function updateCurrentInfo(barData, progress) {
     // 更新进度信息
     if (progress) {
         document.getElementById('training-progress').textContent =
-            `进度: ${progress.training_progress.toFixed(1)}% (${progress.current_bar_id}/${progress.total_bars - progress.preview_bars})`;
+            `进度: ${progress.training_progress.toFixed(1)}% (${progress.current_bar_id}/${progress.training_total_bars || (progress.total_bars - progress.preview_bars)})`;
+    }
+
+    // === 涨停/跌停检测 ===
+    checkLimitStatus(barData, progress);
+}
+
+// 涨停/跌停状态检测
+let currentLimitStatus = null; // null | 'limit_up' | 'limit_down'
+
+function checkLimitStatus(barData, progress) {
+    const limitStatusEl = document.getElementById('limit-status');
+    const buyBtn = document.getElementById('buy-btn');
+    const sellBtn = document.getElementById('sell-btn');
+    if (!limitStatusEl || !buyBtn || !sellBtn) return;
+
+    if (!progress || progress.current_bar_id <= 1 || !barData.lastClose || barData.lastClose <= 0) {
+        limitStatusEl.className = 'limit-status hidden';
+        limitStatusEl.textContent = '';
+        buyBtn.disabled = false;
+        sellBtn.disabled = false;
+        currentLimitStatus = null;
+        return;
+    }
+
+    const prevClose = barData.lastClose;
+    const close = barData.close;
+
+    // 判断板块：创业板(30x)/科创板(68x) 涨跌幅20%，主板10%
+    const stockCode = currentTraining ? currentTraining.stock_code : '';
+    let limitPct = 0.10; // 默认主板
+    if (stockCode.startsWith('30') || stockCode.startsWith('68')) {
+        limitPct = 0.20;
+    } else if (stockCode.startsWith('43') || stockCode.startsWith('83') || stockCode.startsWith('87') || stockCode.startsWith('92')) {
+        limitPct = 0.30; // 北交所
+    }
+
+    const limitUpPrice = prevClose * (1 + limitPct);
+    const limitDownPrice = prevClose * (1 - limitPct);
+    const threshold = prevClose * 0.001; // 容差
+
+    // 涨停：收盘价 >= 涨停价（允许微小误差）
+    if (close >= limitUpPrice - threshold) {
+        currentLimitStatus = 'limit_up';
+        limitStatusEl.className = 'limit-status limit-up';
+        limitStatusEl.textContent = `涨停 ¥${limitUpPrice.toFixed(2)} — 无法买入`;
+        buyBtn.disabled = currentOrderType === 'market';
+        sellBtn.disabled = false;
+    }
+    // 跌停：收盘价 <= 跌停价
+    else if (close <= limitDownPrice + threshold) {
+        currentLimitStatus = 'limit_down';
+        limitStatusEl.className = 'limit-status limit-down';
+        limitStatusEl.textContent = `跌停 ¥${limitDownPrice.toFixed(2)} — 无法卖出`;
+        buyBtn.disabled = false;
+        sellBtn.disabled = true;
+    }
+    else {
+        currentLimitStatus = null;
+        limitStatusEl.className = 'limit-status hidden';
+        limitStatusEl.textContent = '';
+        buyBtn.disabled = false;
+        sellBtn.disabled = false;
     }
 }
 
@@ -2502,6 +2623,11 @@ async function nextBar() {
                     }
                 }
 
+                if (data.trade_markers) {
+                    updateTradeMarkers(data.trade_markers);
+                    lastKnownTradeCount = data.trade_markers.length;
+                }
+                renderPendingOrders(data.pending_orders);
                 updateAccountInfo();
                 return true;
             }
@@ -2774,8 +2900,370 @@ function limitTradeQuantity() {
     }
 }
 
-async function executeBuy(priceType = 'close') {
-    if (priceType === 'open') {
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function formatMoney(value) {
+    const num = Number(value || 0);
+    return `¥${num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatReturn(value) {
+    const num = Number(value || 0);
+    return `${num.toFixed(2)}%`;
+}
+
+async function loadHistoryDashboard() {
+    if (!currentUser) return;
+    const list = document.getElementById('history-list');
+    const summary = document.getElementById('history-summary-strip');
+    if (!list || !summary) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/users/${encodeURIComponent(currentUser)}/history?limit=50`);
+        if (!response.ok) throw new Error(`history status ${response.status}`);
+        const sessions = await response.json();
+
+        const completed = sessions.filter(item => item.status === 'completed' || item.status === 'ended');
+        const visibleSessions = sessions.filter((session) => {
+            if (currentHistoryFilter === 'completed') return session.status === 'completed' || session.status === 'ended';
+            if (currentHistoryFilter === 'summary') return !!(session.review_summary || '').trim();
+            return true;
+        });
+        const recordCount = document.getElementById('history-record-count');
+        if (recordCount) recordCount.textContent = `${visibleSessions.length} / ${sessions.length} 条记录`;
+        const totalReturn = completed.reduce((sum, item) => sum + Number(item.total_return || 0), 0);
+        const best = completed.reduce((max, item) => Math.max(max, Number(item.total_return || 0)), completed.length ? -Infinity : 0);
+        const totalTrades = completed.reduce((sum, item) => sum + Number(item.total_trades || 0), 0);
+
+        summary.innerHTML = `
+            <div class="history-metric"><span class="label">完成复盘</span><span class="value">${completed.length}</span></div>
+            <div class="history-metric"><span class="label">平均收益</span><span class="value ${totalReturn >= 0 ? 'positive' : 'negative'}">${formatReturn(completed.length ? totalReturn / completed.length : 0)}</span></div>
+            <div class="history-metric"><span class="label">最佳收益</span><span class="value ${best >= 0 ? 'positive' : 'negative'}">${formatReturn(best)}</span></div>
+            <div class="history-metric"><span class="label">交易次数</span><span class="value">${totalTrades}</span></div>
+        `;
+
+        if (!visibleSessions.length) {
+            list.innerHTML = '<div class="history-empty">暂无历史训练，完成一次训练后会显示在这里。</div>';
+            return;
+        }
+
+        list.innerHTML = visibleSessions.map(session => {
+            const returnValue = Number(session.total_return || 0);
+            const hasSummary = !!(session.review_summary || '').trim();
+            return `
+                <article class="history-card" data-session-id="${escapeHtml(session.session_id)}">
+                    <div class="history-card-head">
+                        <div class="history-instrument">
+                            <span class="history-icon">↗</span>
+                            <div>
+                                <strong>${escapeHtml(session.stock_name || session.stock_code)}</strong>
+                                <span>${escapeHtml(session.stock_code || '-')} · ${hasSummary ? '已写心得' : '待写心得'}</span>
+                            </div>
+                        </div>
+                        <div class="history-return ${returnValue >= 0 ? 'positive' : 'negative'}">
+                            <strong>${formatReturn(returnValue)}</strong>
+                            <span>${session.total_trades || 0} 笔交易</span>
+                        </div>
+                    </div>
+                    <div class="history-card-info">
+                        <span>训练区间：${escapeHtml(session.start_date || '-')} 至 ${escapeHtml(session.end_date || '-')}</span>
+                        <span>胜率：${formatReturn(session.trade_win_rate || 0)}</span>
+                    </div>
+                    <div class="history-card-actions">
+                        <button class="btn btn-secondary history-open-btn" data-session-id="${escapeHtml(session.session_id)}" type="button">${hasSummary ? '查看复盘' : '写心得'}</button>
+                        <button class="btn btn-primary history-open-btn" data-session-id="${escapeHtml(session.session_id)}" type="button">查看 K 线</button>
+                        <button class="btn btn-quiet-danger history-delete-btn" data-session-id="${escapeHtml(session.session_id)}" type="button">删除</button>
+                    </div>
+                </article>
+            `;
+        }).join('');
+
+        list.querySelectorAll('.history-open-btn').forEach(button => {
+            button.addEventListener('click', () => openHistoryReport(button.dataset.sessionId));
+        });
+        list.querySelectorAll('.history-delete-btn').forEach(button => {
+            button.addEventListener('click', () => deleteHistorySession(button.dataset.sessionId));
+        });
+    } catch (error) {
+        console.error('加载历史看板失败:', error);
+        list.innerHTML = '<div class="history-empty">历史看板加载失败，请稍后重试。</div>';
+    }
+}
+
+async function deleteHistorySession(sessionId) {
+    if (!currentUser || !sessionId) return;
+    if (!confirm('确定删除这条训练记录吗？删除后无法恢复。')) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/users/${encodeURIComponent(currentUser)}/history/${encodeURIComponent(sessionId)}`, {
+            method: 'DELETE'
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            alert(result.error || '删除训练记录失败');
+            return;
+        }
+        await loadHistoryDashboard();
+    } catch (error) {
+        console.error('删除训练记录失败:', error);
+        alert('删除训练记录失败');
+    }
+}
+
+async function openHistoryReport(sessionId) {
+    if (!currentUser || !sessionId) return;
+    try {
+        const response = await fetch(`${API_BASE}/users/${encodeURIComponent(currentUser)}/history/${encodeURIComponent(sessionId)}`);
+        const report = await response.json();
+        if (!response.ok) {
+            alert(report.error || '打开历史复盘失败');
+            return;
+        }
+        showReport(report);
+    } catch (error) {
+        console.error('打开历史复盘失败:', error);
+        alert('打开历史复盘失败');
+    }
+}
+
+function updateTradeReasonCount() {
+    const input = document.getElementById('trade-reason-text');
+    const count = document.getElementById('trade-reason-count');
+    if (input && count) count.textContent = input.value.length;
+}
+
+function requestTradeWithReason(action, priceType) {
+    if (skipTradeReasonPrompt) {
+        return action === 'buy' ? executeBuy(priceType) : executeSell(priceType);
+    }
+
+    pendingTradeReasonAction = { action, priceType };
+    const modal = document.getElementById('trade-reason-modal');
+    const title = document.getElementById('trade-reason-title');
+    const body = document.getElementById('trade-reason-body');
+    const editor = document.getElementById('trade-reason-editor');
+    const skipRow = document.getElementById('trade-reason-skip-row');
+    const cancel = document.getElementById('cancel-trade-reason-btn');
+    const close = document.getElementById('close-trade-reason-btn');
+    const save = document.getElementById('save-trade-reason-btn');
+    const input = document.getElementById('trade-reason-text');
+    const skip = document.getElementById('trade-reason-skip');
+    if (!modal || !title || !body || !editor || !skipRow || !cancel || !close || !save || !input || !skip) return;
+
+    title.textContent = `你${action === 'buy' ? '买入' : '卖出'}的理由是什么？`;
+    body.textContent = '填写理由有助于在复盘时回顾当时的判断，也可以直接跳过。';
+    input.value = '';
+    skip.checked = false;
+    updateTradeReasonCount();
+    editor.classList.remove('hidden');
+    skipRow.classList.remove('hidden');
+    cancel.classList.remove('hidden');
+    save.classList.remove('hidden');
+    close.classList.add('hidden');
+    modal.classList.remove('hidden');
+    input.focus();
+}
+
+function cancelTradeReasonPrompt() {
+    const pending = pendingTradeReasonAction;
+    const skip = document.getElementById('trade-reason-skip');
+    skipTradeReasonPrompt = Boolean(skip?.checked);
+    pendingTradeReasonAction = null;
+    closeTradeReasonModal();
+    if (pending) return pending.action === 'buy' ? executeBuy(pending.priceType) : executeSell(pending.priceType);
+}
+
+function submitTradeReasonPrompt() {
+    const pending = pendingTradeReasonAction;
+    const input = document.getElementById('trade-reason-text');
+    const skip = document.getElementById('trade-reason-skip');
+    const reason = input?.value.trim() || '';
+    skipTradeReasonPrompt = Boolean(skip?.checked);
+    pendingTradeReasonAction = null;
+    closeTradeReasonModal();
+    if (pending) return pending.action === 'buy' ? executeBuy(pending.priceType, reason) : executeSell(pending.priceType, reason);
+}
+function showTradeReasonModal(trade) {
+    const modal = document.getElementById('trade-reason-modal');
+    if (!modal || !trade) return;
+    pendingTradeReasonAction = null;
+    document.getElementById('trade-reason-editor')?.classList.add('hidden');
+    document.getElementById('trade-reason-skip-row')?.classList.add('hidden');
+    document.getElementById('cancel-trade-reason-btn')?.classList.add('hidden');
+    document.getElementById('save-trade-reason-btn')?.classList.add('hidden');
+    document.getElementById('close-trade-reason-btn')?.classList.remove('hidden');
+    document.getElementById('trade-reason-title').textContent = `${trade.action === 'buy' ? '买入' : '卖出'}理由 · Bar ${trade.bar_id}`;
+    document.getElementById('trade-reason-body').innerHTML = `
+        <div>日期：${escapeHtml(trade.date || trade.trade_date || '-')}</div>
+        <div>价格：${formatMoney(trade.price || 0)}，数量：${escapeHtml(trade.quantity || 0)} 手</div>
+        <div class="trade-reason-text">${escapeHtml(trade.reason || '没有填写理由')}</div>
+    `;
+    modal.classList.remove('hidden');
+}
+
+function closeTradeReasonModal() {
+    document.getElementById('trade-reason-modal')?.classList.add('hidden');
+}
+
+function createReviewSummaryEditor(parentElement, report) {
+    const section = document.createElement('div');
+    section.className = 'review-summary-editor';
+    section.innerHTML = `
+        <h3>我的复盘总结</h3>
+        <textarea id="review-summary-text" rows="5" placeholder="写下这次训练的经验、失误、下次要注意什么">${escapeHtml(report.review_summary || '')}</textarea>
+        <div class="modal-actions">
+            <span id="review-summary-status" class="review-summary-status" role="status"></span>
+            <button id="save-review-summary-btn" class="btn btn-primary">保存总结</button>
+        </div>
+    `;
+    parentElement.appendChild(section);
+    section.querySelector('#save-review-summary-btn').addEventListener('click', saveReviewSummary);
+}
+
+function setReviewSummaryStatus(message = '', type = '') {
+    const status = document.getElementById('review-summary-status');
+    if (!status) return;
+    status.textContent = message;
+    status.className = `review-summary-status ${type}`.trim();
+}
+
+async function saveReviewSummary() {
+    const reportSessionId = currentReportData?.session_id || currentTraining?.id;
+    if (!currentUser || !reportSessionId) {
+        setReviewSummaryStatus('当前报告未关联训练会话，暂时无法保存。', 'error');
+        return;
+    }
+    const summary = document.getElementById('review-summary-text')?.value || '';
+    setReviewSummaryStatus('正在保存…', 'saving');
+    try {
+        const response = await fetch(`${API_BASE}/users/${encodeURIComponent(currentUser)}/history/${encodeURIComponent(reportSessionId)}/summary`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ summary })
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            setReviewSummaryStatus(result.error || '保存总结失败，请稍后重试。', 'error');
+            return;
+        }
+        currentReportData.review_summary = result.review_summary;
+        await loadHistoryDashboard();
+        setReviewSummaryStatus('总结已保存到本次训练记录。', 'success');
+    } catch (error) {
+        console.error('保存总结失败:', error);
+        setReviewSummaryStatus('网络连接异常，保存失败。', 'error');
+    }
+}
+
+function limitSellQuantity() {
+    const input = document.getElementById('sell-quantity');
+    if (!input) return;
+    if (parseInt(input.value) > parseInt(input.max)) {
+        input.value = input.max;
+    }
+}
+
+function setOrderType(orderType) {
+    currentOrderType = orderType || 'market';
+    document.querySelectorAll('.order-type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.orderType === currentOrderType);
+    });
+
+    const triggerGroup = document.getElementById('trigger-price-group');
+    if (triggerGroup) {
+        triggerGroup.classList.toggle('hidden', currentOrderType === 'market');
+    }
+
+    const buyBtn = document.getElementById('buy-btn');
+    if (buyBtn) {
+        buyBtn.textContent = currentOrderType === 'market'
+            ? `买(${(isShiftClicked || isShiftKeyPressed) ? '开盘' : '收盘'})`
+            : '挂买单';
+        buyBtn.disabled = currentLimitStatus === 'limit_up' && currentOrderType === 'market';
+    }
+}
+
+function getOptionalPriceInput(id) {
+    const value = parseFloat(document.getElementById(id)?.value);
+    return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function formatOrderType(orderType) {
+    if (orderType === 'limit') return '限价买入';
+    if (orderType === 'breakout') return '突破买入';
+    if (orderType === 'take_profit') return '止盈卖出';
+    if (orderType === 'stop_loss') return '止损卖出';
+    return orderType;
+}
+
+function renderPendingOrders(pendingOrders) {
+    const container = document.getElementById('pending-orders');
+    if (!container) return;
+
+    const buyOrders = pendingOrders?.buy_orders || [];
+    const exitOrders = pendingOrders?.exit_orders || [];
+    const orders = [...buyOrders, ...exitOrders];
+
+    if (orders.length === 0) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+    }
+
+    container.classList.remove('hidden');
+    container.innerHTML = orders.map(order => `
+        <div class="pending-order-item">
+            <div class="pending-order-main">
+                <strong>${formatOrderType(order.order_type)} · ${order.quantity} 手</strong>
+                <span class="pending-order-meta">触发价 ¥${Number(order.trigger_price).toFixed(2)}</span>
+            </div>
+            <button class="btn-cancel-order" data-order-id="${order.id}" type="button">撤单</button>
+        </div>
+    `).join('');
+
+    container.querySelectorAll('.btn-cancel-order').forEach(button => {
+        button.addEventListener('click', () => cancelPendingOrder(button.dataset.orderId));
+    });
+}
+
+async function cancelPendingOrder(orderId) {
+    if (!currentTraining || !orderId) return;
+
+    if (false) {
+        alert('请填写有效触发价');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/orders/${orderId}`, {
+            method: 'DELETE'
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            alert(data.error || '撤单失败');
+            return;
+        }
+        renderPendingOrders(data.pending_orders);
+    } catch (error) {
+        console.error('撤单失败:', error);
+        alert('撤单失败');
+    }
+}
+
+async function executeBuy(priceType = 'close', reason = '') {
+    if (currentOrderType === 'market' && currentLimitStatus === 'limit_up') {
+        alert('当前涨停，无法买入！');
+        return;
+    }
+
+    if (currentOrderType === 'market' && priceType === 'open') {
         const hasNext = await nextBar();
         if (!hasNext) {
             return; // 训练结束或出错
@@ -2783,6 +3271,11 @@ async function executeBuy(priceType = 'close') {
     }
 
     const quantity = parseInt(document.getElementById('trade-quantity').value);
+    const triggerPrice = getOptionalPriceInput('trigger-price');
+    if (currentOrderType !== 'market' && !triggerPrice) {
+        alert('请填写有效触发价');
+        return;
+    }
     if (!quantity || quantity <= 0) {
         alert('请输入有效的交易数量');
         return;
@@ -2797,15 +3290,25 @@ async function executeBuy(priceType = 'close') {
             body: JSON.stringify({
                 action: 'buy',
                 quantity: quantity,
-                price_type: priceType
+                price_type: priceType,
+                order_type: currentOrderType,
+                trigger_price: triggerPrice,
+                take_profit_price: getOptionalPriceInput('take-profit-price'),
+                stop_loss_price: getOptionalPriceInput('stop-loss-price'),
+                reason
             })
         });
 
         if (response.ok) {
             const result = await response.json();
-            updateAccountInfo();
-            addTradeRecord(result.trade);
-            updateTradeMarkers(result.trade_markers);
+            renderPendingOrders(result.pending_orders);
+            await updateAccountInfo();
+            if (result.trade) {
+                addTradeRecord(result.trade);
+            }
+            if (result.trade_markers) {
+                updateTradeMarkers(result.trade_markers);
+            }
             if (result.trade_markers) {
                 lastKnownTradeCount = result.trade_markers.length;
             }
@@ -2819,7 +3322,12 @@ async function executeBuy(priceType = 'close') {
     }
 }
 
-async function executeSell(priceType = 'close') {
+async function executeSell(priceType = 'close', reason = '') {
+    if (currentLimitStatus === 'limit_down') {
+        alert('当前跌停，无法卖出！');
+        return;
+    }
+
     if (priceType === 'open') {
         const hasNext = await nextBar();
         if (!hasNext) {
@@ -2827,7 +3335,7 @@ async function executeSell(priceType = 'close') {
         }
     }
 
-    const quantity = parseInt(document.getElementById('trade-quantity').value);
+    const quantity = parseInt(document.getElementById('sell-quantity')?.value || document.getElementById('trade-quantity').value);
     if (!quantity || quantity <= 0) {
         alert('请输入有效的交易数量');
         return;
@@ -2842,7 +3350,8 @@ async function executeSell(priceType = 'close') {
             body: JSON.stringify({
                 action: 'sell',
                 quantity: quantity,
-                price_type: priceType
+                price_type: priceType,
+                reason
             })
         });
 
@@ -2875,17 +3384,21 @@ async function updateAccountInfo() {
 
         // 更新最大可交易数量
         document.getElementById('max-buy-quantity').textContent = account.max_buyable_quantity;
+        document.getElementById('trade-quantity').max = account.max_buyable_quantity;
         if (account.position_summary) {
             let max_sell_qty = account.position_summary.available_shares / 100
             document.getElementById('max-sell-quantity').textContent = max_sell_qty;
-            document.getElementById('trade-quantity').max = Math.max(account.max_buyable_quantity, max_sell_qty);
+            document.getElementById('sell-quantity').max = max_sell_qty;
         }
         else {
             document.getElementById('max-sell-quantity').textContent = '0';
-            document.getElementById('trade-quantity').max = account.max_buyable_quantity;
+            document.getElementById('sell-quantity').max = 0;
         }
 
         // 更新持仓信息
+        limitTradeQuantity();
+        limitSellQuantity();
+        renderPendingOrders(account.pending_orders);
         updatePositionInfo(account.position_summary);
 
         // 同步拉取交易记录（解决 AI / 后台自动交易所缺失的面板历史记录）
@@ -2915,7 +3428,7 @@ async function updateTradeHistory() {
         
         displayRecords.forEach(trade => {
             const tradeItem = document.createElement('div');
-            tradeItem.className = `trade-item ${trade.action}`;
+            tradeItem.className = `trade-item ${trade.action} clickable`;
             tradeItem.innerHTML = `
                 <div class="trade-header">
                     <span class="trade-action">${trade.action === 'buy' ? '买入' : '卖出'}</span>
@@ -2928,6 +3441,10 @@ async function updateTradeHistory() {
                     <div>金额: ¥${trade.net_amount.toFixed(2)}</div>
                 </div>
             `;
+            tradeItem.addEventListener('click', () => showTradeReasonModal({
+                ...trade,
+                date: trade.trade_date
+            }));
             container.appendChild(tradeItem);
         });
     } catch (e) {
@@ -3187,41 +3704,27 @@ async function resetTraining() {
  * @param {object} report - 报告数据对象
  */
 function updateReportSummary(parentElement, report) {
-    // 使用 Map 定义标签和对应的值，更易于管理
-    const summaryItems = new Map([
-        ['股票代码:', report.stock_code],
-        ['训练期间:', `${report.start_date} 至 ${report.end_date}`],
-        ['初始资金:', `¥${report.initial_capital.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`],
-        ['最终资产:', `¥${report.final_capital.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`],
-        ['总交易次数:', `${report.total_trades} 次`],
-        ['交易胜率:', `${(report.trade_win_rate || 0).toFixed(2)}%`]
-    ]);
+    const money = (value) => `¥${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const dateRange = [report.start_date, report.end_date].filter(Boolean).join(' 至 ') || '-';
+    const summaryItems = [
+        ['股票代码', report.stock_code || '-'],
+        ['训练期间', dateRange],
+        ['初始资金', money(report.initial_capital)],
+        ['最终资产', money(report.final_capital)],
+        ['总交易次数', `${Number(report.total_trades || 0)} 次`],
+        ['交易胜率', `${Number(report.trade_win_rate || 0).toFixed(2)}%`],
+        ['总收益率', `${Number(report.total_return || 0).toFixed(2)}%`, Number(report.total_return || 0) >= 0 ? 'positive' : 'negative']
+    ];
 
-    parentElement.innerHTML = `
-        <h3>训练总结</h3>
-        <div class="summary-grid"></div>
-    `;
+    parentElement.innerHTML = '<div class="summary-grid"></div>';
     const grid = parentElement.querySelector('.summary-grid');
-
-    // 循环创建摘要项
-    summaryItems.forEach((value, label) => {
+    summaryItems.forEach(([label, value, state]) => {
         const item = document.createElement('div');
         item.className = 'summary-item';
-        item.innerHTML = `<span class="label">${label}</span><span class="value">${value}</span>`;
+        item.innerHTML = `<span class="label">${escapeHtml(label)}</span><span class="value ${state || ''}">${escapeHtml(value)}</span>`;
         grid.appendChild(item);
     });
-
-    // 处理需要额外逻辑的摘要项
-    const totalReturnItem = document.createElement('div');
-    totalReturnItem.className = 'summary-item';
-    totalReturnItem.innerHTML = `
-        <span class="label">总收益率:</span>
-        <span class="value ${report.total_return >= 0 ? 'positive' : 'negative'}">
-            ${report.total_return.toFixed(2)}%
-        </span>`;
-    grid.appendChild(totalReturnItem);
 }
-
 
 /**
  * 创建并填充交易明细表格的辅助函数
@@ -3265,6 +3768,7 @@ function createTradeDetailsTable(parentElement, tradeDetails) {
     tradeDetails.forEach(trade => {
         const row = tbody.insertRow(); // 创建新行
 
+        row.className = 'clickable';
         const isBuy = trade.action === 'buy';
         const totalFee = trade.commission + trade.stamp_tax;
         const profit = isBuy ? -(trade.amount + totalFee) : (trade.amount - totalFee);
@@ -3282,6 +3786,7 @@ function createTradeDetailsTable(parentElement, tradeDetails) {
         `;
 
         // 累加合计值
+        row.addEventListener('click', () => showTradeReasonModal(trade));
         if (!isBuy) {
             totals.totalAmount += trade.amount;
         }
@@ -3382,13 +3887,19 @@ async function requestAIAnalysis() {
  * @param {object} report - 包含所有报告数据的对象
  */
 function showReport(report) {
+    if (!report.session_id && currentTraining?.id) {
+        report.session_id = currentTraining.id;
+    }
     // 保存当前报告数据供 AI 分析使用
     currentReportData = report;
     setTrainingViewOnlyMode(false, { showBackToReport: false });
+    document.getElementById('history-dashboard')?.classList.add('hidden');
     
     // 切换界面可见性
     document.getElementById('training-interface').classList.add('hidden');
-    document.getElementById('report-interface').classList.remove('hidden');
+    const reportInterface = document.getElementById('report-interface');
+    reportInterface.classList.remove('hidden');
+    reportInterface.scrollTop = 0;
 
     // 恢复工具栏状态
     toggleToolbarForTraining(false);
@@ -3411,6 +3922,7 @@ function showReport(report) {
 
     // 将生成好的模块添加到主容器中
     reportContent.appendChild(summarySection);
+    createReviewSummaryEditor(reportContent, report);
 
     reportContent.appendChild(detailsSection);
 

@@ -15,6 +15,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from backend.data_manager import DataManager
 from backend.kline_processor_enhanced import KLineProcessorEnhanced
+from backend.market_rules import get_limit_status, is_buy_blocked, is_sell_blocked
+from backend.order_manager import PendingOrderManager
 from backend.trade_simulator_enhanced import TradeSimulatorEnhanced
 from backend.user_manager_enhanced import UserManagerEnhanced
 
@@ -43,6 +45,50 @@ data_manager = DataManager(data_dir=data_dir_path)
 # user_manager = UserManager()
 user_manager = UserManagerEnhanced(users_dir=users_dir_path)
 active_trainings = {}  # 存储活跃的训练会话
+
+def _parse_optional_price(value):
+    if value in (None, "", 0, "0"):
+        return None
+    price = float(value)
+    if price <= 0:
+        return None
+    return price
+
+
+def _execute_simulated_trade(training, action, quantity, price, trade_date, reason=''):
+    trade_simulator = training['trade_simulator']
+    kline_processor = training['kline_processor']
+    result = trade_simulator.buy(quantity, price, trade_date, reason=reason) if action == 'buy' else trade_simulator.sell(quantity, price, trade_date, reason=reason)
+    if result.get('success'):
+        kline_processor.add_trade_marker(action, price)
+    return result
+
+
+def _process_pending_orders(training):
+    order_manager = training.get('order_manager')
+    if not order_manager:
+        return []
+
+    kline_processor = training['kline_processor']
+    current_bar = kline_processor.get_current_bar()
+    current_date = kline_processor.get_current_date()
+    prev_close = kline_processor.get_previous_close()
+    stock_code = training.get('stock_code', '')
+
+    return order_manager.process_bar(
+        bar=current_bar,
+        prev_close=prev_close,
+        stock_code=stock_code,
+        trade_date=current_date,
+        execute_buy=lambda quantity, price, order: _execute_simulated_trade(training, 'buy', quantity, price, current_date, order.get('reason', '')),
+        execute_sell=lambda quantity, price, order: _execute_simulated_trade(training, 'sell', quantity, price, current_date, order.get('reason', '')),
+    )
+
+
+def _pending_orders_payload(training):
+    order_manager = training.get('order_manager')
+    return order_manager.to_dict() if order_manager else {'buy_orders': [], 'exit_orders': []}
+
 
 @app.route('/')
 def index():
@@ -140,6 +186,45 @@ def get_user_statistics(username):
             return jsonify(stats)
         else:
             return jsonify({'error': '用户不存在'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<username>/history', methods=['GET'])
+def get_user_training_history(username):
+    try:
+        limit = int(request.args.get('limit', 50))
+        return jsonify(user_manager.get_training_history(username, limit))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<username>/history/<session_id>', methods=['GET'])
+def get_user_history_report(username, session_id):
+    try:
+        report = user_manager.get_session_report(username, session_id)
+        if not report:
+            return jsonify({'error': '历史训练不存在'}), 404
+        return jsonify(report)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<username>/history/<session_id>', methods=['DELETE'])
+def delete_user_history_report(username, session_id):
+    try:
+        if user_manager.delete_training_session(username, session_id):
+            return jsonify({'success': True})
+        return jsonify({'error': '历史训练不存在'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<username>/history/<session_id>/summary', methods=['POST'])
+def save_user_history_summary(username, session_id):
+    try:
+        data = request.get_json() or {}
+        summary = (data.get('summary') or '').strip()
+        if user_manager.save_review_summary(username, session_id, summary):
+            report = user_manager.get_session_report(username, session_id)
+            return jsonify({'success': True, 'review_summary': summary, 'report': report})
+        return jsonify({'error': '历史训练不存在'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -294,6 +379,7 @@ def start_training():
         data_source = data.get('data_source', 'akshare')
         period = data.get('period', 'daily')
         initial_capital = data.get('initial_capital', 100000)
+        max_bars = data.get('max_bars', 0) or 0
         
         if not user:
             return jsonify({'error': '用户名不能为空'}), 400
@@ -335,8 +421,9 @@ def start_training():
             return jsonify({'error': validation_error}), 400
         
         # 创建增强版K线处理器和交易模拟器
-        kline_processor = KLineProcessorEnhanced(data_manager, stock_code, start_date, source=data_source, interval=period)
+        kline_processor = KLineProcessorEnhanced(data_manager, stock_code, start_date, source=data_source, interval=period, max_training_bars=max_bars)
         trade_simulator = TradeSimulatorEnhanced(user, initial_capital, stock_code)
+        trade_simulator.session_id = training_id
         
         # 获取用户设置并应用到交易模拟器
         user_config = user_manager.get_user_config(user)
@@ -355,11 +442,25 @@ def start_training():
             'start_date': start_date,
             'kline_processor': kline_processor,
             'trade_simulator': trade_simulator,
+            'order_manager': PendingOrderManager(),
             'mode': mode,
             'data_source': data_source,
             'period': period,
             'created_at': datetime.now()
         }
+        user_manager.start_training_session(user, {
+            'session_id': training_id,
+            'stock_code': stock_code,
+            'stock_name': data_manager.get_stock_name(stock_code),
+            'start_date': start_date,
+            'mode': mode,
+            'initial_capital': initial_capital,
+            'commission_settings': {
+                'commission_rate': trade_simulator.commission_rate,
+                'min_commission': trade_simulator.min_commission,
+                'stamp_tax_rate': trade_simulator.stamp_tax_rate,
+            }
+        })
         
         _update_api_info(user=user)
         
@@ -436,11 +537,13 @@ def next_bar(training_id):
         
         if not has_next:
             # 训练结束，生成报告
+            trade_simulator.session_id = training_id
             report = trade_simulator.generate_report(
                 training['stock_code'],
                 training['start_date'],
                 kline_processor.get_current_date()
             )
+            report["session_id"] = training_id
             
             # 保存训练记录
             session_data = {
@@ -456,6 +559,8 @@ def next_bar(training_id):
                 'total_trades': report['total_trades'],
                 'trade_win_rate': report['trade_win_rate'],
                 'session_win_rate': report['session_win_rate'],
+                'report_data': report,
+                'review_summary': report.get('review_summary', ''),
                 'status': 'completed'
             }
             user_manager.save_training_session(training['user'], session_data)
@@ -468,6 +573,7 @@ def next_bar(training_id):
         # 更新交易模拟器的当前价格和bar ID
         current_bar = kline_processor.get_current_bar()
         trade_simulator.update_current_price(current_bar['close'], current_bar['bar_id'])
+        order_events = _process_pending_orders(training)
 
         current_bar['lastClose'] = kline_processor.get_previous_close()
 
@@ -476,6 +582,9 @@ def next_bar(training_id):
             'new_bar': current_bar,
             'new_volume': kline_processor.get_current_volume(),
             'progress': kline_processor.get_progress(),
+            'order_events': order_events,
+            'pending_orders': _pending_orders_payload(training),
+            'trade_markers': kline_processor.get_trade_markers(),
             'requires_full_refresh': getattr(kline_processor, 'factor_changed', False)
         }
 
@@ -590,6 +699,12 @@ def execute_trade(training_id):
         action = data.get('action')  # 'buy' or 'sell'
         quantity = data.get('quantity')
         price_type = data.get('price_type', 'close')
+        order_type = data.get('order_type', 'market')
+        trigger_price = _parse_optional_price(data.get('trigger_price'))
+        take_profit_price = _parse_optional_price(data.get('take_profit_price'))
+        stop_loss_price = _parse_optional_price(data.get('stop_loss_price'))
+        reason = (data.get('reason') or '').strip()
+        quantity = int(quantity) if quantity else 0
         
         if not action or not quantity:
             return jsonify({'error': '交易参数不完整'}), 400
@@ -602,23 +717,68 @@ def execute_trade(training_id):
         current_bar = kline_processor.get_current_bar()
         current_price = current_bar['open'] if price_type == 'open' else current_bar['close']
         current_date = kline_processor.get_current_date()
-        
+        prev_close = kline_processor.get_previous_close()
+        stock_code = training.get('stock_code', '')
+        order_manager = training.get('order_manager')
+
+        if action == 'buy' and order_type in {'limit', 'breakout'}:
+            if trigger_price is None:
+                return jsonify({'error': '请填写有效触发价'}), 400
+            order = order_manager.add_buy_order(
+                order_type=order_type,
+                quantity=quantity,
+                trigger_price=trigger_price,
+                take_profit_price=take_profit_price,
+                stop_loss_price=stop_loss_price,
+                reason=reason,
+            )
+            return jsonify({
+                'success': True,
+                'pending': True,
+                'order': order,
+                'pending_orders': _pending_orders_payload(training)
+            })
+
+        if order_type != 'market':
+            return jsonify({'error': '卖出只支持市价单，止盈止损请在买入时设置'}), 400
+
+        # 涨停/跌停检测（后端兜底）
+        prev_close = kline_processor.get_previous_close()
+        if prev_close and prev_close > 0:
+            stock_code = training.get('stock_code', '')
+            limit_pct = 0.10
+            if stock_code.startswith(('30', '68')):
+                limit_pct = 0.20
+            elif stock_code.startswith(('43', '83', '87', '92')):
+                limit_pct = 0.30
+
+            threshold = prev_close * 0.001
+            limit_up = prev_close * (1 + limit_pct)
+            limit_down = prev_close * (1 - limit_pct)
+
+            if action == 'buy' and current_price >= limit_up - threshold:
+                return jsonify({'error': f'当前涨停（涨停价 {limit_up:.2f}），无法买入'}), 400
+            if action == 'sell' and current_price <= limit_down + threshold:
+                return jsonify({'error': f'当前跌停（跌停价 {limit_down:.2f}），无法卖出'}), 400
+
         # 执行交易
         if action == 'buy':
-            result = trade_simulator.buy(quantity, current_price, current_date)
+            result = _execute_simulated_trade(training, 'buy', quantity, current_price, current_date, reason)
         elif action == 'sell':
-            result = trade_simulator.sell(quantity, current_price, current_date)
+            result = _execute_simulated_trade(training, 'sell', quantity, current_price, current_date, reason)
         else:
             return jsonify({'error': '无效的交易操作'}), 400
         
         if result['success']:
             # 添加交易标记到K线图
-            kline_processor.add_trade_marker(action, current_price)
+            if action == 'buy' and (take_profit_price or stop_loss_price):
+                order_manager.add_bracket_orders(quantity, take_profit_price, stop_loss_price, base_reason=reason)
             
             return jsonify({
                 'success': True,
                 'trade': result['trade'],
-                'trade_markers': kline_processor.get_trade_markers()
+                'trade_markers': kline_processor.get_trade_markers(),
+                'pending_orders': _pending_orders_payload(training)
             })
         else:
             return jsonify({'error': result['message']}), 400
@@ -638,7 +798,34 @@ def get_account_info(training_id):
         current_date = training['kline_processor'].get_current_date()
 
         account_info = trade_simulator.get_account_info(current_date)
+        account_info['pending_orders'] = _pending_orders_payload(training)
         return jsonify(account_info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/training/<training_id>/orders', methods=['GET'])
+def get_pending_orders(training_id):
+    try:
+        if training_id not in active_trainings:
+            return jsonify({'error': '训练会话不存在'}), 404
+        return jsonify(_pending_orders_payload(active_trainings[training_id]))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/training/<training_id>/orders/<int:order_id>', methods=['DELETE'])
+def cancel_pending_order(training_id, order_id):
+    try:
+        if training_id not in active_trainings:
+            return jsonify({'error': '训练会话不存在'}), 404
+        order_manager = active_trainings[training_id].get('order_manager')
+        if not order_manager or not order_manager.cancel_order(order_id):
+            return jsonify({'error': '挂单不存在或已结束'}), 404
+        return jsonify({
+            'success': True,
+            'pending_orders': _pending_orders_payload(active_trainings[training_id])
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -720,6 +907,7 @@ def end_training(training_id):
             training['start_date'],
             kline_processor.get_current_date()
         )
+        report["session_id"] = training_id
         
         # 保存训练记录
         session_data = {
@@ -735,6 +923,8 @@ def end_training(training_id):
             'total_trades': report['total_trades'],
             'trade_win_rate': report['trade_win_rate'],
             'session_win_rate': report['session_win_rate'],
+            'report_data': report,
+            'review_summary': report.get('review_summary', ''),
             'status': 'ended'
         }
         user_manager.save_training_session(training['user'], session_data)
@@ -773,6 +963,8 @@ def reset_training(training_id):
         
         # 重置交易模拟器
         training['trade_simulator'].reset()
+        if training.get('order_manager'):
+            training['order_manager'].clear()
         
         return jsonify({'message': '训练已重置'})
     except Exception as e:

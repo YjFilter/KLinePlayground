@@ -211,6 +211,10 @@
                             <input type="text" id="random-end-date" value="2026-01-01" placeholder="YYYY-MM-DD">
                         </div>
                     </div>
+                    <div class="form-group">
+                        <label>K线数量限制 <small style="color:var(--text-muted)">(0=不限制)</small></label>
+                        <input type="number" id="max-training-bars" value="0" min="0" max="2000" step="10" placeholder="0=全部K线">
+                    </div>
                 </div>
 
                 <div class="form-grid">
@@ -296,8 +300,52 @@
             </div>
         </div>
 
-        <div id="training-interface" class="hidden">
-            <div class="left-panel">
+        <div id="history-dashboard" class="history-dashboard">
+            <div class="history-dashboard-header">
+                <div>
+                    <h2>训练与复盘</h2>
+                    <p>开始一次训练，或打开历史记录查看交易理由和复盘总结。</p>
+                </div>
+                <div class="history-dashboard-actions">
+                    <button id="dashboard-new-training-btn" class="btn btn-primary">新建训练</button>
+                    <button id="refresh-history-btn" class="btn btn-secondary">刷新历史</button>
+                </div>
+            </div>
+            <div id="history-summary-strip" class="history-summary-strip"></div>
+                        <div class="history-list-toolbar" role="group" aria-label="历史记录筛选">
+                <div class="history-filter-tabs">
+                    <button class="history-filter-btn active" data-history-filter="all" type="button">全部记录</button>
+                    <button class="history-filter-btn" data-history-filter="completed" type="button">已完成</button>
+                    <button class="history-filter-btn" data-history-filter="summary" type="button">已写总结</button>
+                </div>
+                <span id="history-record-count" class="history-record-count">0 条记录</span>
+            </div><div id="history-list" class="history-list">
+                <div class="history-empty">暂无历史训练，完成一次训练后会显示在这里。</div>
+            </div>
+        </div>
+
+        <div id="trade-reason-modal" class="modal hidden">
+            <div class="modal-content trade-reason-modal-content">
+                <h2 id="trade-reason-title">交易理由</h2>
+                <div id="trade-reason-body" class="trade-reason-body"></div>
+                <label id="trade-reason-editor" class="trade-reason-editor hidden">
+                    <textarea id="trade-reason-text" maxlength="200" rows="4" placeholder="写下这一刻的判断依据（可不填）"></textarea>
+                    <span><span id="trade-reason-count">0</span>/200</span>
+                </label>
+                <label id="trade-reason-skip-row" class="trade-reason-skip hidden">
+                    <input id="trade-reason-skip" type="checkbox">
+                    <span>本局不再弹窗</span>
+                </label>
+                <div class="modal-actions">
+                    <button id="cancel-trade-reason-btn" class="btn btn-secondary hidden">取消</button>
+                    <button id="close-trade-reason-btn" class="btn btn-secondary">知道了</button>
+                    <button id="save-trade-reason-btn" class="btn btn-primary hidden">保存</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="training-interface" class="training-workspace hidden">
+            <aside class="left-panel workspace-sidebar">
                 <div class="control-section">
                     <h3>账户信息</h3>
                     <div class="account-info">
@@ -344,9 +392,9 @@
                         </div>
                     </div>
                 </div>
-            </div>
+            </aside>
 
-            <div class="chart-container" style="position: relative;">
+            <main class="chart-container chart-workbench" style="position: relative;">
                 <div class="chart-header">
                     <div class="stock-info">
                         <span id="stock-name">股票名称</span>
@@ -375,9 +423,9 @@
                     </div>
                     <div id="indicator-canvas" class="indicator-canvas"></div>
                 </div>
-            </div>
+            </main>
 
-            <div class="right-panel">
+            <aside class="right-panel trade-console">
                 <div class="control-section">
                     <div class="playback-controls" style="margin-bottom: 5px;">
                         <button id="play-pause-btn" class="btn btn-primary">
@@ -421,14 +469,47 @@
 
                 <div class="control-section">
                     <h3>交易操作</h3>
-                    <div class="trade-controls">
+                    <div class="trade-controls trade-controls-advanced">
+                        <div class="order-type-switch" aria-label="买入订单类型">
+                            <button class="order-type-btn active" data-order-type="market" type="button">市价</button>
+                            <button class="order-type-btn" data-order-type="limit" type="button">限价</button>
+                            <button class="order-type-btn" data-order-type="breakout" type="button">突破</button>
+                        </div>
                         <div class="trade-input">
                             <label>交易数量（手）</label>
                             <input type="number" id="trade-quantity" value="1" min="1" max="1">
+                            <div id="trigger-price-group" class="trade-inline-field hidden">
+                                <label>触发价</label>
+                                <input type="number" id="trigger-price" min="0" step="0.01" placeholder="价格">
+                            </div>
                             <div class="max-quantity-info">
                                 最大可买 <span id="max-buy-quantity">0</span> 手
                                 最大可卖 <span id="max-sell-quantity">0</span> 手
                                 <span id="max-quantity" class="hidden">0</span>
+                            </div>
+                        </div>
+                        <div class="fraction-buttons">
+                            <button class="btn-fraction" data-fraction="2" title="1/2 仓位">1/2</button>
+                            <button class="btn-fraction" data-fraction="3" title="1/3 仓位">1/3</button>
+                            <button class="btn-fraction" data-fraction="4" title="1/4 仓位">1/4</button>
+                            <button class="btn-fraction btn-fraction-all" data-fraction="1" title="全仓">全仓</button>
+                        </div>
+                        <div class="risk-controls">
+                            <label>止盈 <input type="number" id="take-profit-price" min="0" step="0.01" placeholder="可选"></label>
+                            <label>止损 <input type="number" id="stop-loss-price" min="0" step="0.01" placeholder="可选"></label>
+                        </div>
+
+                        <div class="sell-controls">
+                            <div class="trade-input">
+                                <label>卖出数量（手）</label>
+                                <input type="number" id="sell-quantity" value="1" min="1" max="1">
+                            </div>
+
+                            <div class="fraction-buttons">
+                                <button class="btn-fraction" data-target="sell" data-fraction="2" type="button">1/2</button>
+                                <button class="btn-fraction" data-target="sell" data-fraction="3" type="button">1/3</button>
+                                <button class="btn-fraction" data-target="sell" data-fraction="4" type="button">1/4</button>
+                                <button class="btn-fraction btn-fraction-all" data-target="sell" data-fraction="1" type="button">清仓</button>
                             </div>
                         </div>
                         <div class="trade-buttons">
@@ -437,6 +518,8 @@
                             <button id="sell-btn" class="btn btn-success" style="padding: 0;">卖(收盘)</button>
                         </div>
                     </div>
+                    <div id="limit-status" class="limit-status hidden"></div>
+                    <div id="pending-orders" class="pending-orders hidden"></div>
                 </div>
 
                 <div class="shortcut-trigger-container">
@@ -457,18 +540,24 @@
                         <div class="shortcut-item"><strong>数字键</strong>: 设置交易数量</div>
                     </div>
                 </div>
-            </div>
+                        </aside>
         </div>
 
         <div id="report-interface" class="hidden">
             <div class="report-container">
-                <h2>复盘报告</h2>
+                                <div class="report-page-heading">
+                    <div>
+                        <span class="section-kicker">TRAINING REVIEW</span>
+                        <h2>复盘报告</h2>
+                        <p>回顾交易决策、结果与下一次训练的改进重点。</p>
+                    </div>
+                </div>
                 <div id="report-content"></div>
                 <div class="report-actions">
                     <button id="view-full-chart-btn" class="btn btn-primary">查看完整走势</button>
                     <button id="ai-analyze-btn" class="btn btn-info hidden">AI 智能复盘点评</button>
                     <button id="new-training-from-report-btn" class="btn btn-secondary">开始新训练</button>
-                    <button id="return-main-menu-btn" class="btn btn-secondary">返回主菜单</button>
+                    <button id="return-main-menu-btn" class="btn btn-secondary">返回训练与复盘</button>
                 </div>
             </div>
         </div>
