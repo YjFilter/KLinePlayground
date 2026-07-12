@@ -37,6 +37,7 @@ class QualityGateTests(unittest.TestCase):
         for filename in (
             "test_intraday_source.py",
             "test_intraday_validator.py",
+            "test_intraday_validator_edge_cases.py",
             "test_intraday_cache.py",
             "test_intraday_service.py",
         ):

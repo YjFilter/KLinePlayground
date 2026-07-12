@@ -25,10 +25,9 @@ Phase 1 - Intraday data foundation is complete on `feature/intraday-data-foundat
 ## Known Limitation
 BaoStock 0.9.3 does not provide Beijing Exchange 30-minute data. Codes beginning with `43`, `83`, `87`, or `92` fail explicitly; a later fallback source or import path is required.
 
-## Ready Parallel Work
-- `TASK-003`: bounded intraday operations documentation; suitable for a general-purpose external Agent.
-- `TASK-004`: black-box validator edge-case tests only; suitable for a test-focused external Agent.
-- The two tasks have disjoint write scopes and may run in parallel.
+## Completed Parallel Work
+- `TASK-003`: intraday operations documentation accepted.
+- `TASK-004`: validator edge-case coverage accepted; its reported null/nonnumeric volume and amount defect was fixed by Codex.
 
 ## Next Action
 Codex owns Phase 2 aggregation and replay-clock architecture for `30m`, `4h_session`, `daily`, and `weekly`; external Agents may independently claim `TASK-003` and `TASK-004`.

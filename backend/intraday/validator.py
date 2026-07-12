@@ -35,10 +35,17 @@ def validate_30m_frame(frame: pd.DataFrame) -> ValidationResult:
     for timestamp in working.loc[invalid_ohlc, "datetime"].dropna():
         issues.append(ValidationIssue("invalid_ohlc", "invalid OHLC relationship", timestamp.to_pydatetime()))
 
-    for column, code in (("volume", "negative_volume"), ("amount", "negative_amount")):
-        invalid = pd.to_numeric(working[column], errors="coerce") < 0
-        for timestamp in working.loc[invalid, "datetime"].dropna():
-            issues.append(ValidationIssue(code, f"{column} must be non-negative", timestamp.to_pydatetime()))
+    for column, negative_code, invalid_code in (
+        ("volume", "negative_volume", "invalid_volume"),
+        ("amount", "negative_amount", "invalid_amount"),
+    ):
+        numeric = pd.to_numeric(working[column], errors="coerce")
+        invalid_numeric = numeric.isna()
+        for timestamp in working.loc[invalid_numeric, "datetime"].dropna():
+            issues.append(ValidationIssue(invalid_code, f"{column} must be numeric", timestamp.to_pydatetime()))
+        negative = numeric < 0
+        for timestamp in working.loc[negative, "datetime"].dropna():
+            issues.append(ValidationIssue(negative_code, f"{column} must be non-negative", timestamp.to_pydatetime()))
 
     valid_datetimes = working["datetime"].dropna()
     illegal = valid_datetimes[~valid_datetimes.dt.strftime("%H:%M").isin(VALID_30M_TIMES)]

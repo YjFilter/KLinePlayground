@@ -18,6 +18,7 @@ PROFILE_COMMANDS: dict[str, list[list[str]]] = {
     "intraday": [
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_source.py", "-v"],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_validator.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_validator_edge_cases.py", "-v"],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_cache.py", "-v"],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_service.py", "-v"],
     ],

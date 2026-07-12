@@ -1,9 +1,9 @@
 ---
 id: TASK-004
 title: Expand intraday validator edge-case tests
-status: ready
+status: done
 priority: P2
-owner: unassigned
+owner: test-agent
 depends_on:
   - TASK-002
 write_scope:
@@ -50,3 +50,9 @@ python scripts/quality_gate.py intraday
 
 ## Result Contract
 Move this task to `.agent/tasks/review/` and create a result report from `.agent/templates/result.md`. List changed files, test cases added, commands actually run, and any suspected production defect. Do not mark the task done and do not commit.
+
+
+## Codex Acceptance
+- Accepted after scope review and independent quality-gate verification.
+- Codex fixed the reported invalid volume/amount validation defect and updated the edge tests to assert the intended behavior.
+- The new edge-case suite is now included in the `intraday` and `full` quality profiles.
