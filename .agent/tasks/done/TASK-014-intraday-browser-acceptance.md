@@ -1,9 +1,9 @@
 ---
 id: TASK-014
 title: Perform independent intraday browser acceptance
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: codex
 depends_on:
   - TASK-013
 write_scope:
@@ -47,10 +47,18 @@ Write docs/testing/phase4-intraday-browser-acceptance.md containing:
 - Any blocker caused by external BaoStock/network availability.
 
 ## Acceptance Criteria
-- [ ] All required scenarios have explicit evidence.
-- [ ] No production files were modified.
-- [ ] Any failure includes reproducible steps.
-- [ ] Browser and API observations are separated from assumptions.
+- [x] All required scenarios have explicit evidence.
+- [x] No production files were modified.
+- [x] Any failure includes reproducible steps.
+- [x] Browser and API observations are separated from assumptions.
 
 ## Constraints
 Modify only the acceptance report. Do not modify frontend, backend, tests, dependencies, agent files, or Git state. Do not commit.
+
+
+## Codex Acceptance
+- No-patch production-entry browser retest completed on 2026-07-14.
+- A-I scenarios: 9 Pass / 0 Fail / 0 Blocked.
+- Intraday Console errors: 0; HTTP 4xx: 0; HTTP 5xx: 0.
+- `/next` maximum concurrency: 1; stale replay plan: 0; post-pause requests: 0.
+- Original FAIL evidence remains preserved in the acceptance report.

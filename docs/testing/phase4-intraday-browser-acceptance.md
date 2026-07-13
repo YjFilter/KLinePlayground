@@ -536,3 +536,113 @@ Recommended next steps before re-running acceptance:
 3. Fix `frontend/js/main_enhanced.js:2845` to await `nextBar()` before
    scheduling the next playback tick.
 4. Re-run this acceptance without the launcher patches.
+
+---
+
+## 14. 修复后无补丁复验（2026-07-14）
+
+本节保留第 1-13 节第一次验收的完整 FAIL 历史、证据和根因分析，记录提交 `33ab2a2 fix: stabilize intraday data and playback` 合入后的最终复验。本节结论取代第 13 节的旧结论，作为 TASK-014 的最新最终结论。
+
+### 14.1 无补丁环境与启动方式
+
+| 项目 | 复验值 |
+| --- | --- |
+| 项目根目录 | `E:\Desktop\01_TODO\mimo\KLinePlayground` |
+| 生产入口 | `backend\app_enhanced.py` |
+| 服务器 URL | `http://127.0.0.1:5000/` |
+| 健康检查 | `GET /api/health` -> HTTP 200 |
+| 生产 Python PID | `11132`，命令行为 `python.exe backend\app_enhanced.py` |
+| 浏览器 | `playwright-cli` Chromium，隔离会话 `task014-final` |
+| 用户 | `acceptance_tester` |
+| 模式 | 指定模式 |
+| 股票 | `600000` |
+| 起始日期 | `2024-01-02` |
+| 初始周期 | `30m` |
+
+实际启动命令为：
+
+```powershell
+cd E:\Desktop\01_TODO\mimo\KLinePlayground
+$env:PYTHONPATH = (Get-Location).Path
+python backend\app_enhanced.py
+```
+
+复验明确满足以下隔离条件：
+
+- **没有 launcher**，未使用 `task014_launcher.py`。
+- **没有 monkey-patch**，未替换 `datetime`、`IntradayDataService` 或任何生产对象。
+- **没有冻结 `datetime.now()`**。
+- **没有项目副本**，直接运行当前仓库的生产入口。
+- 浏览器启动时没有残留 Playwright 会话；最终隔离验证使用新会话 `task014-final`。
+- Console/Network 采集在打开新建训练弹窗后、发送本次 `/start` 前开始，因而不包含第一次验收的 legacy 会话记录。
+
+### 14.2 真实数据与启动响应
+
+修复后的第一次无补丁复验使用 BaoStock 缓存 4872 根 30 分钟 K 线，范围为 `2024-01-02 10:00:00` 至 `2026-07-10 15:00:00`。2026-07-14 最终隔离复验启动时，生产同步路径继续取得 8 根最新可用数据；本地缓存最终为 4880 根，范围为 `2024-01-02 10:00:00` 至 `2026-07-13 15:00:00`。两次都不需要冻结当前时间。
+
+最终隔离会话的 `POST /api/training/start` 返回 HTTP 200，响应关键字段为：
+
+- `id = acceptance_tester_20260714_020441`
+- `data_mode = intraday_30m`
+- `stock_code = 600000`
+- `active_period = 30m`
+- `current_time = 2024-01-02 10:00:00`
+- `next_boundary = 2024-01-02 10:30:00`
+- `current_bar_complete = true`
+- 当前 base bar close = `6.64`
+
+页面首次显示 `2024-01-02 10:00:00`，没有自动前进。以 `2024-01-02 00:00:00` 作为请求起点时，缓存首根为 10:00 仍能正常覆盖并启动，没有再次出现 `30m data unavailable`。
+
+### 14.3 A-I 场景复验结果
+
+| ID | 场景 | 结果 | 修复后无补丁证据 |
+| --- | --- | --- | --- |
+| A | 无补丁启动 | **Pass** | 直接运行生产入口；`/api/health` 200；600000/2024-01-02/30m 的 `/start` 200；首次时间 10:00，无自动前进。 |
+| B | 缓存覆盖 | **Pass** | 请求从交易日 00:00 开始，缓存从 10:00 开始仍正常命中；最新可用缓存落后墙钟日期也可启动。 |
+| C | 单次继续 | **Pass** | `2024-01-02 10:00:00` -> `10:30:00`；仅 1 个 `POST /next`，HTTP 200。 |
+| D | 自动播放与暂停 | **Pass** | 0.5 秒档位运行远超 5 ticks；最终隔离采集共 27 个 `/next`（含单次继续，自动播放 26 个），所有响应 200；`maxInFlight = 1`；无 stale replay plan；暂停后等待 2.2 秒新增 `/next = 0`，时间保持 `2024-01-05 11:30:00`。 |
+| E | 周期切换 | **Pass** | `30m -> daily -> 4h_session -> weekly -> 30m`；基准和最终 `current_time` 都是 `2024-01-05 11:30:00`；4 个 `POST /period` 均为 200，切换期间 `/next = 0`。daily 显示未收盘部分日 K，下一边界 15:00。 |
+| F | 全新 intraday Console/Network 隔离 | **Pass** | 新浏览器会话中 Console error 0；HTTP 4xx 0；HTTP 5xx 0；105 个被监控 fetch 的状态集合仅包含 200；stale replay plan 0。Playwright 独立 `console error` 查询同样为 0。 |
+| G | 交易 UI | **Pass** | 真实点击 `#buy-btn`，填写并保存 `#trade-reason-text`；当前 base close `¥6.70`，成交记录价格 `¥6.70`；1 手，含费用金额 `¥675.00`；现金 `¥100,000 -> ¥99,325`，持仓市值 `¥670`；`POST /trade` 200。此前无补丁会话在 daily 显示周期下也已验证成交价等于 base close。 |
+| H | Reset | **Pass** | 点击 `#reset-training-btn` 并接受 confirm；恢复时间 `2024-01-02 10:00:00`、周期 `30m`、现金 `¥100,000`、持仓 `¥0`、交易记录为空。 |
+| I | 盲盒兼容 | **Pass** | legacy daily 可启动，股票为 `300540 / 蜀道装备`；30m 盲盒显示“盲盒模式目前仅支持日线启动...”且不发送 `/start`。legacy daily 的技术指标错误单独记录于 14.5，不计入 intraday 失败。 |
+
+### 14.4 最终 Console/Network 统计
+
+| 指标 | 结果 | 预期 | 判定 |
+| --- | ---: | ---: | --- |
+| Intraday Console error | 0 | 0 | Pass |
+| HTTP 4xx | 0 | 0 | Pass |
+| HTTP 5xx | 0 | 0 | Pass |
+| `/next` 请求总数 | 27 | 至少 6（单次 + 自动播放至少 5） | Pass |
+| `/next` 最大并发 | 1 | 1 | Pass |
+| stale replay plan | 0 | 0 | Pass |
+| 暂停后新增 `/next` | 0 | 0 | Pass |
+| 周期切换 `/period` | 4 | 4 | Pass |
+| 周期切换期间 `/next` | 0 | 0 | Pass |
+| 周期切换是否改变 current_time | 否 | 否 | Pass |
+
+### 14.5 非阻塞 legacy 已知问题
+
+盲盒日线路径（`legacy_daily`，300540 / 蜀道装备）仍可启动，但页面时间显示 `--`，Console 出现 6 条 `加载技术指标失败: Value is undefined`。该问题属于既有 legacy 技术指标路径，不发生在 `intraday_30m` 新鲜会话中，也不是本次 intraday 数据服务或串行播放修复的回归，因此记录为非阻塞已知问题，不计入 TASK-014 intraday 验收失败数。
+
+盲盒选择非日线周期（例如 30m）时，前端正确阻止启动并显示“盲盒模式目前仅支持日线启动...”，Network 中没有 `/start` 请求。
+
+### 14.6 修复后验收标准
+
+- [x] A-I 所有要求场景都有浏览器或 API 明确证据。
+- [x] 无补丁、无 launcher、无 monkey-patch，直接运行生产入口。
+- [x] 未修改 frontend/backend 生产文件。
+- [x] 单次继续、自动播放、暂停、周期切换、交易和重置均通过真实页面操作。
+- [x] Console 和 Network 观察与 legacy 已知问题分开记录。
+- [x] 没有新的可稳定复现 P0/P1 问题。
+
+### 14.7 最新最终结论
+
+**PASS。**
+
+- Pass：9
+- Fail：0
+- Blocked：0
+
+提交 `33ab2a2` 已消除第一次验收发现的 intraday 缓存覆盖和并发播放问题。最终复验不依赖任何运行时补丁；全新 intraday 会话的 Console error、HTTP 4xx、HTTP 5xx 和 stale replay plan 均为 0，`/next maxInFlight = 1`。TASK-014 可以归档。
