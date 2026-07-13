@@ -1,7 +1,7 @@
 # Current Project State
 
 ## Active Milestone
-Phase 3 - Trading-engine adaptation is complete and awaiting Phase 4 API/frontend integration.
+Phase 4 - API and frontend integration has started with WorkBuddy-first implementation.
 
 ## Completed Foundation
 - Multi-agent collaboration control plane and quality profiles.
@@ -37,5 +37,10 @@ BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or 
 - Critical trading adapter joining replay plans, prices, previous close, orders, and simulator.
 - Independent daily-large-step versus repeated-30m equivalence verification.
 
+## Phase 4 Ready Work
+- `TASK-010`: Flask-independent intraday replay session controller.
+- `TASK-011`: static four-period HTML/CSS controls.
+- These tasks have disjoint write scopes and may run concurrently.
+
 ## Next Action
-Begin Phase 4 API and frontend integration. Prefer WorkBuddy for endpoint tests, response mapping, frontend controls, and display tests; Codex retains session-state architecture and final integration review.
+Run TASK-010 and TASK-011 with two external WorkBuddy agents in parallel. Codex will review the session contract before preparing sequential Flask API and frontend JavaScript tasks.
