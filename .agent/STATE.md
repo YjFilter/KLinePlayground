@@ -41,7 +41,8 @@ BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or 
 - `TASK-010`: intraday replay session controller accepted.
 - `TASK-011`: four-period static HTML/CSS controls accepted.
 - `TASK-012`: Flask API integration accepted; 65 focused API tests and the full 275-test suite passed.
-- `TASK-013`: frontend JavaScript integration is ready and must run alone against the accepted API contract.
+- `TASK-013`: frontend JavaScript integration accepted; 33 focused static tests and the full 308-test suite passed.
+- `TASK-014`: independent browser/API acceptance is ready; it may only write the acceptance report.
 
 ## Next Action
-Run TASK-013 with one external WorkBuddy agent. After Codex frontend review, delegate independent browser/API black-box acceptance.
+Run TASK-014 with one external WorkBuddy agent, then let Codex review any browser/API failures and perform final release acceptance.

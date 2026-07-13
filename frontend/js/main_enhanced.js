@@ -32,6 +32,179 @@ let isViewOnlyMode = false;
 let skipTradeReasonPrompt = false;
 let pendingTradeReasonAction = null;
 
+// === Intraday 多周期回放 (TASK-013) ===
+// data_mode 标识: 来自 /api/training/start 响应的 currentTraining.data_mode。
+// 仅当 data_mode === INTRADAY_DATA_MODE 时走新的 intraday 路径，
+// 其余情况一律沿用原 legacy_daily JavaScript 路径。
+const INTRADAY_DATA_MODE = 'intraday_30m';
+const INTRADAY_PERIODS = ['30m', '4h_session', 'daily', 'weekly'];
+
+function isIntradayMode() {
+    return !!(currentTraining && currentTraining.data_mode === INTRADAY_DATA_MODE);
+}
+
+// 从 #kline-period 下拉读取用户选择的周期。
+// 始终返回 INTRADAY_PERIODS 之一，默认 'daily'。
+function getSelectedKlinePeriod() {
+    const select = document.getElementById('kline-period');
+    if (!select) return 'daily';
+    const value = select.value;
+    return INTRADAY_PERIODS.indexOf(value) >= 0 ? value : 'daily';
+}
+
+// 将周期值转换为可读的徽章文字。
+function formatIntradayPeriodBadge(period) {
+    switch (period) {
+        case '30m': return '30m';
+        case '4h_session': return '4h';
+        case 'weekly': return '周K';
+        case 'daily':
+        default: return '日K';
+    }
+}
+
+// start / data / period 返回顶层 snapshot；next / reset 把 snapshot 嵌在 response.snapshot。
+// 此函数统一提取 snapshot 对象。
+function extractIntradaySnapshot(response) {
+    if (!response || typeof response !== 'object') return null;
+    if (response.snapshot && typeof response.snapshot === 'object') {
+        return response.snapshot;
+    }
+    return response;
+}
+
+// 把市场墙上时间转换为 lightweight-charts 的 UTCTimestamp。
+// lightweight-charts 使用 UTC 字段绘制标签，因此这里用 Date.UTC 保留 10:00 等原始盘中时间，
+// 不把北京时间换算成 02:00 UTC。
+function intradayBarToTimestamp(bar) {
+    if (!bar) return 0;
+    const raw = bar.start_time || bar.end_time || bar.time || bar.datetime;
+    if (typeof raw === 'number') return raw;
+    if (!raw) return 0;
+    const match = String(raw).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!match) return 0;
+    return Math.floor(Date.UTC(
+        Number(match[1]),
+        Number(match[2]) - 1,
+        Number(match[3]),
+        Number(match[4] || 0),
+        Number(match[5] || 0),
+        Number(match[6] || 0)
+    ) / 1000);
+}
+
+// 把 intraday snapshot.kline_data 转成 lightweight-charts 所需的蜡烛数据格式。
+function buildIntradayKlineChartData(klineData) {
+    if (!Array.isArray(klineData)) return [];
+    return klineData.map(function (bar) {
+        return {
+            time: intradayBarToTimestamp(bar),
+            open: Number(bar.open),
+            high: Number(bar.high),
+            low: Number(bar.low),
+            close: Number(bar.close),
+        };
+    });
+}
+
+// intraday snapshot 没有独立的 volume_data，从每根 K 线的 volume 字段构造。
+function buildIntradayVolumeData(klineData) {
+    if (!Array.isArray(klineData)) return [];
+    return klineData.map(function (bar) {
+        const isUp = Number(bar.close) >= Number(bar.open);
+        return {
+            time: intradayBarToTimestamp(bar),
+            value: Number(bar.volume) || 0,
+            color: isUp ? '#ff4d4f' : '#008000',
+        };
+    });
+}
+
+// 根据 snapshot.current_bar_complete 切换 K 线状态样式与文案。
+function updateIntradayReplayStatus(snapshot) {
+    const replayTimeEl = document.getElementById('current-replay-time');
+    const boundaryEl = document.getElementById('next-boundary-time');
+    const statusEl = document.getElementById('current-bar-status');
+
+    if (!snapshot) return;
+    if (replayTimeEl) replayTimeEl.textContent = snapshot.current_time || '--';
+    if (boundaryEl) boundaryEl.textContent = snapshot.next_boundary || '--';
+
+    if (statusEl) {
+        const complete = !!snapshot.current_bar_complete;
+        statusEl.classList.toggle('incomplete-candle', !complete);
+        statusEl.classList.toggle('bar-status-incomplete', !complete);
+        statusEl.classList.toggle('bar-status-complete', complete);
+        statusEl.textContent = complete ? '已收盘' : '未收盘';
+    }
+}
+
+// 把 active_period 同步到 currentPeriod 和顶部徽章。
+function syncIntradayActivePeriod(period) {
+    const next = INTRADAY_PERIODS.indexOf(period) >= 0 ? period : 'daily';
+    currentPeriod = next;
+    updatePeriodBadge(next);
+}
+
+// 渲染 intraday snapshot 到主图、成交量图、回放状态、当前价格/进度信息。
+// 不会调用任何 legacy-only 接口（chip_distribution / adjustment / indicators / full_data）。
+function applyIntradaySnapshot(snapshot, options) {
+    const opts = options || {};
+    if (!snapshot) {
+        throw new Error('intraday snapshot 为空');
+    }
+    const klineData = snapshot.kline_data || [];
+    if (klineData.length === 0) {
+        throw new Error('intraday 训练数据为空');
+    }
+
+    const chartData = buildIntradayKlineChartData(klineData);
+    const volumeData = buildIntradayVolumeData(klineData);
+
+    if (currentTraining) {
+        currentTraining.latestProgress = null;
+        currentTraining.tradeMarkers = [];
+    }
+
+    candlestickSeries.setData(chartData);
+    volumeSeries.setData(volumeData);
+    replaceRenderedKlineData(chartData);
+
+    // 清空均线系列，intraday 模式不计算 MA
+    maPeriods.forEach(function (p) {
+        if (maSeries[p]) maSeries[p].setData([]);
+    });
+    // 清空交易标记（intraday 模式不通过 legacy trade_markers 接口维护标记）
+    try {
+        if (tradeMarkerSeries && candlestickSeries) {
+            LightweightCharts.createSeriesMarkers(candlestickSeries, []);
+        }
+    } catch (markerErr) {
+        console.warn('清空 intraday 交易标记失败:', markerErr);
+    }
+
+    const lastBar = klineData[klineData.length - 1];
+    const lastChartBar = chartData[chartData.length - 1];
+    if (lastChartBar) {
+        // intraday 没有 progress/bar_id 概念；用最后一条聚合 K 线更新基础价格/日期信息
+        updateCurrentInfo({
+            time: lastChartBar.time,
+            open: Number(lastBar.open),
+            high: Number(lastBar.high),
+            low: Number(lastBar.low),
+            close: Number(lastBar.close),
+            volume: Number(lastBar.volume) || 0,
+        }, null);
+    }
+
+    updateIntradayReplayStatus(snapshot);
+    syncIntradayActivePeriod(snapshot.active_period);
+
+    if (opts.fitContent && chart) {
+        chart.timeScale().fitContent();
+    }
+}
+
 const THEME_PALETTES = {
     light: {
         chartBg: '#fdfefe',
@@ -76,7 +249,8 @@ function updatePeriodBadge(period) {
     currentPeriod = period || 'daily';
     const badge = document.getElementById('current-period');
     if (badge) {
-        badge.textContent = currentPeriod === 'weekly' ? '周K' : '日K';
+        // 兼容四个 intraday 周期与 legacy 的 daily/weekly
+        badge.textContent = formatIntradayPeriodBadge(currentPeriod);
     }
     document.querySelectorAll('.view-period-btn').forEach((button) => {
         button.classList.toggle('active', button.dataset.period === currentPeriod);
@@ -286,7 +460,7 @@ function getChipPriceCoordinate(price, containerHeight) {
 async function updateChipDistribution() {
     const toggleCb = document.getElementById('toggle-chip-distribution');
     const profitRatioContainer = document.getElementById('profit-ratio-container');
-    
+
     if (!toggleCb || !toggleCb.checked) {
         const container = getOrCreateVolumeProfileContainer();
         if (container) container.style.display = 'none';
@@ -303,6 +477,18 @@ async function updateChipDistribution() {
     }
 
     if (!currentTraining || !currentTraining.id) return;
+
+    // === intraday_30m 分支: 筹码分布接口由 legacy kline_processor 支持，
+    // intraday 模式不具备该后端依赖，因此隐藏面板并直接返回 ===
+    if (isIntradayMode()) {
+        const container = getOrCreateVolumeProfileContainer();
+        if (container) container.style.display = 'none';
+        if (profitRatioContainer) {
+            profitRatioContainer.classList.add('hidden');
+            profitRatioContainer.style.display = 'none';
+        }
+        return;
+    }
 
     try {
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/chip_distribution?bins=80&${getViewPeriodQuery()}`);
@@ -1704,6 +1890,25 @@ function applyTrainingSnapshot(data, options = {}) {
 async function refreshTrainingView(options = {}) {
     if (!currentTraining || !currentTraining.id) return;
     const { preserveRange = true, fitContent = false } = options;
+
+    // === intraday_30m 分支: GET /data 返回顶层 snapshot，直接渲染 ===
+    if (isIntradayMode()) {
+        const visibleRange = preserveRange && chart ? chart.timeScale().getVisibleLogicalRange() : null;
+        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/data`);
+        if (!response.ok) {
+            throw new Error(`刷新 intraday 视图失败: ${response.status}`);
+        }
+        const data = await response.json();
+        const snapshot = extractIntradaySnapshot(data);
+        applyIntradaySnapshot(snapshot, { fitContent });
+        await updateAccountInfo();
+        if (visibleRange !== null) {
+            setVisibleRangeAll(visibleRange);
+        }
+        return;
+    }
+
+    // === legacy_daily 分支 (原逻辑) ===
     const visibleRange = preserveRange && chart ? chart.timeScale().getVisibleLogicalRange() : null;
     const maQuery = maPeriods.join(',');
     const dataEndpoint = isViewOnlyMode ? 'full_data' : 'data';
@@ -1725,18 +1930,56 @@ async function refreshTrainingView(options = {}) {
 }
 
 async function switchViewPeriod(period) {
-    const nextPeriod = period === 'weekly' ? 'weekly' : 'daily';
-    if (currentPeriod === nextPeriod) {
-        updatePeriodBadge(nextPeriod);
+    const nextPeriod = INTRADAY_PERIODS.indexOf(period) >= 0 ? period : (period === 'weekly' ? 'weekly' : 'daily');
+
+    // === intraday_30m 分支: POST /period 切换，不调用 /next ===
+    if (isIntradayMode()) {
+        if (currentPeriod === nextPeriod && currentTraining && currentTraining.id) {
+            updatePeriodBadge(nextPeriod);
+            return;
+        }
+        if (!currentTraining || !currentTraining.id || !chart) {
+            updatePeriodBadge(nextPeriod);
+            return;
+        }
+        showLoading('正在切换 ' + formatIntradayPeriodBadge(nextPeriod) + ' 视图');
+        try {
+            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/period`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ period: nextPeriod })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.error || `切换周期失败: ${response.status}`);
+            }
+            const data = await response.json();
+            // period 返回顶层 snapshot
+            const snapshot = extractIntradaySnapshot(data);
+            applyIntradaySnapshot(snapshot, { fitContent: true });
+            await updateAccountInfo();
+        } catch (error) {
+            console.error('切换 intraday 周期失败:', error);
+            alert('切换周期失败');
+        } finally {
+            hideLoading();
+        }
         return;
     }
 
-    updatePeriodBadge(nextPeriod);
+    // === legacy_daily 分支 (原逻辑) ===
+    const legacyNext = nextPeriod === 'weekly' ? 'weekly' : 'daily';
+    if (currentPeriod === legacyNext) {
+        updatePeriodBadge(legacyNext);
+        return;
+    }
+
+    updatePeriodBadge(legacyNext);
     if (!currentTraining || !currentTraining.id || !chart) {
         return;
     }
 
-    showLoading(nextPeriod === 'weekly' ? '正在切换周K视图' : '正在切换日K视图');
+    showLoading(legacyNext === 'weekly' ? '正在切换周K视图' : '正在切换日K视图');
     try {
         await refreshTrainingView({ preserveRange: false, fitContent: true });
     } catch (error) {
@@ -1752,13 +1995,20 @@ async function startTraining() {
     const isRandomMode = document.querySelector('.tab-btn.active').dataset.tab === 'random';
     const initialCapital = parseFloat(document.getElementById('initial-capital').value);
     const dataSource = document.getElementById('data-source').value || 'akshare';
-    const period = 'daily';
+    // TASK-013: 指定模式启用 intraday；盲盒模式暂时保留原有 daily 数据链路。
+    const period = getSelectedKlinePeriod();
+    if (isRandomMode && period !== 'daily') {
+        alert('盲盒模式目前仅支持日线启动；30分钟、4小时和周线请使用指定模式。');
+        return;
+    }
+    const requestedDataMode = isRandomMode ? 'legacy_daily' : INTRADAY_DATA_MODE;
 
     let trainingConfig = {
         user: currentUser,
         initial_capital: initialCapital,
         mode: isRandomMode ? 'random' : 'specified',
         data_source: dataSource,
+        data_mode: requestedDataMode,
         period: period,
         max_bars: parseInt(document.getElementById('max-training-bars')?.value) || 0
     };
@@ -1781,7 +2031,7 @@ async function startTraining() {
     }
 
     try {
-        updatePeriodBadge('daily');
+        updatePeriodBadge(period);
         showLoading(
             dataSource === 'offline' ? '正在筛选本地离线数据' : '正在创建训练',
             dataSource === 'offline' ? '首次校验离线股票可用范围时会稍慢一些。' : '正在准备图表和训练数据...'
@@ -1796,22 +2046,33 @@ async function startTraining() {
 
         if (response.ok) {
             currentTraining = await response.json();
-            currentTraining.period = 'daily';
+            currentTraining.period = period;
             currentReportData = null;
             hideTrainingSetup();
             document.getElementById('report-interface').classList.add('hidden');
             showTrainingInterface();
             initializeChart();
-            await loadInitialData();
-            await updateChipDistribution(); // 加入此行，初始化筹码分布
 
-            // 在所有内容加载完毕后，自动触发一次 nextBar
-            // 我们加一个小的延时，确保图表渲染完成，视觉效果更平滑
-            setTimeout(() => {
-                nextBar();
-            }, 100); // 100毫秒的延时
+            if (isIntradayMode()) {
+                // === intraday_30m 分支 ===
+                // start 返回顶层 snapshot；直接渲染初始快照，禁止自动调用 nextBar。
+                const snapshot = extractIntradaySnapshot(currentTraining);
+                applyIntradaySnapshot(snapshot, { fitContent: true });
+                await updateAccountInfo();
+                startAutoSync();
+            } else {
+                // === legacy_daily 分支 (原逻辑) ===
+                await loadInitialData();
+                await updateChipDistribution(); // 加入此行，初始化筹码分布
 
-            startAutoSync();
+                // 在所有内容加载完毕后，自动触发一次 nextBar
+                // 我们加一个小的延时，确保图表渲染完成，视觉效果更平滑
+                setTimeout(() => {
+                    nextBar();
+                }, 100); // 100毫秒的延时
+
+                startAutoSync();
+            }
         } else {
             const error = await response.json();
             alert(error.error || error.message || '开始训练失败');
@@ -2290,6 +2551,37 @@ function initializeChart() {
  * 包含一次自动重置和重试的容错逻辑。
  */
 async function loadInitialData() {
+    // === intraday_30m 分支: 直接从 currentTraining（start 返回的顶层 snapshot）渲染 ===
+    if (isIntradayMode()) {
+        try {
+            const snapshot = extractIntradaySnapshot(currentTraining);
+            if (snapshot && snapshot.kline_data && snapshot.kline_data.length > 0) {
+                applyIntradaySnapshot(snapshot, { fitContent: true });
+                await updateAccountInfo();
+                return;
+            }
+            // 若 start 响应没有携带 snapshot，则回退到 GET /data
+            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/data`);
+            if (!response.ok) {
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
+            const data = await response.json();
+            const fallbackSnapshot = extractIntradaySnapshot(data);
+            if (fallbackSnapshot && fallbackSnapshot.kline_data && fallbackSnapshot.kline_data.length > 0) {
+                applyIntradaySnapshot(fallbackSnapshot, { fitContent: true });
+                await updateAccountInfo();
+                return;
+            }
+            throw new Error('intraday 训练数据为空');
+        } catch (error) {
+            console.error('加载 intraday 初始数据失败:', error);
+            alert('加载数据失败，请尝试重新开始一局训练。');
+            resetToMainAppState();
+        }
+        return;
+    }
+
+    // === legacy_daily 分支 (原逻辑) ===
     // 内部函数，用于执行实际的数据加载尝试
     const attemptToLoad = async () => {
         const maQuery = maPeriods.join(',');
@@ -2574,6 +2866,37 @@ function updatePlaybackSpeed() {
 async function nextBar() {
     try {
         const previousLogicalRange = chart?.timeScale().getVisibleLogicalRange();
+
+        // === intraday_30m 分支: /next 返回结构中 snapshot 位于 response.snapshot ===
+        if (isIntradayMode()) {
+            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/next`, {
+                method: 'POST'
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                console.error('intraday next 失败:', err);
+                return false;
+            }
+            const data = await response.json();
+            if (data.finished) {
+                // 训练结束: 停止自动播放并展示报告
+                pausePlayback();
+                if (data.report) {
+                    showReport(data.report);
+                }
+                return false;
+            }
+            const snapshot = extractIntradaySnapshot(data);
+            applyIntradaySnapshot(snapshot, { fitContent: false });
+            if (previousLogicalRange !== null) {
+                setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+            }
+            renderPendingOrders(data.pending_orders);
+            await updateAccountInfo();
+            return true;
+        }
+
+        // === legacy_daily 分支 (原逻辑) ===
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/next`, {
             method: 'POST'
         });
@@ -2662,6 +2985,29 @@ async function updateMovingAverages() {
 }
 
 async function loadTechnicalIndicator(indicatorType) {
+    // === intraday_30m 分支: 指标接口由 legacy kline_processor 支持，
+    // intraday 模式不具备该后端依赖，因此清空已有指标系列并直接返回 ===
+    if (isIntradayMode()) {
+        try {
+            if (bollSeries.upper) {
+                chart.removeSeries(bollSeries.upper);
+                chart.removeSeries(bollSeries.middle);
+                chart.removeSeries(bollSeries.lower);
+                bollSeries = {};
+                const bollInfoEl = document.getElementById('boll-info-content');
+                if (bollInfoEl) bollInfoEl.remove();
+                renderChartLegend();
+            }
+            if (currentIndicatorSeries.length > 0 && indicatorChart) {
+                currentIndicatorSeries.forEach(series => indicatorChart.removeSeries(series));
+                currentIndicatorSeries = [];
+            }
+        } catch (e) {
+            console.error('intraday 模式清空指标系列失败:', e);
+        }
+        return;
+    }
+
     const visibleLogicalRange = chart.timeScale().getVisibleLogicalRange();
     try {
         // 获取DOM元素，并检查是否存在
@@ -2852,13 +3198,19 @@ function changeIndicator() {
 
 // 复权设置
 async function updateAdjustment(targetRange = null) {
+    // === intraday_30m 分支: 复权接口由 legacy kline_processor 支持，
+    // intraday 模式不具备该后端依赖，因此直接返回，不发起请求 ===
+    if (isIntradayMode()) {
+        return;
+    }
+
     const checkedAdjustment = document.querySelector('input[name="adjustment"]:checked');
     const adjustment = checkedAdjustment ? checkedAdjustment.value : 'forward';
 
     const maQuery = maPeriods.join(',');
     try {
         const visibleRange = targetRange || chart.timeScale().getVisibleLogicalRange();
-        
+
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/adjustment?ma_periods=${maQuery}&${getViewPeriodQuery()}`, {
             method: 'POST',
             headers: {
@@ -2875,11 +3227,11 @@ async function updateAdjustment(targetRange = null) {
                 trade_markers: currentPeriod === 'daily' ? (currentTraining?.tradeMarkers || []) : []
             });
             renderChartLegend();
-            
+
             if (visibleRange !== null) {
                 setVisibleRangeAll(visibleRange);
             }
-            
+
             await updateChipDistribution();
         }
     } catch (error) {
@@ -3263,7 +3615,8 @@ async function executeBuy(priceType = 'close', reason = '') {
         return;
     }
 
-    if (currentOrderType === 'market' && priceType === 'open') {
+    // intraday 模式下成交价恒为当前 base bar close，不需要为 'open' 推进一根
+    if (!isIntradayMode() && currentOrderType === 'market' && priceType === 'open') {
         const hasNext = await nextBar();
         if (!hasNext) {
             return; // 训练结束或出错
@@ -3328,7 +3681,8 @@ async function executeSell(priceType = 'close', reason = '') {
         return;
     }
 
-    if (priceType === 'open') {
+    // intraday 模式下成交价恒为当前 base bar close，不需要为 'open' 推进一根
+    if (!isIntradayMode() && priceType === 'open') {
         const hasNext = await nextBar();
         if (!hasNext) {
             return; // 训练结束或出错
@@ -3454,6 +3808,12 @@ async function updateTradeHistory() {
 
 // 自动同步状态
 function startAutoSync() {
+    // === intraday_30m 分支: /sync_status 由 legacy kline_processor 支持，
+    // intraday 模式不具备该后端依赖，因此不启动后台轮询，避免反复 500 ===
+    if (isIntradayMode()) {
+        stopAutoSync();
+        return;
+    }
     if (autoSyncInterval) clearInterval(autoSyncInterval);
     lastKnownBarId = null;
     lastKnownTradeCount = null;
@@ -3687,6 +4047,21 @@ async function resetTraining() {
 
         if (response.ok) {
             pausePlayback();
+
+            // === intraday_30m 分支: reset 返回的 snapshot 位于 response.snapshot，
+            // 重置后重新渲染并同步 active_period ===
+            if (isIntradayMode()) {
+                const data = await response.json();
+                const snapshot = extractIntradaySnapshot(data);
+                if (snapshot) {
+                    applyIntradaySnapshot(snapshot, { fitContent: true });
+                }
+                await updateAccountInfo();
+                document.getElementById('trade-history').innerHTML = '<div class="no-trades">暂无交易记录</div>';
+                return;
+            }
+
+            // === legacy_daily 分支 (原逻辑) ===
             await loadInitialData();
 
             // 清除交易记录显示
@@ -3957,7 +4332,29 @@ async function viewFullChart() {
         alert('找不到训练会话数据，无法查看完整走势');
         return;
     }
-    
+
+    // === intraday_30m 分支: /full_data 接口由 legacy kline_processor 支持，
+    // intraday 模式不具备该后端依赖，因此回退到 GET /data 重新渲染当前快照 ===
+    if (currentTraining && isIntradayMode()) {
+        try {
+            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/data`);
+            if (!response.ok) {
+                throw new Error('获取 intraday 数据失败');
+            }
+            const data = await response.json();
+            document.getElementById('report-interface').classList.add('hidden');
+            document.getElementById('training-interface').classList.remove('hidden');
+            toggleToolbarForTraining(true);
+            const snapshot = extractIntradaySnapshot(data);
+            applyIntradaySnapshot(snapshot, { fitContent: true });
+            setTrainingViewOnlyMode(true, { showBackToReport: true });
+        } catch (error) {
+            console.error('查看 intraday 完整走势失败:', error);
+            alert('获取完整走势数据失败');
+        }
+        return;
+    }
+
     // Use session_id from report data if available, otherwise from currentTraining
     const trainingId = currentReportData ? currentReportData.session_id : currentTraining.id;
     if (!currentTraining) {
@@ -3970,28 +4367,28 @@ async function viewFullChart() {
         if (!response.ok) {
             throw new Error('获取完整数据失败');
         }
-        
+
         const data = await response.json();
-        
+
         // Hide report interface and show training interface
         document.getElementById('report-interface').classList.add('hidden');
         document.getElementById('training-interface').classList.remove('hidden');
         toggleToolbarForTraining(true);
-        
+
         // Update chart data
         if (data.kline_data && data.kline_data.length > 0) {
             applyTrainingSnapshot(data);
-            
+
             // Re-load technical indicators for full range
             await loadTechnicalIndicator(currentIndicatorType);
             await updateChipDistribution();
-            
+
             // Adjust time scale to fit all data
             chart.timeScale().fitContent();
         }
-        
+
         setTrainingViewOnlyMode(true, { showBackToReport: true });
-        
+
     } catch (error) {
         console.error('查看完整走势失败:', error);
         alert('获取完整走势数据失败');

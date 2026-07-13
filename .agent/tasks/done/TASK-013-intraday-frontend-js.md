@@ -1,9 +1,9 @@
 ---
 id: TASK-013
 title: Wire intraday replay frontend behavior
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-013
 depends_on:
   - TASK-011
   - TASK-012
@@ -50,15 +50,22 @@ Create focused Python static-contract tests that inspect main_enhanced.js withou
 - Legacy data-loading behavior remains present behind a non-intraday branch.
 
 ## Acceptance Criteria
-- [ ] Selected setup period starts an intraday_30m session.
-- [ ] Start renders initial snapshot without advancing.
-- [ ] Each period button switches without advancing.
-- [ ] Continue advances by the active period and renders the resulting snapshot.
-- [ ] Replay status and incomplete/complete visuals stay synchronized.
-- [ ] Playback, reset, trade, account, pending orders, and end remain usable.
-- [ ] Legacy JavaScript path remains available for legacy sessions.
-- [ ] JavaScript syntax check passes.
-- [ ] Focused static tests pass.
+- [x] Selected setup period starts an intraday_30m session.
+- [x] Start renders initial snapshot without advancing.
+- [x] Each period button switches without advancing.
+- [x] Continue advances by the active period and renders the resulting snapshot.
+- [x] Replay status and incomplete/complete visuals stay synchronized.
+- [x] Playback, reset, trade, account, pending orders, and end remain usable.
+- [x] Legacy JavaScript path remains available for legacy sessions.
+- [x] JavaScript syntax check passes.
+- [x] Focused static tests pass.
 
 ## Constraints
 Modify only the two write-scope files. Do not modify HTML, CSS, backend, existing tests, dependencies, agent files, or Git state. Do not commit. Do not access live BaoStock or external networks.
+
+## Codex Acceptance
+- Frontend response-shape branches reviewed against the accepted Flask API.
+- Random/box mode retains the legacy daily start path instead of sending an invalid intraday request.
+- Intraday timestamps preserve market wall-clock labels without an eight-hour chart shift.
+- JavaScript syntax check passed.
+- 33 focused static frontend tests and the full 308-test suite passed.
