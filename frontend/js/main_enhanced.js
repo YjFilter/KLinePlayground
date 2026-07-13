@@ -2834,15 +2834,22 @@ function togglePlayback() {
     }
 }
 
+async function playbackTick() {
+    if (!isPlaying) return;
+    const hasNext = await nextBar();
+    if (!isPlaying || hasNext === false) return;
+    const speed = parseFloat(document.getElementById('playback-speed').value);
+    playbackInterval = setTimeout(playbackTick, speed * 1000);
+}
+
 function startPlayback() {
+    if (isPlaying) return;
     isPlaying = true;
     document.querySelector('.play-icon').classList.add('hidden');
     document.querySelector('.pause-icon').classList.remove('hidden');
 
     const speed = parseFloat(document.getElementById('playback-speed').value);
-    const interval = speed * 1000;
-
-    playbackInterval = setInterval(nextBar, interval);
+    playbackInterval = setTimeout(playbackTick, speed * 1000);
 }
 
 function pausePlayback() {
@@ -2851,7 +2858,7 @@ function pausePlayback() {
     document.querySelector('.pause-icon').classList.add('hidden');
 
     if (playbackInterval) {
-        clearInterval(playbackInterval);
+        clearTimeout(playbackInterval);
         playbackInterval = null;
     }
 }

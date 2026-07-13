@@ -366,12 +366,18 @@ class PlaybackSingleNextPerAdvanceTests(_StaticTestCase):
     """播放每次只调用一次 /next；推进单位由 active_period 决定。"""
 
     def test_playback_uses_nextbar_only(self):
-        # startPlayback 必须使用 nextBar 作为推进函数
-        idx = self.js.find("function startPlayback")
-        body = self.js[idx:idx + 600]
-        self.assertIn("nextBar", body,
-                      "startPlayback 必须以 nextBar 作为唯一推进入口")
+        idx = self.js.find("async function playbackTick")
+        body = self.js[idx:idx + 900]
+        self.assertIn("await nextBar()", body,
+                      "playbackTick 必须以 nextBar 作为唯一推进入口")
 
+    def test_playback_waits_for_next_before_scheduling_again(self):
+        idx = self.js.find("async function playbackTick")
+        self.assertGreater(idx, 0, "缺少串行 playbackTick")
+        body = self.js[idx:idx + 900]
+        self.assertIn("await nextBar()", body)
+        self.assertIn("setTimeout(playbackTick", body)
+        self.assertNotIn("setInterval(nextBar", self.js)
     def test_intraday_next_does_not_loop(self):
         # nextBar 的 intraday 分支只能调用一次 /next
         idx = self.js.find("async function nextBar")

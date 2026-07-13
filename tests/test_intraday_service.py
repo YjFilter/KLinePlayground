@@ -1,4 +1,4 @@
-﻿import tempfile
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -84,6 +84,43 @@ class IntradayDataServiceTests(unittest.TestCase):
         self.assertEqual(source.calls[0][1], datetime(2025, 1, 2, 10))
         self.assertEqual(source.calls[0][2], datetime(2025, 1, 3, 9, 30))
 
+    def test_same_day_midnight_request_uses_cache_starting_at_first_bar(self):
+        self.save(make_day("2025-01-02"))
+        source = FakeSource(error=RuntimeError("network should not be used"))
+
+        frame = self.service(source).get_30m(
+            "600000",
+            datetime(2025, 1, 2),
+            datetime(2025, 1, 2, 15),
+        )
+
+        self.assertEqual(len(frame), 8)
+        self.assertEqual(source.calls, [])
+
+    def test_stale_cache_returns_latest_available_when_source_has_no_new_bars(self):
+        self.save(make_day("2025-01-02"))
+        source = FakeSource(frame=pd.DataFrame(columns=make_day("2025-01-02").columns))
+
+        frame = self.service(source).get_30m(
+            "600000",
+            datetime(2025, 1, 2),
+            datetime(2025, 1, 5, 15),
+        )
+
+        self.assertEqual(len(frame), 8)
+        self.assertEqual(len(source.calls), 1)
+
+    def test_network_failure_returns_latest_partial_cache(self):
+        self.save(make_day("2025-01-02"))
+        source = FakeSource(error=RuntimeError("offline"))
+
+        frame = self.service(source).get_30m(
+            "600000",
+            datetime(2025, 1, 2),
+            datetime(2025, 1, 5, 15),
+        )
+
+        self.assertEqual(len(frame), 8)
     def test_invalid_download_is_not_saved(self):
         from backend.intraday.service import IntradayDataUnavailable
 
