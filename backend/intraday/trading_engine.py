@@ -23,7 +23,7 @@ class IntradayTradingCallbacks(AdvanceCallbacks):
 
     def __post_init__(self) -> None:
         frame = self.base_bars.copy()
-        frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+        frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce", format="mixed")
         if frame["datetime"].isna().any():
             raise ValueError("base_bars contains invalid datetime values")
         if frame["datetime"].duplicated().any():

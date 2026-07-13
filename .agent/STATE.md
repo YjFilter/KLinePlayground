@@ -1,7 +1,7 @@
 # Current Project State
 
 ## Active Milestone
-Phase 3 - Trading-engine adaptation is ready for WorkBuddy implementation and Codex integration review.
+Phase 3 - Trading-engine adaptation is complete and awaiting Phase 4 API/frontend integration.
 
 ## Completed Foundation
 - Multi-agent collaboration control plane and quality profiles.
@@ -30,12 +30,12 @@ Phase 2 intentionally does not modify `KLineProcessorEnhanced`, Flask routes, tr
 ## Known Limitation
 BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or import path remains required for prefixes `43`, `83`, `87`, and `92`.
 
-## Phase 3 Progress
-- `TASK-006`: previous-trading-day close index accepted.
-- `TASK-007`: sequential base-bar executor accepted.
-- `TASK-008`: trade timestamp and display-period metadata accepted.
-- Codex added the critical integration adapter in `backend/intraday/trading_engine.py`.
-- `TASK-009` is ready for independent black-box equivalence testing.
+## Phase 3 Completed
+- Previous effective trading-day close lookup.
+- Sequential hidden-base-bar execution with explicit replay-clock commit.
+- Full trade timestamps and display-period metadata with additive SQLite migration.
+- Critical trading adapter joining replay plans, prices, previous close, orders, and simulator.
+- Independent daily-large-step versus repeated-30m equivalence verification.
 
 ## Next Action
-Run TASK-009 with one external WorkBuddy agent. Codex will review any discovered trading-semantic defect, add the Phase 3 quality gate, and close the phase.
+Begin Phase 4 API and frontend integration. Prefer WorkBuddy for endpoint tests, response mapping, frontend controls, and display tests; Codex retains session-state architecture and final integration review.

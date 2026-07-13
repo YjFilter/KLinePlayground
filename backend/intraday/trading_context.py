@@ -107,7 +107,7 @@ def build_previous_close_index(base_bars: pd.DataFrame) -> PreviousCloseIndex:
     # Work on a copy so the caller's frame is never mutated. The copy is
     # cheap relative to the lookup cost amortized across a replay session.
     working = base_bars.copy()
-    working["datetime"] = pd.to_datetime(working["datetime"], errors="coerce")
+    working["datetime"] = pd.to_datetime(working["datetime"], errors="coerce", format="mixed")
 
     if working["datetime"].isna().any():
         bad_count = int(working["datetime"].isna().sum())

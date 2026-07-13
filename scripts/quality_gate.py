@@ -27,6 +27,13 @@ PROFILE_COMMANDS: dict[str, list[list[str]]] = {
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_replay_clock.py", "-v"],
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_no_future_leakage.py", "-v"],
     ],
+    "phase3": [
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_trading_context.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_advance_executor.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_trade_timestamp_metadata.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_trading_engine.py", "-v"],
+        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_intraday_trading_equivalence.py", "-v"],
+    ],
     "backend": [
         [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
     ],
@@ -39,7 +46,7 @@ PROFILE_COMMANDS: dict[str, list[list[str]]] = {
 def _full_commands() -> list[list[str]]:
     commands: list[list[str]] = []
     seen: set[tuple[str, ...]] = set()
-    for profile in ("control-plane", "intraday", "phase2", "backend", "frontend"):
+    for profile in ("control-plane", "intraday", "phase2", "phase3", "backend", "frontend"):
         for command in PROFILE_COMMANDS[profile]:
             key = tuple(command)
             if key not in seen:

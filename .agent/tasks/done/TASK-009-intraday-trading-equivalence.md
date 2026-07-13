@@ -1,9 +1,9 @@
 ---
 id: TASK-009
 title: Verify intraday trading step equivalence
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-9
 depends_on:
   - TASK-006
   - TASK-007
@@ -35,3 +35,9 @@ Independently verify with real trading components that large-period advancement 
 
 ## Constraints
 Black-box tests only. Do not modify production code, existing tests, quality gates, task files, or Git state. Report any defect with a minimal reproduction and stop rather than patching production.
+
+## Codex Acceptance
+- Independent black-box suite added 9 scenarios and passed.
+- Large daily advancement matched repeated 30-minute advancement.
+- Previous-close, price-limit, T+1, timestamp, display-period, event ordering, and account state semantics passed.
+- No production defect was found.

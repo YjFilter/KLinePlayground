@@ -62,6 +62,25 @@ class QualityGateTests(unittest.TestCase):
             self.assertIn(command, full_commands)
             self.assertEqual(full_commands.count(command), 1)
 
+    def test_phase3_profile_includes_trading_adaptation_tests(self):
+        from scripts.quality_gate import PROFILE_COMMANDS
+
+        phase3_commands = [tuple(command) for command in PROFILE_COMMANDS["phase3"]]
+        phase3_text = "\n".join(" ".join(command) for command in PROFILE_COMMANDS["phase3"])
+        full_commands = [tuple(command) for command in PROFILE_COMMANDS["full"]]
+
+        for filename in (
+            "test_intraday_trading_context.py",
+            "test_intraday_advance_executor.py",
+            "test_trade_timestamp_metadata.py",
+            "test_intraday_trading_engine.py",
+            "test_intraday_trading_equivalence.py",
+        ):
+            self.assertIn(filename, phase3_text)
+        for command in phase3_commands:
+            self.assertIn(command, full_commands)
+            self.assertEqual(full_commands.count(command), 1)
+
     def test_first_failure_produces_nonzero_exit(self):
         from scripts.quality_gate import run_profile
 

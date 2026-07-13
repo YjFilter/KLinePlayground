@@ -62,3 +62,10 @@ python scripts/verify_baostock_30m.py --years 5 600000 600519 300750
 python scripts/quality_gate.py phase2
 ```
 Runs aggregation, replay-clock, and no-future-leakage tests. It is included in `full`.
+
+
+## Phase 3
+```powershell
+python scripts/quality_gate.py phase3
+```
+Runs previous-close, sequential advance, trade metadata, integration adapter, and large-step equivalence tests. It is included in `full`.
