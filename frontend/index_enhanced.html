@@ -227,11 +227,13 @@
                             <option value="offline">本地离线数据</option>
                         </select>
                     </div>
-                    <div class="form-group hidden">
+                    <div class="form-group">
                         <label>K线周期</label>
                         <select id="kline-period">
-                            <option value="daily" selected>日K</option>
-                            <option value="weekly">周K</option>
+                            <option value="30m">30分钟</option>
+                            <option value="4h_session">4小时</option>
+                            <option value="daily" selected>日线</option>
+                            <option value="weekly">周线</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -404,9 +406,25 @@
                     </div>
                     <div class="chart-actions">
                         <div class="view-period-switch">
+                            <button class="view-period-btn" data-period="30m">30分钟</button>
+                            <button class="view-period-btn" data-period="4h_session">4小时</button>
                             <button class="view-period-btn active" data-period="daily">日线</button>
                             <button class="view-period-btn" data-period="weekly">周线</button>
                         </div>
+                    </div>
+                </div>
+                <div class="replay-status-bar">
+                    <div class="replay-status-item">
+                        <span class="replay-status-label">当前时间</span>
+                        <span id="current-replay-time" class="replay-status-value">--</span>
+                    </div>
+                    <div class="replay-status-item">
+                        <span class="replay-status-label">下一边界</span>
+                        <span id="next-boundary-time" class="replay-status-value">--</span>
+                    </div>
+                    <div class="replay-status-item">
+                        <span class="replay-status-label">K线状态</span>
+                        <span id="current-bar-status" class="replay-status-value">--</span>
                     </div>
                 </div>
                 <div id="chart" class="chart"></div>

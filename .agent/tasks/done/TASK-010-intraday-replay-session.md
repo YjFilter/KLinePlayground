@@ -1,9 +1,9 @@
 ---
 id: TASK-010
 title: Build intraday replay session controller
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-010
 depends_on:
   - TASK-005
   - TASK-009
@@ -44,3 +44,8 @@ Provide a Flask-independent `IntradayReplaySession` that owns one canonical repl
 
 ## Constraints
 No Flask imports. No network/cache access. Do not modify any existing production or test file. Do not implement legacy daily mode. Do not commit.
+
+## Codex Acceptance
+- Scope reviewed and accepted.
+- Required focused tests or static checks passed.
+- Public IDs and session snapshot contract were preserved.

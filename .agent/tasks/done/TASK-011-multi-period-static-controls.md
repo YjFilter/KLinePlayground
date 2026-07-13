@@ -1,9 +1,9 @@
 ---
 id: TASK-011
 title: Add multi-period static training controls
-status: ready
+status: done
 priority: P1
-owner: unassigned
+owner: workbuddy-011
 depends_on:
   - TASK-005
 write_scope:
@@ -36,3 +36,8 @@ Add accessible static HTML/CSS controls for selecting and displaying `30m`, `4h_
 
 ## Constraints
 Do not modify JavaScript, backend, tests, dependencies, agent files, or Git state. Do not redesign unrelated layout. Do not commit.
+
+## Codex Acceptance
+- Scope reviewed and accepted.
+- Required focused tests or static checks passed.
+- Public IDs and session snapshot contract were preserved.

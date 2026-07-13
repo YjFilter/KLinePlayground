@@ -1,3 +1,4 @@
+from .session import IntradayReplaySession
 from .advance_executor import AdvanceCallbacks, AdvanceExecutionResult, execute_advance
 from .trading_context import PreviousCloseIndex, build_previous_close_index
 from .trading_engine import IntradayTradingCallbacks, execute_trading_advance
@@ -15,6 +16,7 @@ from .models import (
 )
 
 __all__ = [
+    "IntradayReplaySession",
     "AdvanceCallbacks",
     "AdvanceExecutionResult",
     "IntradayTradingCallbacks",

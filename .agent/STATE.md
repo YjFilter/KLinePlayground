@@ -37,10 +37,10 @@ BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or 
 - Critical trading adapter joining replay plans, prices, previous close, orders, and simulator.
 - Independent daily-large-step versus repeated-30m equivalence verification.
 
-## Phase 4 Ready Work
-- `TASK-010`: Flask-independent intraday replay session controller.
-- `TASK-011`: static four-period HTML/CSS controls.
-- These tasks have disjoint write scopes and may run concurrently.
+## Phase 4 Progress
+- `TASK-010`: intraday replay session controller accepted.
+- `TASK-011`: four-period static HTML/CSS controls accepted.
+- `TASK-012`: Flask API integration is ready and must run alone because `app_enhanced.py` is a hotspot.
 
 ## Next Action
-Run TASK-010 and TASK-011 with two external WorkBuddy agents in parallel. Codex will review the session contract before preparing sequential Flask API and frontend JavaScript tasks.
+Run TASK-012 with one external WorkBuddy agent. After Codex API review, prepare the sequential frontend JavaScript integration task.
