@@ -46,6 +46,114 @@ data_manager = DataManager(data_dir=data_dir_path)
 user_manager = UserManagerEnhanced(users_dir=users_dir_path)
 active_trainings = {}  # 存储活跃的训练会话
 
+# ----------------------------------------------------------------------
+# Intraday replay 数据模式与周期常量
+# ----------------------------------------------------------------------
+# legacy_daily: 旧日线训练路径，未传 data_mode 时的默认行为，保持完全兼容
+# intraday_30m: 基于 30 分钟底层行情的多周期回放路径
+DATA_MODE_LEGACY_DAILY = "legacy_daily"
+DATA_MODE_INTRADAY_30M = "intraday_30m"
+# intraday_30m 支持的四个显示周期
+VALID_INTRADAY_PERIODS = ("30m", "4h_session", "daily", "weekly")
+# 懒加载的 IntradayDataService 单例；legacy_daily 路径不会触发其创建，
+# 因此旧用户不会因缺少 baostock 等可选依赖而受影响。
+_intraday_service_instance = None
+
+
+def _get_intraday_data_service():
+    """懒加载 IntradayDataService。
+
+    legacy_daily 路径不会调用此函数，避免在旧环境中引入 baostock 等依赖。
+    测试可通过直接覆盖 ``app_enhanced._intraday_service_instance`` 或
+    patch 本函数来注入 mock 服务，禁止访问真实 BaoStock 网络。
+    """
+    global _intraday_service_instance
+    if _intraday_service_instance is None:
+        from backend.intraday.baostock_source import BaoStockSource
+        from backend.intraday.cache import IntradayCache
+        from backend.intraday.service import IntradayDataService
+
+        cache_root = os.path.join(data_dir_path, 'intraday')
+        _intraday_service_instance = IntradayDataService(
+            source=BaoStockSource(),
+            cache=IntradayCache(root=cache_root),
+        )
+    return _intraday_service_instance
+
+
+def _resolve_data_mode(data_mode, period):
+    """根据显式 data_mode 和 period 解析最终数据模式。
+
+    优先级：
+    1. 显式 ``data_mode == "intraday_30m"`` → intraday_30m
+    2. 显式 ``data_mode == "legacy_daily"`` → legacy_daily
+    3. 未传 data_mode → legacy_daily（保持旧行为）
+    """
+    if data_mode in (None, ""):
+        return DATA_MODE_LEGACY_DAILY
+    if data_mode == DATA_MODE_INTRADAY_30M:
+        return DATA_MODE_INTRADAY_30M
+    if data_mode == DATA_MODE_LEGACY_DAILY:
+        return DATA_MODE_LEGACY_DAILY
+    raise ValueError(f'不支持的数据模式: {data_mode}')
+
+
+def _parse_start_date(start_date_str):
+    """将 'YYYY-MM-DD' 解析为当日 00:00:00 的 datetime 对象。"""
+    return datetime.strptime(start_date_str, '%Y-%m-%d')
+
+
+def _choose_initial_time(base_bars, start_dt):
+    """选择 base_bars 中第一根 datetime >= start_dt 的 timestamp。
+
+    若 start_dt 之后无数据或 base_bars 为空则抛出 ValueError。
+    """
+    if base_bars is None or base_bars.empty:
+        raise ValueError("intraday base_bars 为空，无法启动回放")
+    ts = pd.Timestamp(start_dt)
+    mask = base_bars["datetime"] >= ts
+    if mask.any():
+        return base_bars.loc[mask, "datetime"].iloc[0].to_pydatetime()
+    raise ValueError("起始日期之后没有可用的 intraday 数据")
+
+
+def _intraday_snapshot_response(training):
+    """构造 intraday 会话的完整响应：snapshot + 元数据字段。"""
+    session = training['intraday_session']
+    snap = session.snapshot()
+    snap['data_mode'] = training['data_mode']
+    snap['stock_code'] = training['stock_code']
+    snap['mode'] = training.get('mode', '')
+    snap['data_source'] = training.get('data_source', 'akshare')
+    snap['initial_capital'] = training.get('initial_capital', 0)
+    return snap
+
+
+def _is_intraday_session(training):
+    """判断 training 是否为 intraday_30m 模式。"""
+    return training.get('data_mode') == DATA_MODE_INTRADAY_30M
+
+
+def _intraday_current_trade_date(training):
+    """返回 intraday 会话当前 base bar 的交易日字符串 (YYYY-MM-DD)。"""
+    session = training['intraday_session']
+    snap = session.snapshot()
+    current_time_str = snap.get('current_time', '')
+    if not current_time_str:
+        return ''
+    try:
+        return datetime.strptime(current_time_str, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
+    except ValueError:
+        return current_time_str[:10]
+
+
+def _intraday_current_trade_time(training):
+    """返回 intraday 会话当前 base bar 的完整时间字符串 (YYYY-MM-DD HH:MM:SS)。"""
+    session = training['intraday_session']
+    snap = session.snapshot()
+    return snap.get('current_time', '')
+
+
 def _parse_optional_price(value):
     if value in (None, "", 0, "0"):
         return None
@@ -369,6 +477,373 @@ def toggle_api_info():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def _start_intraday_training(user, mode, data_source, period, initial_capital, training_id, payload):
+    """启动 intraday_30m 训练会话。
+
+    通过 IntradayDataService 加载 30 分钟底座数据，选择 start_date 当天或之后的
+    第一根真实时间戳作为 initial_time，创建 IntradayReplaySession。
+
+    返回包含完整 session snapshot 和 data_mode 的响应。
+    """
+    from backend.intraday.session import IntradayReplaySession
+    from backend.intraday.trading_context import build_previous_close_index
+
+    stock_code = payload.get('stock_code')
+    start_date = payload.get('start_date')
+    if not stock_code or not start_date:
+        return jsonify({'error': '股票代码和起始日期不能为空'}), 400
+
+    try:
+        start_dt = _parse_start_date(start_date)
+    except ValueError:
+        return jsonify({'error': f'起始日期格式错误: {start_date}'}), 400
+
+    # 默认拉取最近五年数据，确保有足够回放空间
+    end_dt = datetime.now()
+
+    try:
+        service = _get_intraday_data_service()
+        base_bars = service.get_30m(stock_code, start_dt, end_dt)
+    except Exception as e:
+        return jsonify({'error': f'intraday 数据加载失败: {e}'}), 400
+
+    try:
+        initial_time = _choose_initial_time(base_bars, start_dt)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    trade_simulator = TradeSimulatorEnhanced(user, initial_capital, stock_code)
+    trade_simulator.session_id = training_id
+    order_manager = PendingOrderManager()
+
+    # 应用用户佣金设置
+    user_config = user_manager.get_user_config(user)
+    if user_config and 'settings' in user_config:
+        settings = user_config['settings']
+        trade_simulator.set_commission_settings(
+            settings.get('commission_rate', 0.0003),
+            settings.get('min_commission', 5.0),
+            settings.get('stamp_tax_rate', 0.001)
+        )
+
+    session = IntradayReplaySession(
+        base_bars=base_bars,
+        initial_time=initial_time,
+        stock_code=stock_code,
+        simulator=trade_simulator,
+        order_manager=order_manager,
+        initial_period=period,
+    )
+    previous_close_index = build_previous_close_index(base_bars)
+    initial_bar_id = int(base_bars.index[base_bars['datetime'] == pd.Timestamp(initial_time)][0]) + 1
+
+    # 初始化交易模拟器的当前价格 (用首根 base bar 的 close)
+    snap = session.snapshot()
+    current_base_bar = snap.get('current_base_bar')
+    if current_base_bar:
+        trade_simulator.update_current_price(current_base_bar['close'], initial_bar_id)
+
+    active_trainings[training_id] = {
+        'user': user,
+        'stock_code': stock_code,
+        'start_date': start_date,
+        'trade_simulator': trade_simulator,
+        'order_manager': order_manager,
+        'mode': mode,
+        'data_source': data_source,
+        'period': period,
+        'data_mode': DATA_MODE_INTRADAY_30M,
+        'intraday_session': session,
+        'previous_close_index': previous_close_index,
+        'initial_bar_id': initial_bar_id,
+        'initial_capital': initial_capital,
+        'created_at': datetime.now(),
+    }
+
+    user_manager.start_training_session(user, {
+        'session_id': training_id,
+        'stock_code': stock_code,
+        'stock_name': data_manager.get_stock_name(stock_code),
+        'start_date': start_date,
+        'mode': mode,
+        'initial_capital': initial_capital,
+        'data_mode': DATA_MODE_INTRADAY_30M,
+        'period': period,
+        'commission_settings': {
+            'commission_rate': trade_simulator.commission_rate,
+            'min_commission': trade_simulator.min_commission,
+            'stamp_tax_rate': trade_simulator.stamp_tax_rate,
+        }
+    })
+
+    _update_api_info(user=user)
+
+    response = _intraday_snapshot_response(active_trainings[training_id])
+    response['id'] = training_id
+    return jsonify(response)
+
+
+def _intraday_next(training, training_id):
+    """intraday_30m 推进到下一个周期边界。
+
+    调用 ``session.advance()``，返回 snapshot + order_events + completed_times。
+    若回放已结束，生成报告并标记会话为 completed。
+    """
+    session = training['intraday_session']
+    trade_simulator = training['trade_simulator']
+    order_manager = training['order_manager']
+
+    result = session.advance()
+    finished = result.get('finished', False)
+    order_events = result.get('order_events', [])
+    completed_times = result.get('completed_times', [])
+
+    # session.advance() 已按顺序更新每根隐藏 base bar 的价格与 bar_id。
+    snap = session.snapshot()
+
+    if finished:
+        trade_simulator.session_id = training_id
+        current_date = _intraday_current_trade_date(training)
+        report = trade_simulator.generate_report(
+            training['stock_code'],
+            training['start_date'],
+            current_date,
+        )
+        report['session_id'] = training_id
+        report['data_mode'] = DATA_MODE_INTRADAY_30M
+        _save_intraday_session_report(training, training_id, report, status='completed')
+        return jsonify({
+            'finished': True,
+            'data_mode': DATA_MODE_INTRADAY_30M,
+            'report': report,
+        })
+
+    pending_payload = order_manager.to_dict() if order_manager else {'buy_orders': [], 'exit_orders': []}
+    return jsonify({
+        'finished': False,
+        'data_mode': DATA_MODE_INTRADAY_30M,
+        'snapshot': snap,
+        'order_events': order_events,
+        'completed_times': completed_times,
+        'pending_orders': pending_payload,
+    })
+
+
+def _intraday_get_data(training):
+    """intraday_30m 获取当前数据快照，不推进回放状态。"""
+    snap = _intraday_snapshot_response(training)
+    return jsonify(snap)
+
+
+def _intraday_set_period(training, period):
+    """intraday_30m 切换显示周期，不推进时间，返回重新聚合后的快照。"""
+    if period not in VALID_INTRADAY_PERIODS:
+        return jsonify({'error': f'不支持的周期: {period}'}), 400
+    session = training['intraday_session']
+    try:
+        session.set_period(period)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    # set_period 后 training['period'] 也同步更新，便于后续路由感知
+    training['period'] = period
+    response = _intraday_snapshot_response(training)
+    return jsonify(response)
+
+
+def _get_intraday_previous_close(training):
+    """获取 intraday 会话用于涨跌停判断的上一交易日收盘价。
+
+    手动交易与自动订单推进共用上一有效交易日收盘价规则。
+    """
+    session = training['intraday_session']
+    snap = session.snapshot()
+    current_time = snap.get('current_time')
+    previous_closes = training.get('previous_close_index')
+    if not current_time or previous_closes is None:
+        return None
+    return previous_closes.previous_close(datetime.fromisoformat(current_time))
+
+
+def _intraday_trade(training, data):
+    """intraday_30m 手动交易。
+
+    成交价使用当前 base bar 的 close，保存完整的 trade_time 和 display_period，
+    以支持分钟级回放的同日多次独立成交。
+    """
+    action = data.get('action')
+    quantity = data.get('quantity')
+    order_type = data.get('order_type', 'market')
+    trigger_price = _parse_optional_price(data.get('trigger_price'))
+    take_profit_price = _parse_optional_price(data.get('take_profit_price'))
+    stop_loss_price = _parse_optional_price(data.get('stop_loss_price'))
+    reason = (data.get('reason') or '').strip()
+    quantity = int(quantity) if quantity else 0
+
+    if not action or not quantity:
+        return jsonify({'error': '交易参数不完整'}), 400
+
+    session = training['intraday_session']
+    trade_simulator = training['trade_simulator']
+    order_manager = training['order_manager']
+
+    snap = session.snapshot()
+    current_base_bar = snap.get('current_base_bar')
+    if not current_base_bar:
+        return jsonify({'error': '当前无可用 base bar，无法交易'}), 400
+
+    current_price = current_base_bar['close']
+    trade_date = _intraday_current_trade_date(training)
+    trade_time = _intraday_current_trade_time(training)
+    display_period = snap.get('active_period', '')
+    stock_code = training['stock_code']
+
+    # 挂单逻辑 (与 legacy 类似，但使用 intraday 的当前价格)
+    if action == 'buy' and order_type in {'limit', 'breakout'}:
+        if trigger_price is None:
+            return jsonify({'error': '请填写有效触发价'}), 400
+        order = order_manager.add_buy_order(
+            order_type=order_type,
+            quantity=quantity,
+            trigger_price=trigger_price,
+            take_profit_price=take_profit_price,
+            stop_loss_price=stop_loss_price,
+            reason=reason,
+        )
+        return jsonify({
+            'success': True,
+            'pending': True,
+            'order': order,
+            'pending_orders': order_manager.to_dict(),
+        })
+
+    if order_type != 'market':
+        return jsonify({'error': '卖出只支持市价单，止盈止损请在买入时设置'}), 400
+
+    # 涨跌停检测 (后端兜底)
+    prev_close = _get_intraday_previous_close(training)
+    if prev_close and prev_close > 0:
+        limit_pct = 0.10
+        if stock_code.startswith(('30', '68')):
+            limit_pct = 0.20
+        elif stock_code.startswith(('43', '83', '87', '92')):
+            limit_pct = 0.30
+        threshold = prev_close * 0.001
+        limit_up = prev_close * (1 + limit_pct)
+        limit_down = prev_close * (1 - limit_pct)
+        if action == 'buy' and current_price >= limit_up - threshold:
+            return jsonify({'error': f'当前涨停（涨停价 {limit_up:.2f}），无法买入'}), 400
+        if action == 'sell' and current_price <= limit_down + threshold:
+            return jsonify({'error': f'当前跌停（跌停价 {limit_down:.2f}），无法卖出'}), 400
+
+    if action == 'buy':
+        result = trade_simulator.buy(
+            quantity, current_price, trade_date,
+            reason=reason, trade_time=trade_time, display_period=display_period,
+        )
+    elif action == 'sell':
+        result = trade_simulator.sell(
+            quantity, current_price, trade_date,
+            reason=reason, trade_time=trade_time, display_period=display_period,
+        )
+    else:
+        return jsonify({'error': '无效的交易操作'}), 400
+
+    if result['success']:
+        if action == 'buy' and (take_profit_price or stop_loss_price):
+            order_manager.add_bracket_orders(quantity, take_profit_price, stop_loss_price, base_reason=reason)
+        return jsonify({
+            'success': True,
+            'trade': result['trade'],
+            'pending_orders': order_manager.to_dict(),
+            'data_mode': DATA_MODE_INTRADAY_30M,
+        })
+    return jsonify({'error': result['message']}), 400
+
+
+def _intraday_account(training):
+    """intraday_30m 账户信息，附带当前 intraday 快照关键字段。"""
+    trade_simulator = training['trade_simulator']
+    order_manager = training['order_manager']
+    current_date = _intraday_current_trade_date(training)
+    account_info = trade_simulator.get_account_info(current_date)
+    account_info['pending_orders'] = order_manager.to_dict() if order_manager else {'buy_orders': [], 'exit_orders': []}
+    account_info['data_mode'] = DATA_MODE_INTRADAY_30M
+    # 附带当前 intraday 快照关键字段，便于前端显示
+    snap = training['intraday_session'].snapshot()
+    account_info['current_time'] = snap.get('current_time')
+    account_info['active_period'] = snap.get('active_period')
+    account_info['next_boundary'] = snap.get('next_boundary')
+    account_info['finished'] = snap.get('finished', False)
+    return jsonify(account_info)
+
+
+def _intraday_reset(training):
+    """intraday_30m 重置: 恢复初始时间和周期，重置交易模拟器和挂单。
+
+    注意: ``session.reset()`` 不替换 simulator/order_manager，仅恢复 replay clock；
+    交易模拟器和挂单管理器需要单独调用 ``reset()``/``clear()``。
+    """
+    session = training['intraday_session']
+    trade_simulator = training['trade_simulator']
+    order_manager = training['order_manager']
+    session.reset()
+    trade_simulator.reset()
+    if order_manager:
+        order_manager.clear()
+    # 重置后更新当前价格
+    snap = session.snapshot()
+    current_base_bar = snap.get('current_base_bar')
+    if current_base_bar:
+        trade_simulator.update_current_price(current_base_bar['close'], training['initial_bar_id'])
+    return jsonify({
+        'message': '训练已重置',
+        'data_mode': DATA_MODE_INTRADAY_30M,
+        'snapshot': snap,
+    })
+
+
+def _intraday_end(training, training_id):
+    """intraday_30m 结束训练: 生成报告并标记会话为 ended。"""
+    trade_simulator = training['trade_simulator']
+    trade_simulator.session_id = training_id
+    current_date = _intraday_current_trade_date(training)
+    report = trade_simulator.generate_report(
+        training['stock_code'],
+        training['start_date'],
+        current_date,
+    )
+    report['session_id'] = training_id
+    report['data_mode'] = DATA_MODE_INTRADAY_30M
+    _save_intraday_session_report(training, training_id, report, status='ended')
+    active_trainings[training_id]['status'] = 'ended'
+    _update_api_info(user=training['user'])
+    return jsonify(report)
+
+
+def _save_intraday_session_report(training, training_id, report, status):
+    """保存 intraday 会话报告到用户历史。"""
+    session_data = {
+        'session_id': training_id,
+        'stock_code': training['stock_code'],
+        'stock_name': data_manager.get_stock_name(training['stock_code']),
+        'start_date': training['start_date'],
+        'end_date': _intraday_current_trade_date(training),
+        'mode': training.get('mode', ''),
+        'data_mode': DATA_MODE_INTRADAY_30M,
+        'period': training.get('period', ''),
+        'initial_capital': report['initial_capital'],
+        'final_capital': report['final_capital'],
+        'total_return': report['total_return'],
+        'total_trades': report['total_trades'],
+        'trade_win_rate': report['trade_win_rate'],
+        'session_win_rate': report['session_win_rate'],
+        'report_data': report,
+        'review_summary': report.get('review_summary', ''),
+        'status': status,
+    }
+    user_manager.save_training_session(training['user'], session_data)
+
+
 @app.route('/api/training/start', methods=['POST'])
 def start_training():
     """开始新的训练"""
@@ -380,13 +855,35 @@ def start_training():
         period = data.get('period', 'daily')
         initial_capital = data.get('initial_capital', 100000)
         max_bars = data.get('max_bars', 0) or 0
-        
+
         if not user:
             return jsonify({'error': '用户名不能为空'}), 400
-        
+
+        # 新增: 可选 data_mode 参数 ('legacy_daily' | 'intraday_30m')
+        # 未传时保持 legacy_daily；intraday 必须显式声明。
+        data_mode = data.get('data_mode')
+        resolved_data_mode = _resolve_data_mode(data_mode, period)
+
+        # 仅 intraday_30m 模式强制校验 period；legacy_daily 保持原有宽容行为
+        if resolved_data_mode == DATA_MODE_INTRADAY_30M and period not in VALID_INTRADAY_PERIODS:
+            return jsonify({'error': f'不支持的 intraday 周期: {period}'}), 400
+
         # 创建训练会话
         training_id = f"{user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
+        # === intraday_30m 分支: 基于 30 分钟底座的多周期回放 ===
+        if resolved_data_mode == DATA_MODE_INTRADAY_30M:
+            return _start_intraday_training(
+                user=user,
+                mode=mode,
+                data_source=data_source,
+                period=period,
+                initial_capital=initial_capital,
+                training_id=training_id,
+                payload=data,
+            )
+
+        # === legacy_daily 分支 (保持原有行为完全不变) ===
         if mode == 'random':
             # 随机模式
             sector = data.get('sector', 'all')
@@ -446,6 +943,7 @@ def start_training():
             'mode': mode,
             'data_source': data_source,
             'period': period,
+            'data_mode': DATA_MODE_LEGACY_DAILY,
             'created_at': datetime.now()
         }
         user_manager.start_training_session(user, {
@@ -483,11 +981,17 @@ def get_training_data(training_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        
+
         training = active_trainings[training_id]
+
+        # === intraday_30m 分支: 返回当前快照，不推进回放状态 ===
+        if _is_intraday_session(training):
+            return _intraday_get_data(training)
+
+        # === legacy_daily 分支 (原逻辑) ===
         kline_processor = training['kline_processor']
         view_period = request.args.get('view_period', 'daily')
-        
+
         # 获取当前可见的K线数据
         kline_data = kline_processor.get_visible_data(view_period=view_period)
         volume_data = kline_processor.get_volume_data(view_period=view_period)
@@ -527,8 +1031,14 @@ def next_bar(training_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        
+
         training = active_trainings[training_id]
+
+        # === intraday_30m 分支: 按活动周期边界推进，返回 ordered events ===
+        if _is_intraday_session(training):
+            return _intraday_next(training, training_id)
+
+        # === legacy_daily 分支 (原逻辑) ===
         kline_processor = training['kline_processor']
         trade_simulator = training['trade_simulator']
 
@@ -597,6 +1107,25 @@ def next_bar(training_id):
         res['new_volume']['color'] = color
 
         return jsonify(res)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/training/<training_id>/period', methods=['POST'])
+def switch_period(training_id):
+    """切换 intraday_30m 会话的显示周期，不推进时间，返回重新聚合后的快照。"""
+    try:
+        if training_id not in active_trainings:
+            return jsonify({'error': '训练会话不存在'}), 404
+
+        training = active_trainings[training_id]
+        if not _is_intraday_session(training):
+            return jsonify({'error': '该会话不支持周期切换 (仅 intraday_30m 模式)'}), 400
+
+        data = request.get_json() or {}
+        period = data.get('period')
+        if not period:
+            return jsonify({'error': '缺少 period 参数'}), 400
+        return _intraday_set_period(training, period)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -696,6 +1225,13 @@ def execute_trade(training_id):
             return jsonify({'error': '训练会话不存在'}), 404
         
         data = request.get_json()
+        training = active_trainings[training_id]
+
+        # === intraday_30m 分支: 使用当前 base bar 的 close，保存完整 time/display period ===
+        if _is_intraday_session(training):
+            return _intraday_trade(training, data)
+
+        # === legacy_daily 分支 (原逻辑) ===
         action = data.get('action')  # 'buy' or 'sell'
         quantity = data.get('quantity')
         price_type = data.get('price_type', 'close')
@@ -705,11 +1241,10 @@ def execute_trade(training_id):
         stop_loss_price = _parse_optional_price(data.get('stop_loss_price'))
         reason = (data.get('reason') or '').strip()
         quantity = int(quantity) if quantity else 0
-        
+
         if not action or not quantity:
             return jsonify({'error': '交易参数不完整'}), 400
-        
-        training = active_trainings[training_id]
+
         trade_simulator = training['trade_simulator']
         kline_processor = training['kline_processor']
         
@@ -791,8 +1326,14 @@ def get_account_info(training_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        
+
         training = active_trainings[training_id]
+
+        # === intraday_30m 分支: 返回兼容账户信息 + intraday 快照字段 ===
+        if _is_intraday_session(training):
+            return _intraday_account(training)
+
+        # === legacy_daily 分支 (原逻辑) ===
         trade_simulator = training['trade_simulator']
 
         current_date = training['kline_processor'].get_current_date()
@@ -893,14 +1434,20 @@ def end_training(training_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        
+
         training = active_trainings[training_id]
+
+        # === intraday_30m 分支 ===
+        if _is_intraday_session(training):
+            return _intraday_end(training, training_id)
+
+        # === legacy_daily 分支 (原逻辑) ===
         trade_simulator = training['trade_simulator']
         kline_processor = training['kline_processor']
-        
+
         # Inject session_id into trade_simulator before generating report
         trade_simulator.session_id = training_id
-        
+
         # 生成报告
         report = trade_simulator.generate_report(
             training['stock_code'],
@@ -955,17 +1502,22 @@ def reset_training(training_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        
+
         training = active_trainings[training_id]
-        
+
+        # === intraday_30m 分支 ===
+        if _is_intraday_session(training):
+            return _intraday_reset(training)
+
+        # === legacy_daily 分支 (原逻辑) ===
         # 重置K线处理器
         training['kline_processor'].reset()
-        
+
         # 重置交易模拟器
         training['trade_simulator'].reset()
         if training.get('order_manager'):
             training['order_manager'].clear()
-        
+
         return jsonify({'message': '训练已重置'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
