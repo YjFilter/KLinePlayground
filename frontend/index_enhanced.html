@@ -212,8 +212,9 @@
                         </div>
                     </div>
                     <div class="form-group">
-                        <label>K线数量限制 <small style="color:var(--text-muted)">(0=不限制)</small></label>
-                        <input type="number" id="max-training-bars" value="0" min="0" max="2000" step="10" placeholder="0=全部K线">
+                        <label for="max-training-bars">训练交易日限制（0=不限制）</label>
+                        <input type="number" id="max-training-bars" value="0" min="0" max="2000" step="10" placeholder="0=全部交易日" aria-describedby="training-day-limit-help">
+                        <small id="training-day-limit-help">按实际交易日期统计，不是30分钟K线根数，也不是当前显示周期K线根数。</small>
                     </div>
                 </div>
 
@@ -412,6 +413,13 @@
                             <button class="view-period-btn" data-period="weekly">周线</button>
                         </div>
                     </div>
+                </div>
+                <div class="chart-window-toolbar" aria-label="历史走势加载">
+                    <div class="chart-window-actions">
+                        <button id="load-earlier-year-btn" type="button">往前加载一年</button>
+                        <button id="load-later-year-btn" type="button" class="hidden">往后加载一年</button>
+                    </div>
+                    <span id="chart-window-status" aria-live="polite"></span>
                 </div>
                 <div class="replay-status-bar">
                     <div class="replay-status-item">

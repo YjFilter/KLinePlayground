@@ -1,9 +1,9 @@
 ---
 id: TASK-018
 title: Add historical chart-window static controls
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-018
 depends_on:
   - TASK-016
 write_scope:
