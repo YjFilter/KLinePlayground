@@ -64,9 +64,14 @@ class StartReadsPeriodAndSendsDataModeTests(_StaticTestCase):
     def test_start_sends_intraday_data_mode(self):
         # 多周期训练启动必须显式声明 data_mode: intraday_30m
         self.assertContains("INTRADAY_DATA_MODE = 'intraday_30m'")
-        # 指定模式必须选择 intraday，盲盒模式保留 legacy fallback
-        self.assertContains("requestedDataMode = isRandomMode ? 'legacy_daily' : INTRADAY_DATA_MODE")
-        self.assertContains("data_mode: requestedDataMode")
+        self.assertContains("data_mode: INTRADAY_DATA_MODE")
+
+    def test_start_sends_actual_trading_day_limit(self):
+        self.assertContains("max_training_days:")
+        start_idx = self.js.find("async function startTraining")
+        next_func_idx = self.js.find("\nasync function ", start_idx + 1)
+        start_body = self.js[start_idx:next_func_idx]
+        self.assertNotIn("max_bars:", start_body)
 
     def test_start_no_hardcoded_daily_period(self):
         # 不应再硬编码 const period = 'daily';
@@ -329,9 +334,13 @@ class IntradayAvoidsLegacyOnlyEndpointsTests(_StaticTestCase):
 class RuntimeCompatibilityTests(_StaticTestCase):
     """覆盖静态测试容易遗漏的真实浏览器兼容分支。"""
 
-    def test_random_mode_preserves_legacy_daily_start(self):
-        self.assertContains("requestedDataMode = isRandomMode ? 'legacy_daily' : INTRADAY_DATA_MODE")
-        self.assertContains("isRandomMode && period !== 'daily'")
+    def test_random_mode_uses_intraday_for_all_periods(self):
+        start_idx = self.js.find("async function startTraining")
+        next_func_idx = self.js.find("\nasync function ", start_idx + 1)
+        start_body = self.js[start_idx:next_func_idx]
+        self.assertIn("data_mode: INTRADAY_DATA_MODE", start_body)
+        self.assertNotIn("isRandomMode && period !== 'daily'", start_body)
+        self.assertNotIn("盲盒模式目前仅支持日线启动", start_body)
 
     def test_intraday_timestamp_preserves_market_wall_clock(self):
         idx = self.js.find("function intradayBarToTimestamp")

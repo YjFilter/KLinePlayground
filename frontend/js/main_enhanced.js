@@ -31,6 +31,34 @@ let currentHistoryFilter = 'all';
 let isViewOnlyMode = false;
 let skipTradeReasonPrompt = false;
 let pendingTradeReasonAction = null;
+let chartWindowState = createEmptyChartWindowState();
+let chartWindowRequestChain = Promise.resolve();
+let chartWindowRequestGeneration = 0;
+let chartWindowLoadingDirection = null;
+
+function createEmptyChartWindowState() {
+    return {
+        kline_data: [],
+        volume_data: [],
+        trade_markers: [],
+        window_start: null,
+        window_end: null,
+        training_start: null,
+        training_end: null,
+        has_earlier: false,
+        has_later: false,
+        read_only: false,
+        period: 'daily',
+    };
+}
+
+function resetChartWindowState() {
+    chartWindowRequestGeneration += 1;
+    chartWindowRequestChain = Promise.resolve();
+    chartWindowLoadingDirection = null;
+    chartWindowState = createEmptyChartWindowState();
+    updateChartWindowControls();
+}
 
 // === Intraday 多周期回放 (TASK-013) ===
 // data_mode 标识: 来自 /api/training/start 响应的 currentTraining.data_mode。
@@ -675,6 +703,15 @@ function setTrainingViewOnlyMode(viewOnly, options = {}) {
         playbackSpeedSelect.style.opacity = opacity;
     }
 
+    document.querySelectorAll('input[name="adjustment"]').forEach((input) => {
+        input.disabled = disabled;
+    });
+    const indicatorSelect = document.getElementById('indicator-select');
+    if (indicatorSelect) {
+        indicatorSelect.disabled = disabled;
+        indicatorSelect.style.opacity = opacity;
+    }
+
     ['end-training-btn', 'reset-training-btn', 'next-bar-btn', 'play-pause-btn'].forEach((id) => {
         const element = document.getElementById(id);
         if (!element) return;
@@ -867,6 +904,8 @@ function setupEventListeners() {
     document.getElementById('new-training-btn').addEventListener('click', showTrainingSetup);
     document.getElementById('cancel-setup-btn').addEventListener('click', hideTrainingSetup);
     document.getElementById('start-training-btn').addEventListener('click', startTraining);
+    document.getElementById('load-earlier-year-btn')?.addEventListener('click', loadEarlierYear);
+    document.getElementById('load-later-year-btn')?.addEventListener('click', loadLaterYear);
 
     // 设置按钮
     document.getElementById('settings-btn')?.addEventListener('click', showSettings);
@@ -1283,6 +1322,7 @@ function resetToMainAppState() {
     currentIndicatorSeries = [];
     bollSeries = {};
     latestRenderedKlineData = [];
+    resetChartWindowState();
 
     // 4. 清理界面上的动态数据
     // 清理交易记录
@@ -1854,6 +1894,299 @@ function setVisibleRangeAll(range) {
     volumeChart?.timeScale().setVisibleLogicalRange(range);
     indicatorChart?.timeScale().setVisibleLogicalRange(range);
 }
+function normalizeChartTime(item) {
+    if (!item) return 0;
+    if (typeof item.time === 'number') return item.time;
+    const rawTime = item.time || item.end_time || item.start_time || item.datetime;
+    return intradayBarToTimestamp({ time: rawTime });
+}
+
+function normalizeChartCandle(item) {
+    return {
+        time: normalizeChartTime(item),
+        open: Number(item.open),
+        high: Number(item.high),
+        low: Number(item.low),
+        close: Number(item.close),
+    };
+}
+
+function normalizeChartVolume(item) {
+    return {
+        time: normalizeChartTime(item),
+        value: Number(item.value ?? item.volume) || 0,
+        color: item.color || '#999999',
+    };
+}
+
+function normalizeChartMarker(marker) {
+    return {
+        ...marker,
+        time: normalizeChartTime(marker),
+    };
+}
+
+function mergeTimedItems(existingItems, incomingItems, normalizer) {
+    const merged = new Map();
+    [...(existingItems || []), ...(incomingItems || [])].forEach((item) => {
+        const normalized = normalizer(item);
+        if (normalized.time) merged.set(normalized.time, normalized);
+    });
+    return Array.from(merged.values()).sort((left, right) => left.time - right.time);
+}
+
+function normalizeTradeMarkers(markers) {
+    return (markers || [])
+        .map(normalizeChartMarker)
+        .filter((marker) => marker.time)
+        .sort((left, right) => left.time - right.time);
+}
+
+function mergeChartWindow(existing, incoming) {
+    const base = existing || createEmptyChartWindowState();
+    const next = incoming || {};
+    const normalizeCandle = (item) => ({ ...normalizeChartCandle(item), time: normalizeChartTime(item) });
+    const normalizeVolume = (item) => ({ ...normalizeChartVolume(item), time: normalizeChartTime(item) });
+    return {
+        ...base,
+        ...next,
+        kline_data: mergeTimedItems(base.kline_data, next.kline_data, normalizeCandle),
+        volume_data: mergeTimedItems(base.volume_data, next.volume_data, normalizeVolume),
+        trade_markers: next.trade_markers !== undefined
+            ? normalizeTradeMarkers(next.trade_markers)
+            : normalizeTradeMarkers(base.trade_markers),
+    };
+}
+
+function parseChartWindowTimestamp(value) {
+    if (!value) return null;
+    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+    if (!match) return null;
+    return new Date(Date.UTC(
+        Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+        Number(match[4] || 0), Number(match[5] || 0), Number(match[6] || 0)
+    ));
+}
+
+function formatChartWindowTimestamp(date) {
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+}
+
+function shiftChartWindowYear(value, yearDelta) {
+    const date = parseChartWindowTimestamp(value);
+    if (!date) return value;
+    const originalMonth = date.getUTCMonth();
+    date.setUTCFullYear(date.getUTCFullYear() + yearDelta);
+    if (date.getUTCMonth() !== originalMonth) date.setUTCDate(0);
+    return formatChartWindowTimestamp(date);
+}
+
+function earlierChartWindowTimestamp(left, right) {
+    if (!left) return right || null;
+    if (!right) return left;
+    return parseChartWindowTimestamp(left) <= parseChartWindowTimestamp(right) ? left : right;
+}
+
+function laterChartWindowTimestamp(left, right) {
+    if (!left) return right || null;
+    if (!right) return left;
+    return parseChartWindowTimestamp(left) >= parseChartWindowTimestamp(right) ? left : right;
+}
+
+function setChartWindowStatus(message, type = '') {
+    const status = document.getElementById('chart-window-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = type;
+}
+
+function updateChartWindowControls() {
+    const earlierButton = document.getElementById('load-earlier-year-btn');
+    const laterButton = document.getElementById('load-later-year-btn');
+    const toolbar = document.querySelector('.chart-window-toolbar');
+    const isLoading = chartWindowLoadingDirection !== null;
+
+    if (earlierButton) {
+        earlierButton.disabled = isLoading || !chartWindowState.has_earlier;
+        earlierButton.classList.toggle('loading', chartWindowLoadingDirection === 'earlier');
+    }
+    if (laterButton) {
+        laterButton.classList.toggle('hidden', !chartWindowState.read_only);
+        laterButton.disabled = isLoading || !chartWindowState.read_only || !chartWindowState.has_later;
+        laterButton.classList.toggle('loading', chartWindowLoadingDirection === 'later');
+    }
+    toolbar?.classList.toggle('is-loading', isLoading);
+}
+
+function applyChartWindow(payload, options = {}) {
+    const visibleRange = options.preserveRange && chart ? chart.timeScale().getVisibleLogicalRange() : null;
+    const previous = options.replace ? createEmptyChartWindowState() : chartWindowState;
+    const previousFirstTime = previous.kline_data[0]?.time || null;
+    const merged = mergeChartWindow(previous, payload);
+    merged.window_start = options.replace
+        ? payload.window_start
+        : earlierChartWindowTimestamp(previous.window_start, payload.window_start);
+    merged.window_end = options.replace
+        ? payload.window_end
+        : laterChartWindowTimestamp(previous.window_end, payload.window_end);
+    if (!options.replace && options.direction === 'earlier') {
+        merged.has_later = previous.has_later;
+    }
+    if (!options.replace && options.direction === 'later') {
+        merged.has_earlier = previous.has_earlier;
+    }
+    chartWindowState = merged;
+
+    candlestickSeries.setData(merged.kline_data);
+    volumeSeries.setData(merged.volume_data);
+    replaceRenderedKlineData(merged.kline_data);
+    maPeriods.forEach((period) => maSeries[period]?.setData([]));
+    updateTradeMarkers(merged.trade_markers || payload.trade_markers || []);
+
+    const addedEarlierBars = previousFirstTime === null
+        ? 0
+        : merged.kline_data.filter((bar) => bar.time < previousFirstTime).length;
+    if (visibleRange && addedEarlierBars > 0) {
+        setVisibleRangeAll(shiftLogicalRange(visibleRange, addedEarlierBars));
+    } else if (visibleRange) {
+        setVisibleRangeAll(visibleRange);
+    } else if (options.fitContent && chart) {
+        chart.timeScale().fitContent();
+    }
+
+    updateChartWindowControls();
+    return merged;
+}
+
+function enqueueChartWindowRequest(requestTask) {
+    const generation = chartWindowRequestGeneration;
+    const queued = chartWindowRequestChain
+        .catch(() => null)
+        .then(async () => {
+            const result = await requestTask(generation);
+            return generation === chartWindowRequestGeneration ? result : null;
+        });
+    chartWindowRequestChain = queued.catch(() => null);
+    return queued;
+}
+
+function chartWindowRequestUrl(query) {
+    if (chartWindowState.read_only) {
+        if (!currentUser || !currentReportData?.session_id) throw new Error('历史复盘会话信息不完整');
+        return `${API_BASE}/users/${encodeURIComponent(currentUser)}/history/${encodeURIComponent(currentReportData.session_id)}/chart?${query}`;
+    }
+    if (!currentTraining?.id) throw new Error('活动训练会话不存在');
+    return `${API_BASE}/training/${currentTraining.id}/chart-window?${query}`;
+}
+
+async function requestChartWindow(rangeStart, rangeEnd, options = {}) {
+    const query = new URLSearchParams({
+        period: options.period || currentPeriod,
+        range_start: rangeStart,
+        range_end: rangeEnd,
+    });
+    const response = await fetch(chartWindowRequestUrl(query.toString()));
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || `加载走势失败: ${response.status}`);
+    if (options.requestGeneration !== undefined && options.requestGeneration !== chartWindowRequestGeneration) {
+        return null;
+    }
+    if (!payload.kline_data || payload.kline_data.length === 0) {
+        setChartWindowStatus('该时间范围没有可用走势数据。', 'empty');
+    } else {
+        setChartWindowStatus(options.successMessage || '走势数据已加载。', 'success');
+    }
+    return applyChartWindow(payload, options);
+}
+
+async function loadEarlierYear() {
+    if (chartWindowLoadingDirection || !chartWindowState.window_start || !chartWindowState.has_earlier) return;
+    const requestGeneration = chartWindowRequestGeneration;
+    chartWindowLoadingDirection = 'earlier';
+    updateChartWindowControls();
+    setChartWindowStatus('正在加载更早一年的走势...', 'loading');
+    try {
+        const rangeEnd = chartWindowState.window_start;
+        const rangeStart = shiftChartWindowYear(rangeEnd, -1);
+        await enqueueChartWindowRequest((queuedGeneration) => requestChartWindow(rangeStart, rangeEnd, {
+            preserveRange: true,
+            direction: 'earlier',
+            requestGeneration: queuedGeneration,
+            successMessage: '已加载更早一年的走势。',
+        }));
+    } catch (error) {
+        if (requestGeneration === chartWindowRequestGeneration) {
+            console.error('加载更早走势失败:', error);
+            setChartWindowStatus(error.message || '加载更早走势失败。', 'error');
+        }
+    } finally {
+        if (requestGeneration === chartWindowRequestGeneration) {
+            chartWindowLoadingDirection = null;
+            updateChartWindowControls();
+        }
+    }
+}
+
+async function loadLaterYear() {
+    if (chartWindowLoadingDirection || !chartWindowState.read_only || !chartWindowState.has_later || !chartWindowState.window_end) return;
+    const requestGeneration = chartWindowRequestGeneration;
+    chartWindowLoadingDirection = 'later';
+    updateChartWindowControls();
+    setChartWindowStatus('正在加载后一年的只读走势...', 'loading');
+    try {
+        const rangeStart = chartWindowState.window_end;
+        const rangeEnd = shiftChartWindowYear(rangeStart, 1);
+        await enqueueChartWindowRequest((queuedGeneration) => requestChartWindow(rangeStart, rangeEnd, {
+            preserveRange: true,
+            direction: 'later',
+            requestGeneration: queuedGeneration,
+            successMessage: '已加载后一年的只读走势。',
+        }));
+    } catch (error) {
+        if (requestGeneration === chartWindowRequestGeneration) {
+            console.error('加载后续走势失败:', error);
+            setChartWindowStatus(error.message || '加载后续走势失败。', 'error');
+        }
+    } finally {
+        if (requestGeneration === chartWindowRequestGeneration) {
+            chartWindowLoadingDirection = null;
+            updateChartWindowControls();
+        }
+    }
+}
+
+async function reloadChartWindowForPeriod(period, rangeEnd, options = {}) {
+    if (!chartWindowState.window_start) return null;
+    return enqueueChartWindowRequest((requestGeneration) => requestChartWindow(
+        chartWindowState.window_start,
+        rangeEnd || chartWindowState.window_end,
+        { ...options, period, replace: true, requestGeneration }
+    ));
+}
+
+function applyActiveSnapshotToChartWindow(snapshot) {
+    applyIntradaySnapshot(snapshot, { fitContent: false });
+    if (!chartWindowState.window_start || chartWindowState.read_only) return;
+    const volumeData = (snapshot.kline_data || []).map((bar) => ({
+        time: bar.end_time || bar.start_time || bar.time,
+        value: Number(bar.volume) || 0,
+        color: Number(bar.close) >= Number(bar.open) ? '#ff4d4f' : '#008000',
+    }));
+    applyChartWindow({
+        period: snapshot.active_period || currentPeriod,
+        window_start: chartWindowState.window_start,
+        window_end: snapshot.current_time || chartWindowState.window_end,
+        training_start: chartWindowState.training_start,
+        training_end: chartWindowState.training_end,
+        has_earlier: chartWindowState.has_earlier,
+        has_later: false,
+        read_only: false,
+        kline_data: snapshot.kline_data || [],
+        volume_data: volumeData,
+        trade_markers: chartWindowState.trade_markers || [],
+    });
+}
 
 function applyTrainingSnapshot(data, options = {}) {
     const { fitContent = false } = options;
@@ -1932,6 +2265,28 @@ async function refreshTrainingView(options = {}) {
 async function switchViewPeriod(period) {
     const nextPeriod = INTRADAY_PERIODS.indexOf(period) >= 0 ? period : (period === 'weekly' ? 'weekly' : 'daily');
 
+    if (isViewOnlyMode && chartWindowState.read_only && currentReportData?.session_id) {
+        if (currentPeriod === nextPeriod) {
+            updatePeriodBadge(nextPeriod);
+            return;
+        }
+        showLoading('正在切换只读历史走势周期');
+        try {
+            updatePeriodBadge(nextPeriod);
+            setChartWindowStatus('正在按新周期加载历史走势...', 'loading');
+            await reloadChartWindowForPeriod(nextPeriod, chartWindowState.window_end, {
+                fitContent: true,
+                successMessage: '历史走势周期已切换。',
+            });
+        } catch (error) {
+            console.error('切换历史走势周期失败:', error);
+            setChartWindowStatus(error.message || '切换历史走势周期失败。', 'error');
+        } finally {
+            hideLoading();
+        }
+        return;
+    }
+
     // === intraday_30m 分支: POST /period 切换，不调用 /next ===
     if (isIntradayMode()) {
         if (currentPeriod === nextPeriod && currentTraining && currentTraining.id) {
@@ -1956,7 +2311,11 @@ async function switchViewPeriod(period) {
             const data = await response.json();
             // period 返回顶层 snapshot
             const snapshot = extractIntradaySnapshot(data);
-            applyIntradaySnapshot(snapshot, { fitContent: true });
+            applyIntradaySnapshot(snapshot, { fitContent: false });
+            await reloadChartWindowForPeriod(nextPeriod, snapshot.current_time, {
+                fitContent: true,
+                successMessage: '活动走势周期已切换。',
+            });
             await updateAccountInfo();
         } catch (error) {
             console.error('切换 intraday 周期失败:', error);
@@ -1995,22 +2354,16 @@ async function startTraining() {
     const isRandomMode = document.querySelector('.tab-btn.active').dataset.tab === 'random';
     const initialCapital = parseFloat(document.getElementById('initial-capital').value);
     const dataSource = document.getElementById('data-source').value || 'akshare';
-    // TASK-013: 指定模式启用 intraday；盲盒模式暂时保留原有 daily 数据链路。
     const period = getSelectedKlinePeriod();
-    if (isRandomMode && period !== 'daily') {
-        alert('盲盒模式目前仅支持日线启动；30分钟、4小时和周线请使用指定模式。');
-        return;
-    }
-    const requestedDataMode = isRandomMode ? 'legacy_daily' : INTRADAY_DATA_MODE;
 
     let trainingConfig = {
         user: currentUser,
         initial_capital: initialCapital,
         mode: isRandomMode ? 'random' : 'specified',
         data_source: dataSource,
-        data_mode: requestedDataMode,
+        data_mode: INTRADAY_DATA_MODE,
         period: period,
-        max_bars: parseInt(document.getElementById('max-training-bars')?.value) || 0
+        max_training_days: parseInt(document.getElementById('max-training-bars')?.value) || 0
     };
 
     if (isRandomMode) {
@@ -2057,7 +2410,26 @@ async function startTraining() {
                 // === intraday_30m 分支 ===
                 // start 返回顶层 snapshot；直接渲染初始快照，禁止自动调用 nextBar。
                 const snapshot = extractIntradaySnapshot(currentTraining);
-                applyIntradaySnapshot(snapshot, { fitContent: true });
+                applyIntradaySnapshot(snapshot, { fitContent: false });
+                resetChartWindowState();
+                applyChartWindow({
+                    period: snapshot.active_period || period,
+                    window_start: currentTraining.window_start || currentTraining.training_start,
+                    window_end: currentTraining.window_end || snapshot.current_time,
+                    training_start: currentTraining.training_start,
+                    training_end: currentTraining.training_end,
+                    has_earlier: !!currentTraining.has_earlier,
+                    has_later: false,
+                    read_only: false,
+                    kline_data: currentTraining.context_kline_data?.length
+                        ? currentTraining.context_kline_data
+                        : snapshot.kline_data,
+                    volume_data: currentTraining.context_volume_data?.length
+                        ? currentTraining.context_volume_data
+                        : buildIntradayVolumeData(snapshot.kline_data),
+                    trade_markers: currentTraining.trade_markers || [],
+                }, { replace: true, fitContent: true });
+                setChartWindowStatus('已加载训练开始前至少两年的走势。', 'success');
                 await updateAccountInfo();
                 startAutoSync();
             } else {
@@ -2894,7 +3266,7 @@ async function nextBar() {
                 return false;
             }
             const snapshot = extractIntradaySnapshot(data);
-            applyIntradaySnapshot(snapshot, { fitContent: false });
+            applyActiveSnapshotToChartWindow(snapshot);
             if (previousLogicalRange !== null) {
                 setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
             }
@@ -4061,7 +4433,12 @@ async function resetTraining() {
                 const data = await response.json();
                 const snapshot = extractIntradaySnapshot(data);
                 if (snapshot) {
-                    applyIntradaySnapshot(snapshot, { fitContent: true });
+                    applyIntradaySnapshot(snapshot, { fitContent: false });
+                    await reloadChartWindowForPeriod(
+                        snapshot.active_period || currentPeriod,
+                        snapshot.current_time,
+                        { replace: true, fitContent: true, successMessage: '训练已重置，历史上下文保持不变。' }
+                    );
                 }
                 await updateAccountInfo();
                 document.getElementById('trade-history').innerHTML = '<div class="no-trades">暂无交易记录</div>';
@@ -4335,70 +4712,61 @@ async function checkAIStatusAndShowButton() {
 }
 
 async function viewFullChart() {
-    if (!currentTraining && !currentReportData) {
-        alert('找不到训练会话数据，无法查看完整走势');
+    if (!currentReportData?.session_id) {
+        alert('找不到已完成的历史训练记录，无法查看完整走势');
+        return;
+    }
+    const trainingStart = currentReportData.training_start || currentReportData.start_date;
+    const trainingEnd = currentReportData.training_end || currentReportData.end_date;
+    if (!trainingStart || !trainingEnd) {
+        alert('历史训练缺少走势图重建时间，无法查看完整走势');
         return;
     }
 
-    // === intraday_30m 分支: /full_data 接口由 legacy kline_processor 支持，
-    // intraday 模式不具备该后端依赖，因此回退到 GET /data 重新渲染当前快照 ===
-    if (currentTraining && isIntradayMode()) {
-        try {
-            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/data`);
-            if (!response.ok) {
-                throw new Error('获取 intraday 数据失败');
-            }
-            const data = await response.json();
-            document.getElementById('report-interface').classList.add('hidden');
-            document.getElementById('training-interface').classList.remove('hidden');
-            toggleToolbarForTraining(true);
-            const snapshot = extractIntradaySnapshot(data);
-            applyIntradaySnapshot(snapshot, { fitContent: true });
-            setTrainingViewOnlyMode(true, { showBackToReport: true });
-        } catch (error) {
-            console.error('查看 intraday 完整走势失败:', error);
-            alert('获取完整走势数据失败');
-        }
-        return;
-    }
+    const historySessionId = currentReportData.session_id;
+    const requestedPeriod = INTRADAY_PERIODS.includes(currentReportData.period)
+        ? currentReportData.period
+        : 'daily';
+    const rangeStart = shiftChartWindowYear(trainingStart, -2);
+    const rangeEnd = trainingEnd;
 
-    // Use session_id from report data if available, otherwise from currentTraining
-    const trainingId = currentReportData ? currentReportData.session_id : currentTraining.id;
-    if (!currentTraining) {
-        currentTraining = { id: trainingId, latestProgress: null, tradeMarkers: [] };
-    }
-
-    const maQuery = maPeriods.join(',');
+    stopAutoSync();
+    pausePlayback();
+    showLoading('正在加载历史复盘走势');
     try {
-        const response = await fetch(`${API_BASE}/training/${trainingId}/full_data?ma_periods=${maQuery}&${getViewPeriodQuery()}`);
-        if (!response.ok) {
-            throw new Error('获取完整数据失败');
-        }
-
-        const data = await response.json();
-
-        // Hide report interface and show training interface
         document.getElementById('report-interface').classList.add('hidden');
         document.getElementById('training-interface').classList.remove('hidden');
         toggleToolbarForTraining(true);
-
-        // Update chart data
-        if (data.kline_data && data.kline_data.length > 0) {
-            applyTrainingSnapshot(data);
-
-            // Re-load technical indicators for full range
-            await loadTechnicalIndicator(currentIndicatorType);
-            await updateChipDistribution();
-
-            // Adjust time scale to fit all data
-            chart.timeScale().fitContent();
-        }
-
+        initializeChart();
+        resetChartWindowState();
+        chartWindowState = {
+            ...createEmptyChartWindowState(),
+            session_id: historySessionId,
+            read_only: true,
+            period: requestedPeriod,
+            training_start: trainingStart,
+            training_end: trainingEnd,
+            window_start: rangeStart,
+            window_end: rangeEnd,
+        };
+        updatePeriodBadge(requestedPeriod);
         setTrainingViewOnlyMode(true, { showBackToReport: true });
+        updateChartWindowControls();
+        setChartWindowStatus('正在加载训练前两年到训练结束的只读走势...', 'loading');
 
+        await enqueueChartWindowRequest((requestGeneration) => requestChartWindow(rangeStart, rangeEnd, {
+            period: requestedPeriod,
+            requestGeneration,
+            replace: true,
+            fitContent: true,
+            successMessage: '历史复盘走势已加载，可继续向前或向后查看。',
+        }));
     } catch (error) {
-        console.error('查看完整走势失败:', error);
-        alert('获取完整走势数据失败');
+        console.error('查看历史完整走势失败:', error);
+        setChartWindowStatus(error.message || '获取历史完整走势数据失败。', 'error');
+        alert(error.message || '获取历史完整走势数据失败');
+    } finally {
+        hideLoading();
     }
 }
 

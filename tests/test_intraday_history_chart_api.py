@@ -154,3 +154,34 @@ class IntradayHistoryChartAPITests(unittest.TestCase):
         self.assertEqual(len(body["kline_data"]), 3)
         self.assertEqual(body["trade_markers"][0]["time"], "2024-01-04")
         self.mock_chart_service.load.assert_not_called()
+
+    def test_legacy_history_falls_back_to_date_level_metadata(self):
+        self.mock_user_manager.get_session_report.return_value = {
+            "session_id": "legacy_old",
+            "stock_code": "600000",
+            "start_date": "2024-01-02",
+            "end_date": "2024-01-05",
+            "trade_details": [],
+        }
+        self.mock_data_manager.get_stock_data.return_value = pd.DataFrame({
+            "date": pd.to_datetime(["2024-01-02", "2024-01-03"]),
+            "open": [10.0, 10.5],
+            "high": [10.6, 10.9],
+            "low": [9.8, 10.2],
+            "close": [10.5, 10.8],
+            "volume": [1000, 1200],
+        })
+
+        response = self.client.get(
+            "/api/users/test_user/history/legacy_old/chart",
+            query_string={
+                "period": "daily",
+                "range_start": "2023-01-02",
+                "range_end": "2024-01-05",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        body = response.get_json()
+        self.assertEqual(body["training_start"], "2024-01-02 00:00:00")
+        self.assertEqual(body["training_end"], "2024-01-05 00:00:00")

@@ -49,6 +49,14 @@ def test_training_limit_uses_real_trading_day_wording() -> None:
     assert "也不是当前显示周期K线根数" in html
 
 
+def test_training_limit_is_shared_by_specified_and_random_modes() -> None:
+    html = _read(HTML_PATH)
+    shared_form_start = html.index('<div class="form-grid">', html.index('id="random-tab"'))
+    limit_position = html.index('id="max-training-bars"')
+
+    assert limit_position > shared_form_start
+
+
 def test_chart_window_toolbar_has_required_states() -> None:
     css = _read(CSS_PATH)
 

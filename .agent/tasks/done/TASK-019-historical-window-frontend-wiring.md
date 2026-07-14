@@ -1,7 +1,7 @@
 ---
 id: TASK-019
 title: Wire historical chart windows and intraday blind-box setup
-status: ready
+status: done
 priority: P0
 owner: workbuddy-019
 depends_on:

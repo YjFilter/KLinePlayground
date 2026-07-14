@@ -450,6 +450,14 @@ def get_user_history_chart(username, session_id):
         if not report:
             return jsonify({'error': '历史训练不存在'}), 404
 
+        report = dict(report)
+        training_start = report.get('training_start') or report.get('start_date')
+        training_end = report.get('training_end') or report.get('end_date')
+        if training_start:
+            report['training_start'] = _format_datetime(training_start)
+        if training_end:
+            report['training_end'] = _format_datetime(training_end)
+
         required = ('stock_code', 'training_start', 'training_end')
         missing = [name for name in required if not report.get(name)]
         if missing:

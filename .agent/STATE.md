@@ -70,3 +70,12 @@ Flask and persistence integration is complete:
 - Verification passed: 72 focused API tests, 80 API/trading-rule tests, phase3 quality gate, and 297 intraday tests.
 
 Next, wire the accepted TASK-018 controls to the committed chart-window APIs in a JavaScript-only WorkBuddy task, then run Codex integration review and browser acceptance.
+
+## Phase 5 Frontend Integration Complete
+- TASK-019 wired `max_training_days`, four-period intraday blind-box startup, active chart windows, completed history windows, and one-year navigation.
+- Codex integration review fixed legacy date-only report reconstruction, made the trading-day limit visible in both setup modes, stopped legacy polling in read-only history, preserved opposite pagination flags, isolated stale requests, and preserved same-timestamp trade markers.
+- Automated verification passed: 54 frontend/static tests, 81 API/trading-rule tests, and 318 intraday tests.
+- Browser evidence passed for an existing completed history record and a specified `600000` 30-minute session limited to 5 trading days; replay advanced from `2025-07-14 10:00:00` to `10:30:00` with no automatic advance.
+
+## Phase 5 Next Action
+Run final blind-box and restart browser acceptance, then close Phase 5 or fix any acceptance-only issue.
