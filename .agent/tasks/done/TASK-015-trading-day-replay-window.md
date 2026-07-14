@@ -1,9 +1,9 @@
 ---
 id: TASK-015
 title: Add trading-day replay window contract
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-015
 depends_on:
   - TASK-014
 write_scope:

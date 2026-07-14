@@ -1,9 +1,9 @@
 ---
 id: TASK-016
 title: Add read-only intraday chart windows
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-016
 depends_on:
   - TASK-014
 write_scope:

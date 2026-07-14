@@ -1,9 +1,9 @@
 ---
 id: TASK-017
 title: Add intraday blind-box selector
-status: ready
+status: done
 priority: P0
-owner: unassigned
+owner: workbuddy-017
 depends_on:
   - TASK-014
 write_scope:

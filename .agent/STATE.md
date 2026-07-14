@@ -54,8 +54,11 @@ Select the next roadmap milestone or publish the completed Phase 4 commit series
 
 ## Phase 5 Started
 - Approved specification: historical context, trading-day limits, bidirectional completed-review loading, and intraday blind-box selection.
-- TASK-015, TASK-016, and TASK-017 are ready and may run concurrently with disjoint write scopes.
+- TASK-015 completed the immutable distinct-trading-day replay cutoff contract.
+- TASK-016 completed active/completed read-only chart windows for all four replay periods with a server-side no-future cap.
+- TASK-017 completed bounded-retry intraday blind-box selection with BSE exclusion, two-year context checks, and injectable randomness.
+- Codex reviewed the six worker-owned files, added stable package exports, and passed 307 intraday tests plus 13 subtests.
 - Codex owns public exports, Flask hotspot integration, persistence contracts, quality gates, and final acceptance.
 
 ## Phase 5 Next Action
-Run TASK-015, TASK-016, and TASK-017 concurrently in separate WorkBuddy sessions, then return all three results to Codex for integration review.
+Integrate the Phase 5 contracts into Flask and stored session metadata while a separate WorkBuddy task implements the static historical-window controls.
