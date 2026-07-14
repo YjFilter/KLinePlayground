@@ -51,3 +51,11 @@ BaoStock does not provide Beijing Exchange 30-minute data. A fallback source or 
 
 ## Next Action
 Select the next roadmap milestone or publish the completed Phase 4 commit series to the remote repository.
+
+## Phase 5 Started
+- Approved specification: historical context, trading-day limits, bidirectional completed-review loading, and intraday blind-box selection.
+- TASK-015, TASK-016, and TASK-017 are ready and may run concurrently with disjoint write scopes.
+- Codex owns public exports, Flask hotspot integration, persistence contracts, quality gates, and final acceptance.
+
+## Phase 5 Next Action
+Run TASK-015, TASK-016, and TASK-017 concurrently in separate WorkBuddy sessions, then return all three results to Codex for integration review.
