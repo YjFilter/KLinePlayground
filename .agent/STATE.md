@@ -62,4 +62,11 @@ Select the next roadmap milestone or publish the completed Phase 4 commit series
 - Codex owns public exports, Flask hotspot integration, persistence contracts, quality gates, and final acceptance.
 
 ## Phase 5 Next Action
-Integrate the Phase 5 contracts into Flask and stored session metadata, then wire the accepted TASK-018 controls to the committed API contract.
+Flask and persistence integration is complete:
+- Intraday specified starts request two years of prior context and apply distinct trading-day replay limits.
+- Intraday blind-box starts select a real timestamp through the accepted bounded selector.
+- Active chart windows cap at replay `current_time`; completed history charts rebuild without `active_trainings`.
+- Completed reports persist full timestamp, period, data source, and trading-day metadata.
+- Verification passed: 72 focused API tests, 80 API/trading-rule tests, phase3 quality gate, and 297 intraday tests.
+
+Next, wire the accepted TASK-018 controls to the committed chart-window APIs in a JavaScript-only WorkBuddy task, then run Codex integration review and browser acceptance.

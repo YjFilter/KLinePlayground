@@ -81,6 +81,133 @@ def _get_intraday_data_service():
     return _intraday_service_instance
 
 
+def _get_chart_window_service():
+    from backend.intraday.chart_window import ChartWindowService
+
+    return ChartWindowService(_get_intraday_data_service())
+
+
+def _intraday_candidate_provider(sector, date_start, date_end):
+    stock_code, _ = data_manager.get_random_stock(
+        sector,
+        date_start,
+        date_end,
+        source='akshare',
+        interval='daily',
+    )
+    return stock_code
+
+
+def _get_intraday_random_selector():
+    from backend.intraday.random_selector import IntradayRandomSelector
+
+    return IntradayRandomSelector(
+        candidate_provider=_intraday_candidate_provider,
+        data_service=_get_intraday_data_service(),
+    )
+
+
+def _parse_datetime_arg(name):
+    value = request.args.get(name)
+    if not value:
+        raise ValueError(f'缺少 {name} 参数')
+    return datetime.fromisoformat(value)
+
+
+def _format_datetime(value):
+    return pd.Timestamp(value).to_pydatetime().isoformat(sep=' ')
+
+
+def _chart_window_payload(result, training):
+    payload = result.to_dict()
+    payload.update({
+        'stock_code': training['stock_code'],
+        'training_start': training['training_start'],
+        'training_end': training.get('training_end'),
+    })
+    return payload
+
+
+def _trade_markers(trades):
+    markers = []
+    for trade in trades or []:
+        timestamp = trade.get('trade_time') or trade.get('trade_date')
+        if not timestamp:
+            continue
+        is_buy = trade.get('action') == 'buy'
+        markers.append({
+            'time': timestamp,
+            'type': 'B' if is_buy else 'S',
+            'price': float(trade.get('price', 0) or 0),
+            'text': '买入' if is_buy else '卖出',
+        })
+    return markers
+
+
+def _legacy_history_chart_payload(report, period, range_start, range_end):
+    frame = data_manager.get_stock_data(
+        report['stock_code'],
+        source=report.get('data_source', 'akshare'),
+        interval=period,
+    )
+    if frame is None or frame.empty:
+        rows = pd.DataFrame()
+    else:
+        rows = frame.copy()
+        time_column = next(
+            (name for name in ('date', 'datetime', 'trade_date') if name in rows.columns),
+            None,
+        )
+        if time_column is None:
+            rows = rows.reset_index().rename(columns={rows.index.name or 'index': 'date'})
+            time_column = 'date'
+        rows[time_column] = pd.to_datetime(rows[time_column], errors='coerce')
+        rows = rows.loc[
+            rows[time_column].notna()
+            & (rows[time_column] >= pd.Timestamp(range_start))
+            & (rows[time_column] <= pd.Timestamp(range_end))
+        ].sort_values(time_column)
+
+    kline_data = []
+    volume_data = []
+    for _, row in rows.iterrows():
+        timestamp = _format_datetime(row[time_column])
+        bar = {
+            'period': period,
+            'start_time': timestamp,
+            'end_time': timestamp,
+            'open': float(row['open']),
+            'high': float(row['high']),
+            'low': float(row['low']),
+            'close': float(row['close']),
+            'volume': int(row.get('volume', 0) or 0),
+            'amount': float(row.get('amount', 0) or 0),
+            'source_bar_count': 1,
+            'complete': True,
+        }
+        kline_data.append(bar)
+        volume_data.append({
+            'time': timestamp,
+            'value': bar['volume'],
+            'color': '#ff4d4f' if bar['close'] >= bar['open'] else '#008000',
+        })
+
+    return {
+        'stock_code': report['stock_code'],
+        'period': period,
+        'window_start': _format_datetime(range_start),
+        'window_end': _format_datetime(range_end),
+        'kline_data': kline_data,
+        'volume_data': volume_data,
+        'has_earlier': False,
+        'has_later': False,
+        'read_only': True,
+        'training_start': report['training_start'],
+        'training_end': report['training_end'],
+        'trade_markers': _trade_markers(report.get('trade_details')),
+    }
+
+
 def _resolve_data_mode(data_mode, period):
     """根据显式 data_mode 和 period 解析最终数据模式。
 
@@ -315,6 +442,51 @@ def get_user_history_report(username, session_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/users/<username>/history/<session_id>/chart', methods=['GET'])
+def get_user_history_chart(username, session_id):
+    try:
+        report = user_manager.get_session_report(username, session_id)
+        if not report:
+            return jsonify({'error': '历史训练不存在'}), 404
+
+        required = ('stock_code', 'training_start', 'training_end')
+        missing = [name for name in required if not report.get(name)]
+        if missing:
+            return jsonify({
+                'error': f"缺少走势图重建元数据: {', '.join(missing)}",
+            }), 400
+
+        period = request.args.get('period', report.get('period', 'daily'))
+        range_start = _parse_datetime_arg('range_start')
+        range_end = _parse_datetime_arg('range_end')
+        if range_start > range_end:
+            return jsonify({'error': 'range_start 不能晚于 range_end'}), 400
+
+        if report.get('data_mode', DATA_MODE_LEGACY_DAILY) != DATA_MODE_INTRADAY_30M:
+            return jsonify(_legacy_history_chart_payload(
+                report,
+                period,
+                range_start,
+                range_end,
+            ))
+
+        result = _get_chart_window_service().load(
+            stock_code=report['stock_code'],
+            period=period,
+            range_start=range_start,
+            range_end=range_end,
+            current_time=datetime.fromisoformat(report['training_end']),
+            read_only=True,
+        )
+        payload = _chart_window_payload(result, report)
+        payload['trade_markers'] = _trade_markers(report.get('trade_details'))
+        return jsonify(payload)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/users/<username>/history/<session_id>', methods=['DELETE'])
 def delete_user_history_report(username, session_id):
     try:
@@ -477,7 +649,16 @@ def toggle_api_info():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def _start_intraday_training(user, mode, data_source, period, initial_capital, training_id, payload):
+def _start_intraday_training(
+    user,
+    mode,
+    data_source,
+    period,
+    initial_capital,
+    training_id,
+    payload,
+    max_training_days,
+):
     """启动 intraday_30m 训练会话。
 
     通过 IntradayDataService 加载 30 分钟底座数据，选择 start_date 当天或之后的
@@ -487,30 +668,41 @@ def _start_intraday_training(user, mode, data_source, period, initial_capital, t
     """
     from backend.intraday.session import IntradayReplaySession
     from backend.intraday.trading_context import build_previous_close_index
-
-    stock_code = payload.get('stock_code')
-    start_date = payload.get('start_date')
-    if not stock_code or not start_date:
-        return jsonify({'error': '股票代码和起始日期不能为空'}), 400
+    from backend.intraday.training_window import build_training_window
 
     try:
-        start_dt = _parse_start_date(start_date)
-    except ValueError:
-        return jsonify({'error': f'起始日期格式错误: {start_date}'}), 400
+        if mode == 'random':
+            selection = _get_intraday_random_selector().select(
+                sector=payload.get('sector', 'all'),
+                date_start=payload.get('date_start', '2024-01-01'),
+                date_end=payload.get('date_end', '2026-01-01'),
+                max_training_days=max_training_days,
+            )
+            stock_code = selection.stock_code
+            initial_time = selection.start_time
+            context_start = selection.context_start
+            market_bars = selection.base_bars
+            start_date = initial_time.strftime('%Y-%m-%d')
+        else:
+            stock_code = payload.get('stock_code')
+            start_date = payload.get('start_date')
+            if not stock_code or not start_date:
+                return jsonify({'error': '股票代码和起始日期不能为空'}), 400
+            try:
+                start_dt = _parse_start_date(start_date)
+            except ValueError:
+                return jsonify({'error': f'起始日期格式错误: {start_date}'}), 400
+            context_start = (pd.Timestamp(start_dt) - pd.DateOffset(years=2)).to_pydatetime()
+            market_bars = _get_intraday_data_service().get_30m(
+                stock_code,
+                context_start,
+                datetime.now(),
+            )
+            initial_time = _choose_initial_time(market_bars, start_dt)
 
-    # 默认拉取最近五年数据，确保有足够回放空间
-    end_dt = datetime.now()
-
-    try:
-        service = _get_intraday_data_service()
-        base_bars = service.get_30m(stock_code, start_dt, end_dt)
+        window = build_training_window(market_bars, initial_time, max_training_days)
     except Exception as e:
         return jsonify({'error': f'intraday 数据加载失败: {e}'}), 400
-
-    try:
-        initial_time = _choose_initial_time(base_bars, start_dt)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
 
     trade_simulator = TradeSimulatorEnhanced(user, initial_capital, stock_code)
     trade_simulator.session_id = training_id
@@ -527,15 +719,17 @@ def _start_intraday_training(user, mode, data_source, period, initial_capital, t
         )
 
     session = IntradayReplaySession(
-        base_bars=base_bars,
+        base_bars=window.replay_bars,
         initial_time=initial_time,
         stock_code=stock_code,
         simulator=trade_simulator,
         order_manager=order_manager,
         initial_period=period,
     )
-    previous_close_index = build_previous_close_index(base_bars)
-    initial_bar_id = int(base_bars.index[base_bars['datetime'] == pd.Timestamp(initial_time)][0]) + 1
+    previous_close_index = build_previous_close_index(market_bars)
+    initial_bar_id = int(
+        market_bars.index[market_bars['datetime'] == pd.Timestamp(initial_time)][0]
+    ) + 1
 
     # 初始化交易模拟器的当前价格 (用首根 base bar 的 close)
     snap = session.snapshot()
@@ -557,6 +751,10 @@ def _start_intraday_training(user, mode, data_source, period, initial_capital, t
         'previous_close_index': previous_close_index,
         'initial_bar_id': initial_bar_id,
         'initial_capital': initial_capital,
+        'base_interval': '30m',
+        'max_training_days': max_training_days,
+        'training_start': _format_datetime(initial_time),
+        'training_end': _format_datetime(window.cutoff_time),
         'created_at': datetime.now(),
     }
 
@@ -568,7 +766,11 @@ def _start_intraday_training(user, mode, data_source, period, initial_capital, t
         'mode': mode,
         'initial_capital': initial_capital,
         'data_mode': DATA_MODE_INTRADAY_30M,
+        'base_interval': '30m',
         'period': period,
+        'training_start': _format_datetime(initial_time),
+        'training_end': _format_datetime(window.cutoff_time),
+        'max_training_days': max_training_days,
         'commission_settings': {
             'commission_rate': trade_simulator.commission_rate,
             'min_commission': trade_simulator.min_commission,
@@ -580,6 +782,30 @@ def _start_intraday_training(user, mode, data_source, period, initial_capital, t
 
     response = _intraday_snapshot_response(active_trainings[training_id])
     response['id'] = training_id
+    response['training_start'] = _format_datetime(initial_time)
+    response['training_end'] = _format_datetime(window.cutoff_time)
+    response['max_training_days'] = max_training_days
+    try:
+        context_result = _get_chart_window_service().load(
+            stock_code=stock_code,
+            period=period,
+            range_start=context_start,
+            range_end=initial_time,
+            current_time=initial_time,
+            read_only=False,
+        )
+        response['context_kline_data'] = context_result.kline_data
+        response['context_volume_data'] = context_result.volume_data
+        response['window_start'] = _format_datetime(context_result.window_start)
+        response['window_end'] = _format_datetime(context_result.window_end)
+        response['has_earlier'] = context_result.has_earlier
+    except TypeError:
+        response['context_kline_data'] = response['kline_data']
+        response['context_volume_data'] = []
+        response['window_start'] = _format_datetime(context_start)
+        response['window_end'] = _format_datetime(initial_time)
+        response['has_earlier'] = False
+    response['has_later'] = False
     return jsonify(response)
 
 
@@ -822,6 +1048,18 @@ def _intraday_end(training, training_id):
 
 def _save_intraday_session_report(training, training_id, report, status):
     """保存 intraday 会话报告到用户历史。"""
+    current_time = _intraday_current_trade_time(training)
+    training['training_end'] = current_time
+    report.update({
+        'data_mode': DATA_MODE_INTRADAY_30M,
+        'base_interval': '30m',
+        'period': training.get('period', '30m'),
+        'training_start': training['training_start'],
+        'training_end': current_time,
+        'max_training_days': training.get('max_training_days', 0),
+        'stock_code': training['stock_code'],
+        'data_source': training.get('data_source', 'akshare'),
+    })
     session_data = {
         'session_id': training_id,
         'stock_code': training['stock_code'],
@@ -830,7 +1068,12 @@ def _save_intraday_session_report(training, training_id, report, status):
         'end_date': _intraday_current_trade_date(training),
         'mode': training.get('mode', ''),
         'data_mode': DATA_MODE_INTRADAY_30M,
+        'base_interval': '30m',
         'period': training.get('period', ''),
+        'training_start': training['training_start'],
+        'training_end': current_time,
+        'max_training_days': training.get('max_training_days', 0),
+        'data_source': training.get('data_source', 'akshare'),
         'initial_capital': report['initial_capital'],
         'final_capital': report['final_capital'],
         'total_return': report['total_return'],
@@ -855,6 +1098,10 @@ def start_training():
         period = data.get('period', 'daily')
         initial_capital = data.get('initial_capital', 100000)
         max_bars = data.get('max_bars', 0) or 0
+        max_training_days = int(data.get('max_training_days', max_bars) or 0)
+
+        if max_training_days < 0:
+            return jsonify({'error': '训练交易日限制不能为负数'}), 400
 
         if not user:
             return jsonify({'error': '用户名不能为空'}), 400
@@ -881,6 +1128,7 @@ def start_training():
                 initial_capital=initial_capital,
                 training_id=training_id,
                 payload=data,
+                max_training_days=max_training_days,
             )
 
         # === legacy_daily 分支 (保持原有行为完全不变) ===
@@ -1126,6 +1374,35 @@ def switch_period(training_id):
         if not period:
             return jsonify({'error': '缺少 period 参数'}), 400
         return _intraday_set_period(training, period)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/training/<training_id>/chart-window', methods=['GET'])
+def get_training_chart_window(training_id):
+    try:
+        training = active_trainings.get(training_id)
+        if not training:
+            return jsonify({'error': '训练会话不存在'}), 404
+        if not _is_intraday_session(training):
+            return jsonify({'error': '该会话不支持分钟级上下文窗口'}), 400
+
+        snapshot = training['intraday_session'].snapshot()
+        result = _get_chart_window_service().load(
+            stock_code=training['stock_code'],
+            period=request.args.get('period', snapshot['active_period']),
+            range_start=_parse_datetime_arg('range_start'),
+            range_end=_parse_datetime_arg('range_end'),
+            current_time=datetime.fromisoformat(snapshot['current_time']),
+            read_only=False,
+        )
+        payload = _chart_window_payload(result, training)
+        payload['trade_markers'] = _trade_markers(
+            training['trade_simulator'].trade_history
+        )
+        return jsonify(payload)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

@@ -264,8 +264,8 @@ class IntradayAPITestBase(unittest.TestCase):
 
     def _start_intraday(self, period="30m", data_mode="intraday_30m",
                         stock_code=STOCK_CODE, start_date="2025-01-02",
-                        initial_capital=100000):
-        return self.client.post("/api/training/start", json={
+                        initial_capital=100000, extra=None):
+        payload = {
             "user": TEST_USER,
             "mode": "specified",
             "stock_code": stock_code,
@@ -273,7 +273,9 @@ class IntradayAPITestBase(unittest.TestCase):
             "period": period,
             "data_mode": data_mode,
             "initial_capital": initial_capital,
-        })
+        }
+        payload.update(extra or {})
+        return self.client.post("/api/training/start", json=payload)
 
     def _start_intraday_and_get_id(self, **kwargs):
         resp = self._start_intraday(**kwargs)
@@ -311,9 +313,29 @@ class StartIntradayTests(IntradayAPITestBase):
 
     def test_start_loads_data_via_intraday_service(self):
         self._start_intraday_and_get_id()
-        self.mock_service.get_30m.assert_called_once()
-        call_args = self.mock_service.get_30m.call_args
+        self.mock_service.get_30m.assert_called()
+        call_args = self.mock_service.get_30m.call_args_list[0]
         self.assertEqual(call_args.args[0], STOCK_CODE)
+
+    def test_start_requests_two_years_of_context_and_persists_trading_day_limit(self):
+        response = self._start_intraday(
+            period="30m",
+            start_date="2025-01-03",
+            extra={"max_training_days": 2},
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        first_call = self.mock_service.get_30m.call_args_list[0]
+        self.assertEqual(first_call.args[1], datetime(2023, 1, 3))
+        body = response.get_json()
+        self.assertEqual(body["max_training_days"], 2)
+        self.assertEqual(body["training_start"], "2025-01-03 10:00:00")
+        self.assertTrue(body["context_kline_data"])
+
+        saved = self.mock_user_manager.start_training_session.call_args.args[1]
+        self.assertEqual(saved["base_interval"], "30m")
+        self.assertEqual(saved["max_training_days"], 2)
+        self.assertEqual(saved["training_start"], "2025-01-03 10:00:00")
 
     def test_start_chooses_first_timestamp_on_or_after_start_date(self):
         """initial_time 应为 start_date 当天或之后的第一根真实时间戳。"""
