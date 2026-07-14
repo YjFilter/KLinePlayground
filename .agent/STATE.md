@@ -79,3 +79,14 @@ Next, wire the accepted TASK-018 controls to the committed chart-window APIs in 
 
 ## Phase 5 Next Action
 Run final blind-box and restart browser acceptance, then close Phase 5 or fix any acceptance-only issue.
+
+## Phase 5 Complete
+- Final acceptance: 11 Pass / 0 Fail / 0 Blocked.
+- Real blind-box `30m` startup with 150 trading days selected `600000` at `2024-05-27 10:00:00` and completed in 10.69 seconds after adding cache-first candidate selection.
+- The replay frame contained exactly 150 trading dates and 1200 base bars with two full years of prior context.
+- Four-period switching preserved replay time and a manual future-range attack was capped exactly at `current_time`.
+- Completed history rebuilt after full Flask restarts without `active_trainings`, including a persisted buy marker and bidirectional one-year browser loading.
+- Acceptance report: `docs/testing/historical-context-blind-box-browser-acceptance.md`.
+
+## Next Action
+Phase 5 is ready for normal use. The next milestone should expand the intraday cache pool beyond `600000` so blind-box stock selection has a larger local universe without depending on unstable public stock-list endpoints.

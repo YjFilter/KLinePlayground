@@ -4,6 +4,7 @@ import os
 import sys
 import json
 import base64
+import random
 import requests
 from datetime import datetime, timedelta
 import sqlite3
@@ -88,6 +89,21 @@ def _get_chart_window_service():
 
 
 def _intraday_candidate_provider(sector, date_start, date_end):
+    service = _get_intraday_data_service()
+    cache = getattr(service, 'cache', None)
+    data_dir = getattr(cache, 'data_dir', None)
+    if data_dir and os.path.isdir(data_dir):
+        cached_codes = sorted({
+            os.path.splitext(filename)[0]
+            for filename in os.listdir(data_dir)
+            if filename.endswith('.csv')
+            and os.path.splitext(filename)[0].isdigit()
+            and len(os.path.splitext(filename)[0]) == 6
+        })
+        cached_codes = data_manager._filter_stock_codes_by_sector(cached_codes, sector)
+        if cached_codes:
+            return random.choice(cached_codes)
+
     stock_code, _ = data_manager.get_random_stock(
         sector,
         date_start,

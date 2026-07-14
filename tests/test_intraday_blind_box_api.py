@@ -1,4 +1,7 @@
 from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+import tempfile
 from unittest.mock import MagicMock, patch
 
 from backend.intraday.chart_window import ChartWindowResult
@@ -147,3 +150,23 @@ class IntradayBlindBoxAPITests(IntradayAPITestBase):
         call = self.mock_chart_service.load.call_args.kwargs
         self.assertFalse(call["read_only"])
         self.assertEqual(call["current_time"], datetime(2025, 1, 3, 10))
+
+    def test_candidate_provider_prefers_local_intraday_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            data_dir = Path(temp_dir) / "30m"
+            data_dir.mkdir(parents=True)
+            (data_dir / "600000.csv").write_text("datetime,open\n", encoding="utf-8")
+            self.mock_service.cache = SimpleNamespace(data_dir=data_dir)
+            self.mock_data_manager._filter_stock_codes_by_sector.return_value = ["600000"]
+            self.mock_data_manager.get_random_stock.side_effect = AssertionError(
+                "network candidate lookup must not run when intraday cache exists"
+            )
+
+            stock_code = self.app_module._intraday_candidate_provider(
+                "all",
+                "2024-01-01",
+                "2025-12-31",
+            )
+
+        self.assertEqual(stock_code, "600000")
+        self.mock_data_manager.get_random_stock.assert_not_called()
