@@ -61,4 +61,4 @@ Select the next roadmap milestone or publish the completed Phase 4 commit series
 - Codex owns public exports, Flask hotspot integration, persistence contracts, quality gates, and final acceptance.
 
 ## Phase 5 Next Action
-Integrate the Phase 5 contracts into Flask and stored session metadata while a separate WorkBuddy task implements the static historical-window controls.
+Integrate the Phase 5 contracts into Flask and stored session metadata while TASK-018 implements the static historical-window controls in a separate WorkBuddy session.
