@@ -6,7 +6,7 @@ import json
 import base64
 import random
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -56,9 +56,16 @@ DATA_MODE_LEGACY_DAILY = "legacy_daily"
 DATA_MODE_INTRADAY_30M = "intraday_30m"
 # intraday_30m 支持的四个显示周期
 VALID_INTRADAY_PERIODS = ("30m", "4h_session", "daily", "weekly")
+MARKET_TYPE_A_SHARE = "a_share"
+MARKET_TYPE_CRYPTO_PERPETUAL = "crypto_perpetual"
+DATA_MODE_CRYPTO_5M = "crypto_5m"
+VALID_CRYPTO_PERIODS = ("5m", "15m", "30m", "1h", "4h", "daily", "weekly")
 # 懒加载的 IntradayDataService 单例；legacy_daily 路径不会触发其创建，
 # 因此旧用户不会因缺少 baostock 等可选依赖而受影响。
 _intraday_service_instance = None
+_crypto_sources_instance = None
+_crypto_data_service_instance = None
+_crypto_universe_instance = None
 
 
 def _get_intraday_data_service():
@@ -80,6 +87,82 @@ def _get_intraday_data_service():
             cache=IntradayCache(root=cache_root),
         )
     return _intraday_service_instance
+
+
+def _get_crypto_sources():
+    global _crypto_sources_instance
+    if _crypto_sources_instance is None:
+        from backend.crypto.binance_source import BinanceCryptoSource
+        from backend.crypto.bybit_source import BybitCryptoSource
+
+        _crypto_sources_instance = (BinanceCryptoSource(), BybitCryptoSource())
+    return _crypto_sources_instance
+
+
+def _get_crypto_data_service():
+    global _crypto_data_service_instance
+    if _crypto_data_service_instance is None:
+        from backend.crypto.cache import CryptoMonthlyCache
+        from backend.crypto.service import CryptoDataService
+
+        cache_root = os.path.join(data_dir_path, 'crypto')
+        _crypto_data_service_instance = CryptoDataService(
+            sources=_get_crypto_sources(),
+            cache=CryptoMonthlyCache(cache_root),
+        )
+    return _crypto_data_service_instance
+
+
+def _get_crypto_universe():
+    global _crypto_universe_instance
+    if _crypto_universe_instance is None:
+        from backend.crypto.universe import CryptoUniverse
+
+        def availability_checker(instrument, start, end):
+            try:
+                _get_crypto_data_service().get_bundle(
+                    instrument.symbol, start, end, source=None,
+                )
+                return True
+            except Exception:
+                return False
+
+        _crypto_universe_instance = CryptoUniverse(
+            _get_crypto_sources(), availability_checker=availability_checker,
+        )
+    return _crypto_universe_instance
+
+
+def _serialize_crypto_instrument(instrument):
+    listed_at = getattr(instrument, 'listed_at', None)
+    return {
+        'symbol': instrument.symbol,
+        'source': instrument.source,
+        'base_asset': instrument.base_asset,
+        'quote_asset': instrument.quote_asset,
+        'contract_type': instrument.contract_type,
+        'status': instrument.status,
+        'listed_at': listed_at.isoformat() if listed_at else None,
+        'tick_size': str(instrument.tick_size),
+        'quantity_step': str(instrument.quantity_step),
+        'min_quantity': str(instrument.min_quantity),
+        'min_notional': str(instrument.min_notional),
+        'quote_turnover_24h': str(instrument.quote_turnover_24h),
+    }
+
+
+def _crypto_source_status_payload():
+    payload = []
+    for source in _get_crypto_sources():
+        status = source.status()
+        payload.append({
+            'source': status.source,
+            'available': status.available,
+            'message': status.message,
+            'checked_at': status.checked_at.isoformat() if status.checked_at else None,
+            'latency_ms': status.latency_ms,
+        })
+    return payload
 
 
 def _get_chart_window_service():
@@ -275,6 +358,380 @@ def _intraday_snapshot_response(training):
 def _is_intraday_session(training):
     """判断 training 是否为 intraday_30m 模式。"""
     return training.get('data_mode') == DATA_MODE_INTRADAY_30M
+
+
+def _is_crypto_session(training):
+    return training.get('market_type') == MARKET_TYPE_CRYPTO_PERPETUAL or training.get('data_mode') == DATA_MODE_CRYPTO_5M
+
+
+def _crypto_snapshot(training):
+    snapshot = training['crypto_session'].snapshot()
+    futures_executor = training.get('futures_executor')
+    if futures_executor is not None:
+        snapshot.update(_crypto_futures_payload(training))
+    snapshot.update({
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'data_mode': DATA_MODE_CRYPTO_5M,
+        'symbol': training['symbol'],
+        'stock_code': training['symbol'],
+        'stock_name': training['symbol'],
+        'data_source': training['source'],
+        'period': snapshot.get('active_period', training.get('period', '5m')),
+        'training_start': training['training_start'],
+        'training_end': training['training_end'],
+        'trade_markers': snapshot.get('trade_markers', training.get('trade_markers', [])),
+    })
+    return snapshot
+
+
+def _crypto_get_data(training):
+    return jsonify(_crypto_snapshot(training))
+
+
+def _crypto_next(training):
+    snapshot = training['crypto_session'].advance()
+    _checkpoint_crypto_futures(training)
+    snapshot.update(_crypto_snapshot(training))
+    return jsonify({
+        'data_mode': DATA_MODE_CRYPTO_5M,
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'snapshot': snapshot,
+        'finished': snapshot.get('finished', False),
+        'completed_times': snapshot.get('completed_times', []),
+        'order_events': snapshot.get('order_events', []),
+    })
+
+
+def _crypto_set_period(training, period):
+    if period not in VALID_CRYPTO_PERIODS:
+        return jsonify({'error': f'unsupported crypto period: {period}'}), 400
+    training['period'] = period
+    snapshot = training['crypto_session'].set_period(period)
+    _checkpoint_crypto_futures(training)
+    return jsonify(snapshot)
+
+
+def _crypto_reset(training):
+    training['crypto_session'].reset()
+    _initialize_crypto_futures(training)
+    _checkpoint_crypto_futures(training)
+    return jsonify({
+        'message': '训练已重置',
+        'data_mode': DATA_MODE_CRYPTO_5M,
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'snapshot': _crypto_snapshot(training),
+    })
+
+
+def _initialize_crypto_futures(training):
+    from backend.crypto.futures_engine import FuturesEngine
+    from backend.crypto.futures_orders import FuturesOrderBook
+    from backend.crypto.futures_simulator import FuturesSimulator
+    from backend.crypto.trading import FuturesReplayExecutor
+
+    instrument = training['instrument']
+    bundle = training['crypto_bundle']
+    simulator = FuturesSimulator(
+        training['initial_capital'],
+        quantity_step=instrument.quantity_step,
+        min_quantity=instrument.min_quantity,
+        min_notional=instrument.min_notional,
+        leverage=training.get('leverage', 5),
+    )
+    order_book = FuturesOrderBook(simulator)
+    engine = FuturesEngine(simulator, order_book)
+    executor = FuturesReplayExecutor(
+        clock=training['crypto_session'].clock,
+        trade_bars=bundle.trade_bars,
+        mark_bars=bundle.mark_bars,
+        engine=engine,
+        funding_events=bundle.funding,
+        symbol=training['symbol'],
+        source=training['source'],
+    )
+    training['crypto_session']._on_bar = executor.on_bar
+    training['futures_executor'] = executor
+    return executor
+
+
+def _crypto_futures_payload(training):
+    executor = training['futures_executor']
+    payload = executor.snapshot()
+    simulator = executor.engine.simulator
+    mark_price = simulator.last_mark_price or simulator.position.entry_price
+    liquidation_price = executor.engine.liquidation_price()
+    position = payload['position']
+    position.update({
+        'notional': float(simulator.position.notional(mark_price)),
+        'liquidation_price': None if liquidation_price is None else float(liquidation_price),
+    })
+    account = payload['account']
+    account.update({
+        'mark_price': float(mark_price),
+        'margin_ratio': float(simulator.margin_ratio(mark_price) / 100),
+        'funding_net': float(simulator.account.funding_received - simulator.account.funding_paid),
+    })
+    payload['pending_orders'] = [
+        order.to_dict() for order in executor.engine.order_book.active_orders
+    ]
+    return payload
+
+
+def _crypto_trade(training, data):
+    executor = training['futures_executor']
+    order = executor.submit_order(
+        action=data.get('action'),
+        order_type=data.get('order_type', 'market'),
+        margin=data.get('margin'),
+        leverage=int(data.get('leverage', training.get('leverage', 5))),
+        limit_price=data.get('limit_price'),
+    )
+    training['leverage'] = order.leverage
+    _checkpoint_crypto_futures(training)
+    payload = _crypto_futures_payload(training)
+    payload.update({'success': True, 'order': order.to_dict()})
+    return jsonify(payload)
+
+
+def _crypto_end(training, training_id):
+    from backend.crypto.persistence import build_crypto_futures_report
+
+    payload = _crypto_futures_payload(training)
+    account = payload['account']
+    report = build_crypto_futures_report(
+        initial_equity=training['initial_capital'],
+        final_equity=account['equity'],
+        unrealized_pnl=payload['position']['unrealized_pnl'],
+        fills=payload['fills'],
+        orders=payload['orders'],
+        funding_events=payload['funding_events'],
+        liquidation_events=payload['liquidation_events'],
+        equity_snapshots=payload['equity_snapshots'],
+        leverage=training.get('leverage', 5),
+        source=training['source'],
+        symbol=training['symbol'],
+        display_period=training.get('period', '5m'),
+    )
+    current_time = training['crypto_session'].snapshot()['current_time']
+    report.update({
+        'session_id': training_id,
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'data_mode': DATA_MODE_CRYPTO_5M,
+        'simulator_type': 'isolated_futures',
+        'symbol': training['symbol'],
+        'stock_code': training['symbol'],
+        'quote_currency': 'USDT',
+        'base_interval': '5m',
+        'timezone': 'UTC',
+        'period': training.get('period', '5m'),
+        'training_start': training['training_start'],
+        'training_end': current_time,
+        'start_date': training['start_date'],
+        'end_date': current_time[:10],
+        'initial_capital': report['initial_equity'],
+        'final_capital': report['final_equity'],
+        'total_trades': report['fill_count'],
+        'trade_win_rate': report['win_rate'],
+        'session_win_rate': 100.0 if report['total_return'] > 0 else 0.0,
+        'trade_details': payload['fills'],
+        'trade_markers': payload['trade_markers'],
+        'account': account,
+        'position': payload['position'],
+    })
+    session_data = {
+        'session_id': training_id,
+        'stock_code': training['symbol'],
+        'stock_name': training['symbol'],
+        'start_date': training['start_date'],
+        'end_date': current_time[:10],
+        'mode': training['mode'],
+        'initial_capital': report['initial_capital'],
+        'final_capital': report['final_capital'],
+        'total_return': report['total_return'],
+        'max_drawdown': report['max_drawdown'],
+        'total_trades': report['total_trades'],
+        'trade_win_rate': report['trade_win_rate'],
+        'session_win_rate': report['session_win_rate'],
+        'total_commission': report['total_fees'],
+        'report_data': report,
+        'review_summary': '',
+        'status': 'ended',
+    }
+    _persist_crypto_futures_state(training, training_id, payload)
+    user_manager.save_training_session(training['user'], session_data)
+    training['status'] = 'ended'
+    _update_api_info(user=training['user'])
+    return jsonify(report)
+
+
+def _persist_crypto_futures_state(training, training_id, payload):
+    from backend.crypto.persistence import CryptoFuturesRepository
+
+    db_path = user_manager.history_manager._get_user_db_path(training['user'])
+    repository = CryptoFuturesRepository(db_path)
+    repository.save_runtime_state(
+        training_id,
+        _crypto_runtime_state(training, status='ended'),
+    )
+    repository.save_session_metadata(
+        training_id,
+        market_type=MARKET_TYPE_CRYPTO_PERPETUAL,
+        symbol=training['symbol'],
+        quote_currency='USDT',
+        base_interval='5m',
+        timezone='UTC',
+        source=training['source'],
+        simulator_type='isolated_futures',
+    )
+    for order in payload.get('orders', []):
+        repository.record_order(training_id, order)
+    for fill in payload.get('fills', []):
+        repository.record_fill(training_id, fill)
+    for event in payload.get('funding_events', []):
+        repository.record_funding(training_id, event)
+    for event in payload.get('liquidation_events', []):
+        repository.record_liquidation(training_id, event)
+    for snapshot in payload.get('equity_snapshots', []):
+        repository.record_equity(training_id, snapshot)
+
+
+def _crypto_runtime_state(training, *, status=None):
+    state = training['futures_executor'].export_state()
+    state['training'] = {
+        'id': training.get('id'),
+        'user': training['user'],
+        'symbol': training['symbol'],
+        'source': training['source'],
+        'period': training.get('period', '5m'),
+        'initial_period': training.get('initial_period', training.get('period', '5m')),
+        'mode': training.get('mode', 'specified'),
+        'start_date': training['start_date'],
+        'training_start': training['training_start'],
+        'training_end': training['training_end'],
+        'max_training_days': training.get('max_training_days'),
+        'initial_capital': training['initial_capital'],
+        'leverage': training.get('leverage', 5),
+        'status': status or training.get('status', 'active'),
+    }
+    return state
+
+
+def _checkpoint_crypto_futures(training):
+    from backend.crypto.persistence import CryptoFuturesRepository
+
+    training_id = training.get('id')
+    if not training_id or not training.get('futures_executor'):
+        return
+    db_path = user_manager.history_manager._get_user_db_path(training['user'])
+    repository = CryptoFuturesRepository(db_path)
+    repository.save_session_metadata(
+        training_id,
+        market_type=MARKET_TYPE_CRYPTO_PERPETUAL,
+        symbol=training['symbol'],
+        quote_currency='USDT',
+        base_interval='5m',
+        timezone='UTC',
+        source=training['source'],
+        simulator_type='isolated_futures',
+    )
+    repository.save_runtime_state(training_id, _crypto_runtime_state(training))
+
+
+def _parse_crypto_runtime_time(value):
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _restore_crypto_training(training_id):
+    from backend.crypto.persistence import CryptoFuturesRepository
+    from backend.crypto.session import CryptoReplaySession
+
+    if training_id in active_trainings:
+        return active_trainings[training_id]
+    for user in user_manager.get_users():
+        db_path = user_manager.history_manager._get_user_db_path(user)
+        if not os.path.exists(db_path):
+            continue
+        try:
+            repository = CryptoFuturesRepository(db_path)
+            state = repository.load_runtime_state(training_id)
+        except Exception:
+            continue
+        metadata = state.get('training') if isinstance(state, dict) else None
+        if not metadata or metadata.get('status') != 'active':
+            continue
+        symbol = str(metadata.get('symbol') or state.get('symbol') or '').upper()
+        source = metadata.get('source') or state.get('source')
+        training_start = _parse_crypto_runtime_time(metadata.get('training_start'))
+        training_end = _parse_crypto_runtime_time(metadata.get('training_end'))
+        if not symbol or training_start is None or training_end is None:
+            continue
+        bundle = _get_crypto_data_service().get_bundle(
+            symbol,
+            training_start - timedelta(days=30),
+            training_end,
+            source=source,
+        )
+        initial_period = metadata.get('initial_period') or metadata.get('period') or '5m'
+        session = CryptoReplaySession(
+            bundle.trade_bars,
+            initial_time=training_start,
+            symbol=symbol,
+            source=bundle.source,
+            active_period=initial_period,
+            max_training_days=int(metadata.get('max_training_days') or 1),
+        )
+        runtime_time = _parse_crypto_runtime_time(state.get('clock', {}).get('current_time'))
+        if runtime_time and runtime_time > session.clock.current_time:
+            session.clock.advance(runtime_time)
+        session.clock.set_period(state.get('clock', {}).get('active_period') or metadata.get('period') or initial_period)
+        executor = repository.rehydrate_executor(
+            training_id,
+            trade_bars=bundle.trade_bars,
+            mark_bars=bundle.mark_bars,
+            funding_events=bundle.funding,
+        )
+        executor.clock = session.clock
+        session._on_bar = executor.on_bar
+        training = {
+            'id': training_id,
+            'user': metadata.get('user') or user,
+            'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+            'data_mode': DATA_MODE_CRYPTO_5M,
+            'symbol': symbol,
+            'stock_code': symbol,
+            'source': bundle.source,
+            'data_source': bundle.source,
+            'period': session.clock.active_period.value,
+            'initial_period': initial_period,
+            'mode': metadata.get('mode', 'specified'),
+            'start_date': metadata.get('start_date') or training_start.date().isoformat(),
+            'training_start': training_start.strftime('%Y-%m-%d %H:%M:%S'),
+            'training_end': training_end.strftime('%Y-%m-%d %H:%M:%S'),
+            'max_training_days': int(metadata.get('max_training_days') or 1),
+            'initial_capital': float(metadata.get('initial_capital') or 0),
+            'leverage': int(metadata.get('leverage') or 5),
+            'crypto_session': session,
+            'crypto_bundle': bundle,
+            'instrument': bundle.instrument,
+            'futures_executor': executor,
+            'status': 'active',
+            'created_at': datetime.now(timezone.utc),
+        }
+        active_trainings[training_id] = training
+        return training
+    return None
+
+
+@app.before_request
+def _restore_crypto_training_for_request():
+    training_id = (request.view_args or {}).get('training_id')
+    if training_id and training_id not in active_trainings:
+        _restore_crypto_training(training_id)
 
 
 def _intraday_current_trade_date(training):
@@ -474,7 +931,15 @@ def get_user_history_chart(username, session_id):
         if training_end:
             report['training_end'] = _format_datetime(training_end)
 
-        required = ('stock_code', 'training_start', 'training_end')
+        is_crypto = (
+            report.get('market_type') == MARKET_TYPE_CRYPTO_PERPETUAL
+            or report.get('data_mode') == DATA_MODE_CRYPTO_5M
+        )
+        required = (
+            ('symbol', 'training_start', 'training_end')
+            if is_crypto else
+            ('stock_code', 'training_start', 'training_end')
+        )
         missing = [name for name in required if not report.get(name)]
         if missing:
             return jsonify({
@@ -486,6 +951,30 @@ def get_user_history_chart(username, session_id):
         range_end = _parse_datetime_arg('range_end')
         if range_start > range_end:
             return jsonify({'error': 'range_start 不能晚于 range_end'}), 400
+
+        if is_crypto:
+            from backend.crypto.chart_window import CryptoChartWindowService
+
+            result = CryptoChartWindowService(_get_crypto_data_service()).load(
+                symbol=report['symbol'],
+                source=report.get('source') or report.get('data_source'),
+                period=period,
+                range_start=range_start,
+                range_end=range_end,
+                current_time=datetime.fromisoformat(report['training_end']),
+                read_only=True,
+            )
+            payload = result.to_dict()
+            payload.update({
+                'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+                'data_mode': DATA_MODE_CRYPTO_5M,
+                'training_start': report['training_start'],
+                'training_end': report['training_end'],
+                'trade_markers': report.get('trade_markers') or _trade_markers(
+                    report.get('trade_details')
+                ),
+            })
+            return jsonify(payload)
 
         if report.get('data_mode', DATA_MODE_LEGACY_DAILY) != DATA_MODE_INTRADAY_30M:
             return jsonify(_legacy_history_chart_payload(
@@ -658,6 +1147,25 @@ def analyze_report_with_ai(report):
         return f"AI 分析请求发生错误: {str(e)}"
 
 
+@app.route('/api/crypto/instruments', methods=['GET'])
+def get_crypto_instruments():
+    try:
+        query = request.args.get('query', '')
+        limit = min(max(int(request.args.get('limit', 20)), 1), 100)
+        instruments = _get_crypto_universe().search(query=query, limit=limit)
+        return jsonify({'instruments': [_serialize_crypto_instrument(item) for item in instruments]})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 503
+
+
+@app.route('/api/crypto/sources/status', methods=['GET'])
+def get_crypto_source_status():
+    try:
+        return jsonify({'sources': _crypto_source_status_payload()})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 503
+
+
 @app.route('/api/system/api_info', methods=['POST', 'DELETE'])
 def toggle_api_info():
     """手动切开/关 API暴露"""
@@ -762,6 +1270,7 @@ def _start_intraday_training(
         trade_simulator.update_current_price(current_base_bar['close'], initial_bar_id)
 
     active_trainings[training_id] = {
+        'id': training_id,
         'user': user,
         'stock_code': stock_code,
         'start_date': start_date,
@@ -1112,6 +1621,140 @@ def _save_intraday_session_report(training, training_id, report, status):
     user_manager.save_training_session(training['user'], session_data)
 
 
+def _parse_crypto_timestamp(value):
+    if not value:
+        raise ValueError('crypto start_time is required')
+    parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed.replace(minute=(parsed.minute // 5) * 5, second=0, microsecond=0)
+
+
+def _random_crypto_timestamp(date_start, date_end, training_days):
+    start = datetime.fromisoformat(str(date_start)).replace(tzinfo=timezone.utc)
+    end = datetime.fromisoformat(str(date_end)).replace(tzinfo=timezone.utc, hour=23, minute=55)
+    latest = end - timedelta(days=max(training_days, 1) - 1)
+    if latest < start:
+        raise ValueError('crypto random date range is shorter than the requested training days')
+    slots = int((latest - start).total_seconds() // 300)
+    return start + timedelta(minutes=5 * random.randint(0, max(slots, 0)))
+
+
+def _start_crypto_training(*, user, mode, period, initial_capital, training_id, payload, max_training_days):
+    from backend.crypto.session import CryptoReplaySession
+
+    training_days = max_training_days or 30
+    if training_days > 365:
+        raise ValueError('crypto training is limited to 365 calendar days per session')
+    if mode != 'random':
+        symbol = str(payload.get('symbol') or '').strip().upper()
+        if not symbol:
+            raise ValueError('crypto symbol is required')
+        training_start = _parse_crypto_timestamp(payload.get('start_time'))
+        context_start = training_start - timedelta(days=30)
+        range_end = training_start + timedelta(days=training_days, minutes=-5)
+        bundle = _get_crypto_data_service().get_bundle(
+            symbol, context_start, range_end, source=None,
+        )
+        instrument = bundle.instrument
+    else:
+        last_error = None
+        for _ in range(10):
+            training_start = _random_crypto_timestamp(
+                payload.get('date_start', '2024-01-01'),
+                payload.get('date_end', datetime.now(timezone.utc).date().isoformat()),
+                training_days,
+            )
+            context_start = training_start - timedelta(days=30)
+            range_end = training_start + timedelta(days=training_days, minutes=-5)
+            try:
+                instrument = _get_crypto_universe().select_random(
+                    start=context_start,
+                    end=range_end,
+                    max_retries=10,
+                )
+                symbol = instrument.symbol
+                bundle = _get_crypto_data_service().get_bundle(
+                    symbol, context_start, range_end, source=None,
+                )
+                break
+            except Exception as error:
+                last_error = error
+        else:
+            raise ValueError(
+                f'no crypto instrument has complete data for the requested range: {last_error}'
+            )
+    session = CryptoReplaySession(
+        bundle.trade_bars,
+        initial_time=training_start,
+        symbol=symbol,
+        source=bundle.source,
+        active_period=period,
+        max_training_days=training_days,
+    )
+    snapshot = session.snapshot()
+    active_trainings[training_id] = {
+        'id': training_id,
+        'user': user,
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'data_mode': DATA_MODE_CRYPTO_5M,
+        'symbol': symbol,
+        'stock_code': symbol,
+        'source': bundle.source,
+        'data_source': bundle.source,
+        'period': period,
+        'initial_period': period,
+        'mode': mode,
+        'start_date': training_start.date().isoformat(),
+        'training_start': training_start.strftime('%Y-%m-%d %H:%M:%S'),
+        'training_end': range_end.strftime('%Y-%m-%d %H:%M:%S'),
+        'max_training_days': training_days,
+        'initial_capital': float(initial_capital),
+        'leverage': int(payload.get('leverage', 5) or 5),
+        'crypto_session': session,
+        'crypto_bundle': bundle,
+        'instrument': instrument,
+        'status': 'active',
+        'created_at': datetime.now(timezone.utc),
+    }
+    _initialize_crypto_futures(active_trainings[training_id])
+    user_manager.start_training_session(user, {
+        'session_id': training_id,
+        'stock_code': symbol,
+        'stock_name': symbol,
+        'start_date': training_start.date().isoformat(),
+        'mode': mode,
+        'initial_capital': float(initial_capital),
+        'commission_settings': {
+            'simulator_type': 'isolated_futures',
+            'leverage': int(payload.get('leverage', 5) or 5),
+            'quote_currency': 'USDT',
+        },
+    })
+    _checkpoint_crypto_futures(active_trainings[training_id])
+    return jsonify({
+        'id': training_id,
+        'training_id': training_id,
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'data_mode': DATA_MODE_CRYPTO_5M,
+        'symbol': symbol,
+        'source': bundle.source,
+        'leverage': active_trainings[training_id]['leverage'],
+        'period': period,
+        'training_start': active_trainings[training_id]['training_start'],
+        'training_end': active_trainings[training_id]['training_end'],
+        'window_start': context_start.strftime('%Y-%m-%d %H:%M:%S'),
+        'window_end': snapshot['current_time'],
+        'has_earlier': True,
+        'has_later': False,
+        'context_kline_data': snapshot['kline_data'],
+        'context_volume_data': snapshot['volume_data'],
+        'trade_markers': [],
+        **snapshot,
+    })
+
+
 @app.route('/api/training/start', methods=['POST'])
 def start_training():
     """开始新的训练"""
@@ -1131,9 +1774,24 @@ def start_training():
         if not user:
             return jsonify({'error': '用户名不能为空'}), 400
 
+        market_type = data.get('market_type', MARKET_TYPE_A_SHARE)
+        data_mode = data.get('data_mode')
+        if market_type == MARKET_TYPE_CRYPTO_PERPETUAL or data_mode == DATA_MODE_CRYPTO_5M:
+            if period not in VALID_CRYPTO_PERIODS:
+                return jsonify({'error': f'unsupported crypto period: {period}'}), 400
+            training_id = f"{user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            return _start_crypto_training(
+                user=user,
+                mode=mode,
+                period=period,
+                initial_capital=initial_capital,
+                training_id=training_id,
+                payload=data,
+                max_training_days=max_training_days,
+            )
+
         # 新增: 可选 data_mode 参数 ('legacy_daily' | 'intraday_30m')
         # 未传时保持 legacy_daily；intraday 必须显式声明。
-        data_mode = data.get('data_mode')
         resolved_data_mode = _resolve_data_mode(data_mode, period)
 
         # 仅 intraday_30m 模式强制校验 period；legacy_daily 保持原有宽容行为
@@ -1257,6 +1915,9 @@ def get_training_data(training_id):
 
         training = active_trainings[training_id]
 
+        if _is_crypto_session(training):
+            return _crypto_get_data(training)
+
         # === intraday_30m 分支: 返回当前快照，不推进回放状态 ===
         if _is_intraday_session(training):
             return _intraday_get_data(training)
@@ -1306,6 +1967,9 @@ def next_bar(training_id):
             return jsonify({'error': '训练会话不存在'}), 404
 
         training = active_trainings[training_id]
+
+        if _is_crypto_session(training):
+            return _crypto_next(training)
 
         # === intraday_30m 分支: 按活动周期边界推进，返回 ordered events ===
         if _is_intraday_session(training):
@@ -1391,13 +2055,15 @@ def switch_period(training_id):
             return jsonify({'error': '训练会话不存在'}), 404
 
         training = active_trainings[training_id]
-        if not _is_intraday_session(training):
-            return jsonify({'error': '该会话不支持周期切换 (仅 intraday_30m 模式)'}), 400
-
         data = request.get_json() or {}
         period = data.get('period')
         if not period:
             return jsonify({'error': '缺少 period 参数'}), 400
+        if _is_crypto_session(training):
+            return _crypto_set_period(training, period)
+        if not _is_intraday_session(training):
+            return jsonify({'error': '该会话不支持周期切换 (仅 intraday_30m 模式)'}), 400
+
         return _intraday_set_period(training, period)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1409,6 +2075,30 @@ def get_training_chart_window(training_id):
         training = active_trainings.get(training_id)
         if not training:
             return jsonify({'error': '训练会话不存在'}), 404
+        if _is_crypto_session(training):
+            from backend.crypto.chart_window import CryptoChartWindowService
+
+            snapshot = training['crypto_session'].snapshot()
+            current_time = datetime.fromisoformat(snapshot['current_time']).replace(tzinfo=timezone.utc)
+            result = CryptoChartWindowService(_get_crypto_data_service()).load(
+                symbol=training['symbol'],
+                source=training['source'],
+                period=request.args.get('period', snapshot['active_period']),
+                range_start=_parse_datetime_arg('range_start').replace(tzinfo=timezone.utc),
+                range_end=_parse_datetime_arg('range_end').replace(tzinfo=timezone.utc),
+                current_time=current_time,
+                read_only=False,
+            )
+            payload = result.to_dict()
+            payload.update({
+                'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+                'data_mode': DATA_MODE_CRYPTO_5M,
+                'training_start': training['training_start'],
+                'training_end': training['training_end'],
+                'current_time': snapshot['current_time'],
+                'trade_markers': training.get('trade_markers', []),
+            })
+            return jsonify(payload)
         if not _is_intraday_session(training):
             return jsonify({'error': '该会话不支持分钟级上下文窗口'}), 400
 
@@ -1529,6 +2219,9 @@ def execute_trade(training_id):
         data = request.get_json()
         training = active_trainings[training_id]
 
+        if _is_crypto_session(training):
+            return _crypto_trade(training, data)
+
         # === intraday_30m 分支: 使用当前 base bar 的 close，保存完整 time/display period ===
         if _is_intraday_session(training):
             return _intraday_trade(training, data)
@@ -1631,6 +2324,9 @@ def get_account_info(training_id):
 
         training = active_trainings[training_id]
 
+        if _is_crypto_session(training):
+            return jsonify(_crypto_futures_payload(training))
+
         # === intraday_30m 分支: 返回兼容账户信息 + intraday 快照字段 ===
         if _is_intraday_session(training):
             return _intraday_account(training)
@@ -1652,17 +2348,31 @@ def get_pending_orders(training_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        return jsonify(_pending_orders_payload(active_trainings[training_id]))
+        training = active_trainings[training_id]
+        if _is_crypto_session(training):
+            return jsonify(_crypto_futures_payload(training)['pending_orders'])
+        return jsonify(_pending_orders_payload(training))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/training/<training_id>/orders/<int:order_id>', methods=['DELETE'])
+@app.route('/api/training/<training_id>/orders/<order_id>', methods=['DELETE'])
 def cancel_pending_order(training_id, order_id):
     try:
         if training_id not in active_trainings:
             return jsonify({'error': '训练会话不存在'}), 404
-        order_manager = active_trainings[training_id].get('order_manager')
+        training = active_trainings[training_id]
+        if _is_crypto_session(training):
+            cancelled = training['futures_executor'].engine.order_book.cancel_order(
+                str(order_id), training['crypto_session'].clock.current_time,
+            )
+            if not cancelled:
+                return jsonify({'error': 'order does not exist or is no longer active'}), 404
+            return jsonify({
+                'success': True,
+                'pending_orders': _crypto_futures_payload(training)['pending_orders'],
+            })
+        order_manager = training.get('order_manager')
         if not order_manager or not order_manager.cancel_order(order_id):
             return jsonify({'error': '挂单不存在或已结束'}), 404
         return jsonify({
@@ -1680,6 +2390,8 @@ def get_trade_records(training_id):
             return jsonify({'error': '训练会话不存在'}), 404
         
         training = active_trainings[training_id]
+        if _is_crypto_session(training):
+            return jsonify(_crypto_futures_payload(training)['fills'])
         trade_simulator = training['trade_simulator']
         
         records = trade_simulator.get_trade_history_with_bar_id()
@@ -1738,6 +2450,9 @@ def end_training(training_id):
             return jsonify({'error': '训练会话不存在'}), 404
 
         training = active_trainings[training_id]
+
+        if _is_crypto_session(training):
+            return _crypto_end(training, training_id)
 
         # === intraday_30m 分支 ===
         if _is_intraday_session(training):
@@ -1806,6 +2521,9 @@ def reset_training(training_id):
             return jsonify({'error': '训练会话不存在'}), 404
 
         training = active_trainings[training_id]
+
+        if _is_crypto_session(training):
+            return _crypto_reset(training)
 
         # === intraday_30m 分支 ===
         if _is_intraday_session(training):

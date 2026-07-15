@@ -2646,3 +2646,32 @@ body.chart-panel-resizing {
 #main-app.training-active .replay-status-value {
     font-size: 12px;
 }
+
+.market-type-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0; padding: 4px; border-radius: 10px; background: var(--surface-muted); }
+.market-type-btn { border: 1px solid transparent; border-radius: 8px; padding: 8px 12px; color: var(--text-secondary); background: transparent; cursor: pointer; }
+.market-type-btn.active { border-color: var(--primary-color); color: var(--primary-color); background: var(--surface-strong); box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08); }
+.crypto-market-fields, .crypto-symbol-results { position: relative; }
+.crypto-symbol-results:not(:empty) { position: absolute; z-index: 50; width: 100%; max-height: 220px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; background: var(--surface-strong); box-shadow: 0 12px 28px rgba(15, 23, 42, 0.18); }
+.crypto-symbol-option { display: flex; justify-content: space-between; width: 100%; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--border-color); color: var(--text-primary); background: transparent; cursor: pointer; }
+.chart-panels { position: relative; }
+.drawing-toolbar { position: absolute; z-index: 30; top: 8px; left: 8px; display: flex; flex-direction: column; gap: 3px; width: 34px; padding: 4px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--surface-strong); box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18); opacity: 0.94; }
+.drawing-toolbar button { width: 26px; min-height: 25px; padding: 2px; border: 1px solid transparent; border-radius: 5px; color: var(--text-secondary); background: transparent; font-size: 11px; cursor: pointer; }
+.drawing-toolbar button:hover, .drawing-toolbar button.active { border-color: var(--primary-color); color: var(--primary-color); background: var(--surface-muted); }
+.drawing-toolbar button:focus-visible, .drawing-settings button:focus-visible, .drawing-settings input:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+.drawing-toolbar-divider { height: 1px; margin: 2px 1px; background: var(--border-color); }
+.drawing-settings { position: absolute; z-index: 35; top: 8px; left: 50px; width: 260px; max-height: calc(100% - 16px); overflow: auto; padding: 10px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--surface-strong); box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22); }
+.drawing-settings-header, .drawing-settings-actions, .drawing-level-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.drawing-level-row { margin: 6px 0; }
+.drawing-level-row input[type="number"] { width: 82px; }
+.crypto-position-grid, .crypto-order-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.crypto-position-grid > div, .crypto-funding-summary { padding: 7px; border-radius: 7px; background: var(--surface-muted); }
+.crypto-position-grid span, .crypto-position-grid strong { display: block; }
+.crypto-position-grid span { color: var(--text-secondary); font-size: 11px; }
+.crypto-order-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.crypto-funding-summary { margin: 7px 0; }
+.crypto-margin-fractions { margin: 8px 0; }
+
+@media (max-width: 980px) {
+    .drawing-toolbar { flex-direction: row; flex-wrap: wrap; width: auto; max-width: calc(100% - 16px); }
+    .drawing-toolbar-divider { width: 1px; height: 24px; }
+}

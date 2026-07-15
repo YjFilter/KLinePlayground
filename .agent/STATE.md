@@ -111,3 +111,19 @@ Use the repaired chart workspace normally. `.runtime/` remains intentionally unt
 
 ## Next Action
 Review the repaired layout in normal use. Source changes remain uncommitted; .runtime/ remains intentionally untracked.
+
+## Drawing Tools and Crypto Futures Complete
+- Added TradingView-style Fibonacci retracement, ruler, long-position, and short-position drawing tools with selection, dragging, lock, visibility, delete, undo/redo, clear, and editable Fibonacci levels.
+- Added Binance-first / Bybit-fallback USDT perpetual data with normalized instruments, dynamic search/top universe, monthly candle/funding caches, mark-price data, and offline restart support.
+- Added 24x7 crypto replay from canonical 5-minute bars across 5m, 15m, 30m, 1h, 4h, daily, and weekly periods without future leakage.
+- Added isolated-margin futures practice with long/short/close, market and limit orders, 1-20x leverage, funding, mark-price liquidation, reduce-only handling, reversal fills, pending-order cancellation, persistence, reports, and completed-history charts.
+- Fixed real integration defects found during browser acceptance and review: the service bundle funding contract, unnecessary specified-symbol universe refresh, row-wise cache validation/aggregation/snapshot serialization, active-session runtime restoration, Bybit long-range funding pagination, and crypto price currency labels.
+- Real data acceptance passed with Bybit BTCUSDT and ETHUSDT. Binance returned an IP restriction in this environment and the fallback remained functional.
+- Performance acceptance: cached 30-day BTC bundle 3.64s, full training start 5.42s, next 5-minute bar 1.25s, period switches 0.09-0.49s, restarted 15-minute history chart 1.87s.
+- Browser acceptance passed for all seven periods, market open/close, limit submit/cancel, next-bar advance, red/green long-short risk boxes, Fibonacci/ruler rendering, completed report, and history reconstruction after Flask restart; console errors 0.
+- Runtime restart acceptance preserved the exact 5-minute replay time, long position, and pending limit order; restored account access completed in 3.88s.
+- Bybit long-range funding acceptance returned 274 BTCUSDT funding events from January 1 through April 1, 2024 using time-based pagination.
+- Verification passed: JavaScript syntax, Python compile checks, 116 focused crypto/drawing tests plus 24 subtests, and the full 511-test suite plus 37 subtests.
+
+## Next Action
+Use the drawing and crypto futures workflow normally. Keep .runtime/ untracked and excluded from commits.

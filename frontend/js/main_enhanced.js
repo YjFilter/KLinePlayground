@@ -40,6 +40,11 @@ let chartPanelResizeFrame = null;
 let chartPanelResizing = false;
 let activeChartPanelSplitter = null;
 let chartPanelRatios = null;
+let drawingController = null;
+let drawingUiAbortController = null;
+let selectedTrainingMarketType = 'a_share';
+let selectedCryptoInstrument = null;
+let cryptoInstrumentSearchTimer = null;
 const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
 const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
 const CHART_PANEL_MIN_HEIGHTS = { chart: 160, 'volume-chart': 32, 'indicator-chart': 52 };
@@ -73,9 +78,28 @@ function resetChartWindowState() {
 // 其余情况一律沿用原 legacy_daily JavaScript 路径。
 const INTRADAY_DATA_MODE = 'intraday_30m';
 const INTRADAY_PERIODS = ['30m', '4h_session', 'daily', 'weekly'];
+const CRYPTO_MARKET_TYPE = 'crypto_perpetual';
+const CRYPTO_DATA_MODE = 'crypto_5m';
+const CRYPTO_PERIODS = ['5m', '15m', '30m', '1h', '4h', 'daily', 'weekly'];
+
+function isCryptoMode() {
+    return !!(currentTraining && (
+        currentTraining.market_type === CRYPTO_MARKET_TYPE
+        || currentTraining.data_mode === CRYPTO_DATA_MODE
+    ));
+}
 
 function isIntradayMode() {
-    return !!(currentTraining && currentTraining.data_mode === INTRADAY_DATA_MODE);
+    return !!(currentTraining && (
+        currentTraining.data_mode === INTRADAY_DATA_MODE
+        || currentTraining.data_mode === CRYPTO_DATA_MODE
+    ));
+}
+
+function supportedReplayPeriods() {
+    return isCryptoMode() || selectedTrainingMarketType === CRYPTO_MARKET_TYPE
+        ? CRYPTO_PERIODS
+        : INTRADAY_PERIODS;
 }
 
 // 从 #kline-period 下拉读取用户选择的周期。
@@ -84,13 +108,17 @@ function getSelectedKlinePeriod() {
     const select = document.getElementById('kline-period');
     if (!select) return 'daily';
     const value = select.value;
-    return INTRADAY_PERIODS.indexOf(value) >= 0 ? value : 'daily';
+    return supportedReplayPeriods().indexOf(value) >= 0 ? value : 'daily';
 }
 
 // 将周期值转换为可读的徽章文字。
 function formatIntradayPeriodBadge(period) {
     switch (period) {
+        case '5m': return '5m';
+        case '15m': return '15m';
         case '30m': return '30m';
+        case '1h': return '1h';
+        case '4h': return '4h';
         case '4h_session': return '4h';
         case 'weekly': return '周K';
         case 'daily':
@@ -176,7 +204,7 @@ function updateIntradayReplayStatus(snapshot) {
 
 // 把 active_period 同步到 currentPeriod 和顶部徽章。
 function syncIntradayActivePeriod(period) {
-    const next = INTRADAY_PERIODS.indexOf(period) >= 0 ? period : 'daily';
+    const next = supportedReplayPeriods().indexOf(period) >= 0 ? period : 'daily';
     currentPeriod = next;
     updatePeriodBadge(next);
 }
@@ -931,6 +959,31 @@ function setupEventListeners() {
         });
     });
 
+    document.querySelectorAll('.market-type-btn').forEach((button) => {
+        button.addEventListener('click', () => setTrainingMarketType(button.dataset.marketType));
+    });
+    document.getElementById('crypto-symbol-search')?.addEventListener('input', (event) => {
+        selectedCryptoInstrument = null;
+        if (cryptoInstrumentSearchTimer) clearTimeout(cryptoInstrumentSearchTimer);
+        cryptoInstrumentSearchTimer = setTimeout(() => {
+            searchCryptoInstruments(event.target.value).catch((error) => {
+                console.error('搜索币圈合约失败:', error);
+                renderCryptoInstrumentResults([]);
+            });
+        }, 250);
+    });
+    document.getElementById('crypto-order-type')?.addEventListener('change', (event) => {
+        document.getElementById('crypto-limit-price-group')?.classList.toggle('hidden', event.target.value !== 'limit');
+    });
+    document.getElementById('crypto-submit-order')?.addEventListener('click', submitCryptoOrder);
+    document.querySelectorAll('[data-crypto-margin-fraction]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const available = Number(currentTraining?.account?.available_balance || currentTraining?.available_balance || 0);
+            const input = document.getElementById('crypto-margin');
+            if (input) input.value = Math.max(0, available * Number(button.dataset.cryptoMarginFraction || 0)).toFixed(2);
+        });
+    });
+
     // 回放控制
     document.getElementById('play-pause-btn').addEventListener('click', togglePlayback);
     document.getElementById('next-bar-btn').addEventListener('click', nextBar);
@@ -1468,6 +1521,7 @@ function resetToMainAppState() {
         pausePlayback();
     }
     stopAutoSync();
+    destroyDrawingTools();
 
     // 2. 清理图表对象和数据
     if (chart) {
@@ -1605,10 +1659,16 @@ async function showTrainingSetup(returnScreen = null) {
         }
     }
     document.getElementById('training-setup').classList.remove('hidden');
+    setTrainingMarketType(selectedTrainingMarketType);
     // 设置默认日期为一年前
     const oneYearAgo = new Date();
     oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
     document.getElementById('start-date').value = oneYearAgo.toISOString().split('T')[0];
+    const cryptoStart = document.getElementById('crypto-start-time');
+    if (cryptoStart && !cryptoStart.value) {
+        const local = new Date(oneYearAgo.getTime() - oneYearAgo.getTimezoneOffset() * 60000);
+        cryptoStart.value = local.toISOString().slice(0, 16);
+    }
 }
 
 function hideTrainingSetup() {
@@ -2037,24 +2097,281 @@ function switchTab(tabName) {
     });
 }
 
+function setTrainingMarketType(marketType) {
+    selectedTrainingMarketType = marketType === CRYPTO_MARKET_TYPE ? CRYPTO_MARKET_TYPE : 'a_share';
+    const crypto = selectedTrainingMarketType === CRYPTO_MARKET_TYPE;
+    document.querySelectorAll('.market-type-btn').forEach((button) => {
+        button.classList.toggle('active', button.dataset.marketType === selectedTrainingMarketType);
+    });
+    document.querySelectorAll('.a-share-market-field').forEach((element) => element.classList.toggle('hidden', crypto));
+    document.querySelectorAll('.crypto-market-field').forEach((element) => element.classList.toggle('hidden', !crypto));
+    document.getElementById('crypto-market-fields')?.classList.toggle('hidden', !crypto);
+    document.getElementById('sector-filter')?.closest('.form-group')?.classList.toggle('hidden', crypto);
+
+    const periodSelect = document.getElementById('kline-period');
+    periodSelect?.querySelectorAll('option').forEach((option) => {
+        const allowed = crypto ? option.dataset.cryptoPeriod : option.dataset.aSharePeriod;
+        option.hidden = !allowed;
+        option.disabled = !allowed;
+    });
+    if (periodSelect && !supportedReplayPeriods().includes(periodSelect.value)) {
+        periodSelect.value = crypto ? '5m' : 'daily';
+    }
+
+    const limitLabel = document.querySelector('label[for="max-training-bars"]');
+    const limitHelp = document.getElementById('training-day-limit-help');
+    if (limitLabel) limitLabel.textContent = crypto ? '训练自然日限制（0=不限制）' : '训练交易日限制（0=不限制）';
+    if (limitHelp) {
+        limitHelp.textContent = crypto
+            ? '按UTC自然日统计，市场全天候运行；界面时间显示为UTC+8。'
+            : '按实际交易日期统计，不是30分钟K线根数，也不是当前显示周期K线根数。';
+    }
+}
+
+function renderCryptoInstrumentResults(instruments) {
+    const container = document.getElementById('crypto-symbol-results');
+    if (!container) return;
+    container.replaceChildren();
+    (Array.isArray(instruments) ? instruments : []).forEach((instrument) => {
+        const symbol = instrument.symbol || instrument.code;
+        if (!symbol) return;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'crypto-symbol-option';
+        button.dataset.symbol = symbol;
+        button.innerHTML = '<strong>' + symbol + '</strong><span>' + (instrument.source || '') + '</span>';
+        button.addEventListener('click', () => {
+            selectedCryptoInstrument = instrument;
+            const input = document.getElementById('crypto-symbol-search');
+            if (input) input.value = symbol;
+            container.replaceChildren();
+        });
+        container.appendChild(button);
+    });
+}
+
+async function searchCryptoInstruments(query) {
+    const text = String(query || '').trim().toUpperCase();
+    if (text.length < 2) {
+        renderCryptoInstrumentResults([]);
+        return [];
+    }
+    const response = await fetch(API_BASE + '/crypto/instruments?query=' + encodeURIComponent(text) + '&limit=20');
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || '币圈合约搜索失败');
+    const instruments = payload.instruments || payload;
+    renderCryptoInstrumentResults(instruments);
+    return instruments;
+}
+
+function buildCryptoStartPayload(isRandomMode) {
+    const symbolInput = document.getElementById('crypto-symbol-search');
+    const startTimeInput = document.getElementById('crypto-start-time');
+    const payload = {
+        user: currentUser,
+        market_type: CRYPTO_MARKET_TYPE,
+        data_mode: CRYPTO_DATA_MODE,
+        mode: isRandomMode ? 'random' : 'specified',
+        data_source: 'binance',
+        period: getSelectedKlinePeriod(),
+        max_training_days: parseInt(document.getElementById('max-training-bars')?.value) || 0,
+        initial_capital: parseFloat(document.getElementById('crypto-initial-capital')?.value) || 10000,
+        leverage: parseInt(document.getElementById('crypto-leverage')?.value) || 5,
+    };
+    if (isRandomMode) {
+        payload.date_start = document.getElementById('random-start-date').value.trim();
+        payload.date_end = document.getElementById('random-end-date').value.trim();
+    } else {
+        payload.symbol = (selectedCryptoInstrument?.symbol || symbolInput?.value || '').trim().toUpperCase();
+        payload.start_time = startTimeInput?.value || '';
+        if (!payload.symbol || !payload.start_time) throw new Error('请选择合约并填写起始时间');
+    }
+    return payload;
+}
+
 function replaceRenderedKlineData(klineData) {
     latestRenderedKlineData = Array.isArray(klineData) ? klineData.map(item => ({ ...item })) : [];
+    syncDrawingToolBars();
 }
 
 function upsertRenderedBar(bar) {
     if (!bar) return;
     if (latestRenderedKlineData.length === 0) {
         latestRenderedKlineData = [{ ...bar }];
+        syncDrawingToolBars();
         return;
     }
 
     const lastBar = latestRenderedKlineData[latestRenderedKlineData.length - 1];
     if (lastBar.time === bar.time) {
         latestRenderedKlineData[latestRenderedKlineData.length - 1] = { ...bar };
+        syncDrawingToolBars();
         return;
     }
 
     latestRenderedKlineData.push({ ...bar });
+    syncDrawingToolBars();
+}
+
+function syncDrawingToolBars() {
+    if (!drawingController) return;
+    if (typeof drawingController.setBars === 'function') {
+        drawingController.setBars(latestRenderedKlineData);
+    }
+    if (typeof drawingController.requestUpdate === 'function') {
+        drawingController.requestUpdate();
+    }
+}
+
+function destroyDrawingTools() {
+    if (drawingUiAbortController) {
+        drawingUiAbortController.abort();
+        drawingUiAbortController = null;
+    }
+    if (drawingController && typeof drawingController.destroy === 'function') {
+        drawingController.destroy();
+    }
+    drawingController = null;
+}
+
+function invokeDrawingAction(action) {
+    if (!drawingController) return;
+    const methodMap = {
+        lock: 'toggleLock',
+        hide: 'toggleHidden',
+        delete: 'deleteSelected',
+        undo: 'undo',
+        redo: 'redo',
+        clear: 'clearAll',
+    };
+    const method = methodMap[action];
+    if (method && typeof drawingController[method] === 'function') drawingController[method]();
+}
+
+function collectFibonacciLevelRows() {
+    return Array.from(document.querySelectorAll('#drawing-fibonacci-levels .drawing-level-row')).map((row) => ({
+        value: Number(row.querySelector('[data-fibonacci-field="value"]')?.value || 0),
+        color: row.querySelector('[data-fibonacci-field="color"]')?.value || '#7c3aed',
+        enabled: !!row.querySelector('[data-fibonacci-field="enabled"]')?.checked,
+    }));
+}
+
+function applyFibonacciRowsToSelection() {
+    drawingController?.updateSelectedFibonacciSettings?.({ levels: collectFibonacciLevelRows() });
+}
+
+function renderFibonacciSettingsPanel() {
+    const container = document.getElementById('drawing-fibonacci-levels');
+    if (!container) return;
+    const selected = drawingController?.getSelectedFibonacciSettings?.();
+    const fallback = window.KLineDrawingTools?.resetFibonacciLevels?.() || [];
+    const settings = selected || { levels: fallback, reverse: false };
+    container.replaceChildren();
+    settings.levels.forEach((level, index) => {
+        const row = document.createElement('div');
+        row.className = 'drawing-level-row';
+        const enabled = document.createElement('input');
+        enabled.type = 'checkbox';
+        enabled.checked = level.enabled !== false;
+        enabled.dataset.fibonacciField = 'enabled';
+        enabled.setAttribute('aria-label', '启用第 ' + (index + 1) + ' 个斐波那契档位');
+        const value = document.createElement('input');
+        value.type = 'number';
+        value.step = '0.001';
+        value.value = Number(level.value);
+        value.dataset.fibonacciField = 'value';
+        value.setAttribute('aria-label', '第 ' + (index + 1) + ' 个斐波那契档位数值');
+        const color = document.createElement('input');
+        color.type = 'color';
+        color.value = level.color || '#7c3aed';
+        color.dataset.fibonacciField = 'color';
+        color.setAttribute('aria-label', '第 ' + (index + 1) + ' 个斐波那契档位颜色');
+        const up = document.createElement('button');
+        up.setAttribute('aria-label', '上移第 ' + (index + 1) + ' 个档位');
+        up.type = 'button'; up.textContent = '↑'; up.disabled = index === 0;
+        const down = document.createElement('button');
+        down.setAttribute('aria-label', '下移第 ' + (index + 1) + ' 个档位');
+        down.type = 'button'; down.textContent = '↓'; down.disabled = index === settings.levels.length - 1;
+        const remove = document.createElement('button');
+        remove.setAttribute('aria-label', '删除第 ' + (index + 1) + ' 个档位');
+        remove.type = 'button'; remove.textContent = '×';
+        enabled.addEventListener('change', applyFibonacciRowsToSelection);
+        value.addEventListener('change', applyFibonacciRowsToSelection);
+        color.addEventListener('input', applyFibonacciRowsToSelection);
+        up.addEventListener('click', () => {
+            drawingController?.reorderFibonacciLevel?.(index, index - 1);
+            renderFibonacciSettingsPanel();
+        });
+        down.addEventListener('click', () => {
+            drawingController?.reorderFibonacciLevel?.(index, index + 1);
+            renderFibonacciSettingsPanel();
+        });
+        remove.addEventListener('click', () => {
+            drawingController?.removeFibonacciLevel?.(index);
+            renderFibonacciSettingsPanel();
+        });
+        row.append(enabled, value, color, up, down, remove);
+        container.appendChild(row);
+    });
+    const reverse = document.getElementById('drawing-fibonacci-reverse');
+    if (reverse) reverse.checked = !!settings.reverse;
+}
+
+function initializeDrawingTools() {
+    destroyDrawingTools();
+    drawingUiAbortController = new AbortController();
+    const drawingUiSignal = drawingUiAbortController.signal;
+    const api = window.KLineDrawingTools;
+    const Controller = api?.DrawingController;
+    if (!Controller || !chart || !candlestickSeries) return;
+    drawingController = new Controller({
+        chart,
+        series: candlestickSeries,
+        element: document.getElementById('chart'),
+        bars: latestRenderedKlineData,
+    });
+
+    document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
+        if (button.dataset.drawingBound === '1') return;
+        button.dataset.drawingBound = '1';
+        button.addEventListener('click', () => {
+            document.querySelectorAll('[data-drawing-tool]').forEach((item) => item.classList.remove('active'));
+            document.querySelectorAll('[data-drawing-tool]').forEach((item) => item.setAttribute('aria-pressed', 'false'));
+            button.classList.add('active');
+            button.setAttribute('aria-pressed', 'true');
+            const toolAliases = { 'long-position': 'long', 'short-position': 'short' };
+            drawingController?.activateTool?.(toolAliases[button.dataset.drawingTool] || button.dataset.drawingTool);
+            document.getElementById('drawing-fibonacci-settings')?.classList.toggle(
+                'hidden', button.dataset.drawingTool !== 'fibonacci'
+            );
+            if (button.dataset.drawingTool === 'fibonacci') renderFibonacciSettingsPanel();
+        });
+    });
+    document.querySelectorAll('[data-drawing-action]').forEach((button) => {
+        if (button.dataset.drawingBound === '1') return;
+        button.dataset.drawingBound = '1';
+        button.addEventListener('click', () => invokeDrawingAction(button.dataset.drawingAction));
+    });
+    document.querySelector('[data-fibonacci-action="close"]')?.addEventListener('click', () => {
+        document.getElementById('drawing-fibonacci-settings')?.classList.add('hidden');
+    }, { signal: drawingUiSignal });
+    document.querySelector('[data-fibonacci-action="add"]')?.addEventListener('click', () => {
+        drawingController?.addFibonacciLevel?.({ value: 2.618, color: '#f59e0b', enabled: true });
+        renderFibonacciSettingsPanel();
+    }, { signal: drawingUiSignal });
+    document.querySelector('[data-fibonacci-action="reset"]')?.addEventListener('click', () => {
+        drawingController?.resetFibonacciSettings?.();
+        renderFibonacciSettingsPanel();
+    }, { signal: drawingUiSignal });
+    document.getElementById('drawing-fibonacci-reverse')?.addEventListener('change', (event) => {
+        drawingController?.updateSelectedFibonacciSettings?.({ reverse: !!event.target.checked });
+    }, { signal: drawingUiSignal });
+    document.getElementById('chart')?.addEventListener('pointerup', () => {
+        if (!document.getElementById('drawing-fibonacci-settings')?.classList.contains('hidden')) {
+            setTimeout(renderFibonacciSettingsPanel, 0);
+        }
+    }, { signal: drawingUiSignal });
+    syncDrawingToolBars();
 }
 
 function shiftLogicalRange(range, delta = 1) {
@@ -2074,7 +2391,7 @@ function setVisibleRangeAll(range) {
 function normalizeChartTime(item) {
     if (!item) return 0;
     if (typeof item.time === 'number') return item.time;
-    const rawTime = item.time || item.end_time || item.start_time || item.datetime;
+    const rawTime = item.time || item.timestamp || item.end_time || item.start_time || item.datetime;
     return intradayBarToTimestamp({ time: rawTime });
 }
 
@@ -2472,7 +2789,7 @@ async function refreshTrainingView(options = {}) {
 }
 
 async function switchViewPeriod(period) {
-    const nextPeriod = INTRADAY_PERIODS.indexOf(period) >= 0 ? period : (period === 'weekly' ? 'weekly' : 'daily');
+    const nextPeriod = supportedReplayPeriods().indexOf(period) >= 0 ? period : (period === 'weekly' ? 'weekly' : 'daily');
 
     if (isViewOnlyMode && chartWindowState.read_only && currentReportData?.session_id) {
         if (currentPeriod === nextPeriod) {
@@ -2561,6 +2878,14 @@ async function switchViewPeriod(period) {
 // 训练管理
 async function startTraining() {
     const isRandomMode = document.querySelector('.tab-btn.active').dataset.tab === 'random';
+    if (selectedTrainingMarketType === CRYPTO_MARKET_TYPE) {
+        try {
+            return await startTrainingWithConfig(buildCryptoStartPayload(isRandomMode));
+        } catch (error) {
+            alert(error.message || '币圈训练参数不完整');
+            return;
+        }
+    }
     const initialCapital = parseFloat(document.getElementById('initial-capital').value);
     const dataSource = document.getElementById('data-source').value || 'akshare';
     const period = getSelectedKlinePeriod();
@@ -2592,6 +2917,13 @@ async function startTraining() {
         trainingConfig.start_date = startDate;
     }
 
+    return startTrainingWithConfig(trainingConfig);
+}
+
+function startTrainingWithConfig(trainingConfig) {
+    return (async () => {
+    const period = trainingConfig.period || 'daily';
+    const dataSource = trainingConfig.data_source || 'akshare';
     try {
         updatePeriodBadge(period);
         showLoading(
@@ -2638,7 +2970,7 @@ async function startTraining() {
                         : buildIntradayVolumeData(snapshot.kline_data),
                     trade_markers: currentTraining.trade_markers || [],
                 }, { replace: true, fitContent: true });
-                setChartWindowStatus('已加载训练开始前至少两年的走势。', 'success');
+                setChartWindowStatus(isCryptoMode() ? '已加载币圈历史走势（UTC+8）。' : '已加载训练开始前至少两年的走势。', 'success');
                 await updateAccountInfo();
                 startAutoSync();
             } else {
@@ -2664,11 +2996,22 @@ async function startTraining() {
     } finally {
         hideLoading();
     }
+    })();
 }
 
 function showTrainingInterface() {
     document.getElementById('history-dashboard')?.classList.add('hidden');
     document.getElementById('training-interface').classList.remove('hidden');
+    document.getElementById('a-share-trading-panel')?.classList.toggle('hidden', isCryptoMode());
+    document.getElementById('limit-status')?.classList.toggle('hidden', isCryptoMode());
+    document.getElementById('pending-orders')?.classList.toggle('hidden', isCryptoMode());
+    document.getElementById('crypto-trading-panel')?.classList.toggle('hidden', !isCryptoMode());
+    const cryptoOrderLeverage = document.getElementById('crypto-order-leverage');
+    if (cryptoOrderLeverage && isCryptoMode()) {
+        cryptoOrderLeverage.value = String(currentTraining.leverage || 5);
+    }
+    document.querySelectorAll('.crypto-view-period').forEach((button) => button.classList.toggle('hidden', !isCryptoMode()));
+    document.querySelectorAll('.a-share-view-period').forEach((button) => button.classList.toggle('hidden', isCryptoMode()));
     setTrainingViewOnlyMode(false, { showBackToReport: false });
     updateAccountInfo();
     // 隐藏按钮和标题
@@ -2677,6 +3020,7 @@ function showTrainingInterface() {
 
 // 图表管理
 function initializeChart() {
+    destroyDrawingTools();
     applyChartPanelRatios(readChartPanelRatios());
     const palette = getThemePalette();
     // 初始化主图表
@@ -3081,6 +3425,7 @@ function initializeChart() {
         }
     });
 
+    initializeDrawingTools();
 }
 
 // async function loadInitialData() {
@@ -3216,6 +3561,14 @@ async function loadInitialData() {
     }
 }
 
+function formatMarketPrice(value) {
+    const formatted = Number(value).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+    return isCryptoMode() ? formatted + ' USDT' : '¥' + formatted;
+}
+
 function updateCurrentInfo(barData, progress) {
     if (!barData) return;
     const palette = getThemePalette();
@@ -3223,16 +3576,16 @@ function updateCurrentInfo(barData, progress) {
     const date = new Date(barData.time * 1000);
     const formattedDate = `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
     document.getElementById('current-date').textContent = formattedDate;
-    document.getElementById('current-price').textContent = `¥${barData.close.toFixed(2)}`;
+    document.getElementById('current-price').textContent = formatMarketPrice(barData.close);
 
     // 显示当前bar ID
     document.getElementById('current-bar-id').textContent = `Bar ID: ${barData.bar_id || 'N/A'}`;
 
     // 更新当日详情
-    document.getElementById('open-price').textContent = `¥${barData.open.toFixed(2)}`;
-    document.getElementById('high-price').textContent = `¥${barData.high.toFixed(2)}`;
-    document.getElementById('low-price').textContent = `¥${barData.low.toFixed(2)}`;
-    document.getElementById('close-price').textContent = `¥${barData.close.toFixed(2)}`;
+    document.getElementById('open-price').textContent = formatMarketPrice(barData.open);
+    document.getElementById('high-price').textContent = formatMarketPrice(barData.high);
+    document.getElementById('low-price').textContent = formatMarketPrice(barData.low);
+    document.getElementById('close-price').textContent = formatMarketPrice(barData.close);
 
     // 更新成交量
     if (barData.volume !== undefined) {
@@ -3388,11 +3741,18 @@ function updateTradeMarkers(markers) {
             shape = marker.type === 'B' ? 'arrowDown' : 'arrowUp';
         }
 
+        const cryptoStyle = marker.type === 'L'
+            ? { position: 'belowBar', color: '#16a34a', shape: 'arrowUp' }
+            : marker.type === 'X'
+                ? { position: 'aboveBar', color: '#f59e0b', shape: 'circle' }
+                : marker.type === 'S' && isCryptoMode()
+                    ? { position: 'aboveBar', color: '#dc2626', shape: 'arrowDown' }
+                    : null;
         return {
             time: alignTradeMarkerTimeToRenderedBar(marker.time),
-            position: shape === 'arrowDown' ? 'aboveBar' : 'belowBar',
-            color: marker.type === 'B' ? '#ff4d4f' : '#008000',
-            shape: shape,
+            position: cryptoStyle?.position || (shape === 'arrowDown' ? 'aboveBar' : 'belowBar'),
+            color: cryptoStyle?.color || (marker.type === 'B' ? '#ff4d4f' : '#008000'),
+            shape: cryptoStyle?.shape || shape,
             text: marker.type,
             size: 1
         };
@@ -4123,7 +4483,11 @@ async function cancelPendingOrder(orderId) {
             alert(data.error || '撤单失败');
             return;
         }
-        renderPendingOrders(data.pending_orders);
+        if (isCryptoMode()) {
+            await updateAccountInfo();
+        } else {
+            renderPendingOrders(data.pending_orders);
+        }
     } catch (error) {
         console.error('撤单失败:', error);
         alert('撤单失败');
@@ -4243,10 +4607,72 @@ async function executeSell(priceType = 'close', reason = '') {
 }
 
 // 账户信息更新
+function renderCryptoAccount(accountPayload) {
+    const account = accountPayload?.account || accountPayload || {};
+    const position = accountPayload?.position || account.position || {};
+    if (currentTraining) currentTraining.account = account;
+    const equity = Number(account.equity ?? account.total_assets ?? 0);
+    const available = Number(account.available_balance ?? account.available_cash ?? 0);
+    const positionValue = Number(position.notional ?? account.position_value ?? 0);
+    const unrealized = Number(position.unrealized_pnl ?? account.unrealized_pnl ?? account.floating_pnl ?? 0);
+    document.getElementById('total-assets').textContent = equity.toLocaleString() + ' USDT';
+    document.getElementById('available-cash').textContent = available.toLocaleString() + ' USDT';
+    document.getElementById('position-value').textContent = positionValue.toLocaleString() + ' USDT';
+    document.getElementById('floating-pnl').textContent = unrealized.toLocaleString() + ' USDT';
+    document.getElementById('crypto-position-side').textContent = position.side || '空仓';
+    document.getElementById('crypto-mark-price').textContent = Number(account.mark_price ?? position.mark_price ?? 0).toLocaleString();
+    document.getElementById('crypto-liquidation-price').textContent = position.liquidation_price ? Number(position.liquidation_price).toLocaleString() : '--';
+    document.getElementById('crypto-margin-ratio').textContent = account.margin_ratio == null ? '--' : (Number(account.margin_ratio) * 100).toFixed(2) + '%';
+    const fundingNet = Number(account.funding_net ?? accountPayload?.funding_net ?? 0);
+    document.getElementById('crypto-funding-summary').textContent = '资金费净额：' + fundingNet.toFixed(4) + ' USDT';
+    const orders = accountPayload?.pending_orders || account.pending_orders || [];
+    const ordersEl = document.getElementById('crypto-pending-orders');
+    if (ordersEl) {
+        ordersEl.classList.toggle('hidden', orders.length === 0);
+        ordersEl.innerHTML = orders.map((order) => '<div class="pending-order-item">' +
+            '<span>' + escapeHtml(order.action || order.side || '') + ' · ' + escapeHtml(order.order_type || 'limit') + ' · ' + Number(order.margin || order.quantity || 0).toLocaleString() + '</span>' +
+            '<button type="button" class="crypto-cancel-order" data-order-id="' + escapeHtml(order.order_id || '') + '">撤单</button></div>').join('');
+        ordersEl.querySelectorAll('.crypto-cancel-order').forEach((button) => {
+            button.addEventListener('click', () => cancelPendingOrder(button.dataset.orderId));
+        });
+    }
+}
+
+async function submitCryptoOrder() {
+    if (!currentTraining?.id || !isCryptoMode()) return;
+    const orderType = document.getElementById('crypto-order-type')?.value || 'market';
+    const body = {
+        action: document.getElementById('crypto-order-action')?.value || 'open_long',
+        order_type: orderType,
+        margin: Number(document.getElementById('crypto-margin')?.value || 0),
+        leverage: Number(document.getElementById('crypto-order-leverage')?.value || currentTraining.leverage || 5),
+    };
+    if (orderType === 'limit') body.limit_price = Number(document.getElementById('crypto-limit-price')?.value || 0);
+    try {
+        const response = await fetch(API_BASE + '/training/' + encodeURIComponent(currentTraining.id) + '/trade', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || '合约订单提交失败');
+        if (payload.trade_markers) syncActiveTradeMarkers(payload.trade_markers);
+        if (payload.account || payload.position) renderCryptoAccount(payload);
+        else await updateAccountInfo();
+    } catch (error) {
+        console.error('提交合约订单失败:', error);
+        alert(error.message || '合约订单提交失败');
+    }
+}
+
 async function updateAccountInfo() {
     try {
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/account`);
         const account = await response.json();
+
+        if (isCryptoMode()) {
+            renderCryptoAccount(account);
+            await updateTradeHistory();
+            return;
+        }
 
         document.getElementById('total-assets').textContent = `¥${account.total_assets.toLocaleString()}`;
         document.getElementById('available-cash').textContent = `¥${account.available_cash.toLocaleString()}`;
@@ -4282,11 +4708,42 @@ async function updateAccountInfo() {
 }
 
 // 获取并刷新整个交易历史列表
+function renderCryptoTradeHistory(records) {
+    const container = document.getElementById('trade-history');
+    if (!container) return;
+    if (!records || records.length === 0) {
+        container.innerHTML = '<div class="no-trades">暂无合约成交</div>';
+        return;
+    }
+    const actionLabels = {
+        open_long: '开多',
+        open_short: '开空',
+        close: '平仓',
+        liquidation: '强平',
+    };
+    container.innerHTML = records.slice().reverse().slice(0, 10).map((trade) => {
+        const realized = Number(trade.realized_pnl || 0);
+        return '<div class="trade-item ' + escapeHtml(trade.action || '') + '">' +
+            '<div class="trade-header"><span class="trade-action">' +
+            escapeHtml(actionLabels[trade.action] || trade.action || '-') +
+            '</span><span class="trade-time">' + escapeHtml(trade.timestamp || '') + '</span></div>' +
+            '<div class="trade-details"><div>数量: ' + Number(trade.quantity || 0).toLocaleString() + '</div>' +
+            '<div>价格: ' + Number(trade.price || 0).toLocaleString() + ' USDT</div>' +
+            '<div>手续费: ' + Number(trade.fee || 0).toFixed(4) + ' USDT</div>' +
+            '<div class="' + (realized >= 0 ? 'positive' : 'negative') + '">已实现: ' +
+            realized.toFixed(4) + ' USDT</div></div></div>';
+    }).join('');
+}
+
 async function updateTradeHistory() {
     try {
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/trade_records`);
         if (!response.ok) return;
         const records = await response.json();
+        if (isCryptoMode()) {
+            renderCryptoTradeHistory(records);
+            return;
+        }
         
         const container = document.getElementById('trade-history');
         if (!records || records.length === 0) {
@@ -4602,10 +5059,13 @@ async function resetTraining() {
  * @param {object} report - 报告数据对象
  */
 function updateReportSummary(parentElement, report) {
-    const money = (value) => `¥${Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const isCryptoReport = report.market_type === CRYPTO_MARKET_TYPE;
+    const money = (value) => isCryptoReport
+        ? Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' USDT'
+        : '¥' + Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const dateRange = [report.start_date, report.end_date].filter(Boolean).join(' 至 ') || '-';
     const summaryItems = [
-        ['股票代码', report.stock_code || '-'],
+        [isCryptoReport ? '合约' : '股票代码', report.symbol || report.stock_code || '-'],
         ['训练期间', dateRange],
         ['初始资金', money(report.initial_capital)],
         ['最终资产', money(report.final_capital)],
@@ -4704,6 +5164,24 @@ function createTradeDetailsTable(parentElement, tradeDetails) {
         <td><strong>-¥${totals.totalCommission.toFixed(2)}</strong></td>
         <td><strong>${totals.totalProfit >= 0 ? '¥' : '-¥'}${Math.abs(totals.totalProfit).toFixed(2)}</strong></td>
     `;
+}
+
+function createCryptoTradeDetailsTable(parentElement, tradeDetails) {
+    parentElement.innerHTML = '<h3>合约成交明细</h3><div class="trade-details-table"><table><thead><tr>' +
+        '<th>时间</th><th>操作</th><th>价格</th><th>数量</th><th>手续费</th><th>已实现盈亏</th>' +
+        '</tr></thead><tbody></tbody></table></div>';
+    const labels = { open_long: '开多', open_short: '开空', close: '平仓', liquidation: '强平' };
+    const tbody = parentElement.querySelector('tbody');
+    (tradeDetails || []).forEach((trade) => {
+        const row = tbody.insertRow();
+        const realized = Number(trade.realized_pnl || 0);
+        row.innerHTML = '<td>' + escapeHtml(trade.timestamp || '') + '</td>' +
+            '<td>' + escapeHtml(labels[trade.action] || trade.action || '-') + '</td>' +
+            '<td>' + Number(trade.price || 0).toLocaleString() + ' USDT</td>' +
+            '<td>' + Number(trade.quantity || 0).toLocaleString() + '</td>' +
+            '<td>' + Number(trade.fee || 0).toFixed(4) + ' USDT</td>' +
+            '<td class="' + (realized >= 0 ? 'positive' : 'negative') + '">' + realized.toFixed(4) + ' USDT</td>';
+    });
 }
 
 
@@ -4816,7 +5294,11 @@ function showReport(report) {
 
     const detailsSection = document.createElement('div');
     detailsSection.className = 'trade-details-section';
-    createTradeDetailsTable(detailsSection, report.trade_details); // 使用辅助函数创建表格
+    if (report.market_type === CRYPTO_MARKET_TYPE) {
+        createCryptoTradeDetailsTable(detailsSection, report.trade_details);
+    } else {
+        createTradeDetailsTable(detailsSection, report.trade_details);
+    }
 
     // 将生成好的模块添加到主容器中
     reportContent.appendChild(summarySection);
@@ -4863,9 +5345,9 @@ async function viewFullChart() {
     }
 
     const historySessionId = currentReportData.session_id;
-    const requestedPeriod = INTRADAY_PERIODS.includes(currentReportData.period)
+    const requestedPeriod = CRYPTO_PERIODS.includes(currentReportData.period)
         ? currentReportData.period
-        : 'daily';
+        : (INTRADAY_PERIODS.includes(currentReportData.period) ? currentReportData.period : 'daily');
     const rangeStart = shiftChartWindowYear(trainingStart, -2);
     const rangeEnd = trainingEnd;
 

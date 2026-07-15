@@ -177,19 +177,35 @@
         <div id="training-setup" class="modal hidden">
             <div class="modal-content">
                 <h2>新建训练</h2>
+                <div class="market-type-switch" role="tablist" aria-label="训练市场">
+                    <button class="market-type-btn active" type="button" data-market-type="a_share">A股</button>
+                    <button class="market-type-btn" type="button" data-market-type="crypto_perpetual">币圈永续</button>
+                </div>
                 <div class="setup-tabs">
                     <button class="tab-btn active" data-tab="specified">指定模式</button>
                     <button class="tab-btn" data-tab="random">盲盒模式</button>
                 </div>
 
                 <div id="specified-tab" class="tab-content active">
-                    <div class="form-group">
+                    <div class="form-group a-share-market-field">
                         <label>股票代码</label>
                         <input type="text" id="stock-code" placeholder="例如: 000001">
                     </div>
-                    <div class="form-group">
+                    <div id="crypto-market-fields" class="crypto-market-fields hidden">
+                        <div class="form-group">
+                            <label for="crypto-symbol-search">USDT 永续合约</label>
+                            <input type="search" id="crypto-symbol-search" autocomplete="off" placeholder="例如 BTCUSDT、ETHUSDT">
+                            <div id="crypto-symbol-results" class="crypto-symbol-results" role="listbox"></div>
+                            <small>Binance 主源，Bybit 自动备用；显示时间为 UTC+8。</small>
+                        </div>
+                    </div>
+                    <div class="form-group a-share-market-field">
                         <label>起始日期</label>
                         <input type="date" id="start-date">
+                    </div>
+                    <div class="form-group crypto-market-field hidden">
+                        <label>起始时间（UTC+8）</label>
+                        <input type="datetime-local" id="crypto-start-time">
                     </div>
                 </div>
 
@@ -219,7 +235,7 @@
                         <input type="number" id="max-training-bars" value="0" min="0" max="2000" step="10" placeholder="0=全部交易日" aria-describedby="training-day-limit-help">
                         <small id="training-day-limit-help">按实际交易日期统计，不是30分钟K线根数，也不是当前显示周期K线根数。</small>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group a-share-market-field">
                         <label>数据源</label>
                         <select id="data-source">
                             <option value="akshare" selected>AKShare（免费公网）</option>
@@ -231,15 +247,31 @@
                     <div class="form-group">
                         <label>K线周期</label>
                         <select id="kline-period">
-                            <option value="30m">30分钟</option>
-                            <option value="4h_session">4小时</option>
-                            <option value="daily" selected>日线</option>
-                            <option value="weekly">周线</option>
+                            <option value="5m" data-crypto-period="5m" hidden>5分钟</option>
+                            <option value="15m" data-crypto-period="15m" hidden>15分钟</option>
+                            <option value="30m" data-a-share-period="30m" data-crypto-period="30m">30分钟</option>
+                            <option value="1h" data-crypto-period="1h" hidden>1小时</option>
+                            <option value="4h_session" data-a-share-period="4h_session">4小时（A股交易时段）</option>
+                            <option value="4h" data-crypto-period="4h" hidden>4小时</option>
+                            <option value="daily" data-a-share-period="daily" data-crypto-period="daily" selected>日线</option>
+                            <option value="weekly" data-a-share-period="weekly" data-crypto-period="weekly">周线</option>
                         </select>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group a-share-market-field">
                         <label>初始资金</label>
                         <input type="number" id="initial-capital" value="100000" min="10000" step="1000">
+                    </div>
+                    <div class="form-group crypto-market-field hidden">
+                        <label>初始资金（USDT）</label>
+                        <input type="number" id="crypto-initial-capital" value="10000" min="100" step="100">
+                    </div>
+                    <div class="form-group crypto-market-field hidden">
+                        <label>默认杠杆</label>
+                        <select id="crypto-leverage">
+                            <option value="1">1x</option><option value="2">2x</option>
+                            <option value="3">3x</option><option value="5" selected>5x</option>
+                            <option value="10">10x</option><option value="20">20x</option>
+                        </select>
                     </div>
                 </div>
 
@@ -407,10 +439,14 @@
                     </div>
                     <div class="chart-actions">
                         <div class="view-period-switch">
-                            <button class="view-period-btn" data-period="30m">30分钟</button>
-                            <button class="view-period-btn" data-period="4h_session">4小时</button>
-                            <button class="view-period-btn active" data-period="daily">日线</button>
-                            <button class="view-period-btn" data-period="weekly">周线</button>
+                            <button class="view-period-btn crypto-view-period hidden" data-period="5m">5分钟</button>
+                            <button class="view-period-btn crypto-view-period hidden" data-period="15m">15分钟</button>
+                            <button class="view-period-btn shared-view-period" data-period="30m">30分钟</button>
+                            <button class="view-period-btn crypto-view-period hidden" data-period="1h">1小时</button>
+                            <button class="view-period-btn a-share-view-period" data-period="4h_session">4小时</button>
+                            <button class="view-period-btn crypto-view-period hidden" data-period="4h">4小时</button>
+                            <button class="view-period-btn shared-view-period active" data-period="daily">日线</button>
+                            <button class="view-period-btn shared-view-period" data-period="weekly">周线</button>
                         </div>
                     </div>
                 </div>
@@ -436,6 +472,34 @@
                     </div>
                 </div>
                 <div id="chart-panels" class="chart-panels">
+                    <div id="drawing-toolbar" class="drawing-toolbar" role="toolbar" aria-label="画线工具">
+                        <button type="button" data-drawing-tool="select" aria-label="选择绘图" aria-pressed="false" title="选择">↖</button>
+                        <button type="button" data-drawing-tool="trend" aria-label="趋势线" aria-pressed="false" title="趋势线">╱</button>
+                        <button type="button" data-drawing-tool="horizontal" aria-label="水平线" aria-pressed="false" title="水平线">—</button>
+                        <button type="button" data-drawing-tool="ray" aria-label="射线" aria-pressed="false" title="射线">➜</button>
+                        <button type="button" data-drawing-tool="rectangle" aria-label="矩形区间" aria-pressed="false" title="矩形区间">▭</button>
+                        <button type="button" data-drawing-tool="text" aria-label="文字标注" aria-pressed="false" title="文字标注">T</button>
+                        <button type="button" data-drawing-tool="fibonacci" aria-label="斐波那契回撤" aria-pressed="false" title="斐波那契">Fib</button>
+                        <button type="button" data-drawing-tool="ruler" aria-label="量尺" aria-pressed="false" title="量尺">↔</button>
+                        <button type="button" data-drawing-tool="long-position" aria-label="做多测算" aria-pressed="false" title="做多测算">L</button>
+                        <button type="button" data-drawing-tool="short-position" aria-label="做空测算" aria-pressed="false" title="做空测算">S</button>
+                        <span class="drawing-toolbar-divider"></span>
+                        <button type="button" data-drawing-action="lock" aria-label="锁定或解锁选中图形" title="锁定">🔒</button>
+                        <button type="button" data-drawing-action="hide" aria-label="隐藏或显示选中图形" title="隐藏">◉</button>
+                        <button type="button" data-drawing-action="delete" aria-label="删除选中图形" title="删除">⌫</button>
+                        <button type="button" data-drawing-action="undo" aria-label="撤销绘图操作" title="撤销">↶</button>
+                        <button type="button" data-drawing-action="redo" aria-label="重做绘图操作" title="重做">↷</button>
+                        <button type="button" data-drawing-action="clear" aria-label="清空全部图形" title="清空全部">×</button>
+                    </div>
+                    <div id="drawing-fibonacci-settings" class="drawing-settings hidden" aria-label="斐波那契设置">
+                        <div class="drawing-settings-header"><strong>斐波那契档位</strong><button type="button" data-fibonacci-action="close" aria-label="关闭斐波那契设置">×</button></div>
+                        <div id="drawing-fibonacci-levels"></div>
+                        <label><input type="checkbox" id="drawing-fibonacci-reverse"> 反向显示</label>
+                        <div class="drawing-settings-actions">
+                            <button type="button" data-fibonacci-action="add">添加档位</button>
+                            <button type="button" data-fibonacci-action="reset">恢复默认</button>
+                        </div>
+                    </div>
                     <div id="chart" class="chart" data-panel="main"></div>
                     <div class="chart-panel-splitter" data-before-panel="chart" data-after-panel="volume-chart" role="separator" aria-orientation="horizontal" aria-label="调整K线图和成交量图高度" tabindex="0"></div>
                     <div id="volume-chart" class="volume-chart" data-panel="volume"></div>
@@ -499,7 +563,7 @@
 
                 <div class="control-section">
                     <h3>交易操作</h3>
-                    <div class="trade-controls trade-controls-advanced">
+                    <div id="a-share-trading-panel" class="trade-controls trade-controls-advanced">
                         <div class="order-type-switch" aria-label="买入订单类型">
                             <button class="order-type-btn active" data-order-type="market" type="button">市价</button>
                             <button class="order-type-btn" data-order-type="limit" type="button">限价</button>
@@ -550,6 +614,45 @@
                     </div>
                     <div id="limit-status" class="limit-status hidden"></div>
                     <div id="pending-orders" class="pending-orders hidden"></div>
+                </div>
+
+                <div id="crypto-trading-panel" class="control-section hidden">
+                    <h3>USDT 永续合约</h3>
+                    <div class="crypto-position-grid">
+                        <div><span>方向</span><strong id="crypto-position-side">空仓</strong></div>
+                        <div><span>标记价格</span><strong id="crypto-mark-price">--</strong></div>
+                        <div><span>强平价格</span><strong id="crypto-liquidation-price">--</strong></div>
+                        <div><span>保证金率</span><strong id="crypto-margin-ratio">--</strong></div>
+                    </div>
+                    <div id="crypto-funding-summary" class="crypto-funding-summary">资金费：--</div>
+                    <div class="crypto-order-grid">
+                        <label>方向
+                            <select id="crypto-order-action">
+                                <option value="open_long">开多</option>
+                                <option value="open_short">开空</option>
+                                <option value="close">平仓</option>
+                            </select>
+                        </label>
+                        <label>订单类型
+                            <select id="crypto-order-type"><option value="market">市价</option><option value="limit">限价</option></select>
+                        </label>
+                        <label>杠杆
+                            <select id="crypto-order-leverage">
+                                <option value="1">1x</option><option value="2">2x</option><option value="3">3x</option>
+                                <option value="5" selected>5x</option><option value="10">10x</option><option value="20">20x</option>
+                            </select>
+                        </label>
+                        <label>保证金（USDT）<input type="number" id="crypto-margin" min="0" step="1" value="100"></label>
+                        <label id="crypto-limit-price-group" class="hidden">限价<input type="number" id="crypto-limit-price" min="0" step="0.01"></label>
+                    </div>
+                    <div class="fraction-buttons crypto-margin-fractions">
+                        <button type="button" data-crypto-margin-fraction="0.25">25%</button>
+                        <button type="button" data-crypto-margin-fraction="0.5">50%</button>
+                        <button type="button" data-crypto-margin-fraction="0.75">75%</button>
+                        <button type="button" data-crypto-margin-fraction="1">全部</button>
+                    </div>
+                    <button id="crypto-submit-order" type="button" class="btn btn-primary">提交合约订单</button>
+                    <div id="crypto-pending-orders" class="pending-orders hidden"></div>
                 </div>
 
                 <div class="shortcut-trigger-container">
@@ -603,6 +706,7 @@
 
     <script src="js/marked.min.js"></script>
     <script src="js/indicator_math.js"></script>
+    <script src="js/drawing_tools.js"></script>
     <script src="js/main_enhanced.js"></script>
 </body>
 </html>

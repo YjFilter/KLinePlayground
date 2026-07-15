@@ -125,7 +125,7 @@ class HistoricalChartWindowFrontendStaticTests(unittest.TestCase):
         self.assertIn("!chartWindowState.has_later", body)
 
     def test_start_uses_returned_context_without_next(self):
-        body = _function_body(self.js, "async function startTraining")
+        body = _function_body(self.js, "function startTrainingWithConfig")
         self.assertIn("context_kline_data", body)
         intraday_index = body.find("if (isIntradayMode())")
         legacy_index = body.find("// === legacy_daily", intraday_index)
