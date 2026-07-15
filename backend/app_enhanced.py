@@ -1631,6 +1631,15 @@ def _parse_crypto_timestamp(value):
     return parsed.replace(minute=(parsed.minute // 5) * 5, second=0, microsecond=0)
 
 
+def _normalize_crypto_symbol(value):
+    symbol = str(value or '').strip().upper()
+    for separator in ('/', '-', '_', ' '):
+        symbol = symbol.replace(separator, '')
+    if symbol and not symbol.endswith(('USDT', 'USDC')):
+        symbol += 'USDT'
+    return symbol
+
+
 def _random_crypto_timestamp(date_start, date_end, training_days):
     start = datetime.fromisoformat(str(date_start)).replace(tzinfo=timezone.utc)
     end = datetime.fromisoformat(str(date_end)).replace(tzinfo=timezone.utc, hour=23, minute=55)
@@ -1648,7 +1657,7 @@ def _start_crypto_training(*, user, mode, period, initial_capital, training_id, 
     if training_days > 365:
         raise ValueError('crypto training is limited to 365 calendar days per session')
     if mode != 'random':
-        symbol = str(payload.get('symbol') or '').strip().upper()
+        symbol = _normalize_crypto_symbol(payload.get('symbol'))
         if not symbol:
             raise ValueError('crypto symbol is required')
         training_start = _parse_crypto_timestamp(payload.get('start_time'))

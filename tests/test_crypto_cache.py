@@ -89,6 +89,23 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
         self.assertEqual(coverage.start, datetime(2024, 1, 1, 0, 0, tzinfo=UTC))
         self.assertEqual(coverage.end, datetime(2024, 2, 1, 0, 0, tzinfo=UTC))
 
+    def test_range_load_only_reads_intersecting_month_files(self):
+        data = frame([
+            datetime(2024, 1, 31, 23, 55, tzinfo=UTC),
+            datetime(2024, 2, 1, 0, 0, tzinfo=UTC),
+            datetime(2024, 3, 1, 0, 0, tzinfo=UTC),
+        ])
+        self.cache.save("binance", "BTCUSDT", "trade", data)
+        with patch.object(self.cache, "_load_path", wraps=self.cache._load_path) as load_path:
+            loaded = self.cache.load(
+                "binance", "BTCUSDT", "trade",
+                datetime(2024, 2, 1, 0, 0, tzinfo=UTC),
+                datetime(2024, 2, 29, 23, 55, tzinfo=UTC),
+            )
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(load_path.call_count, 1)
+        self.assertEqual(load_path.call_args.args[-1].name, "2024-02.csv.gz")
+
     def test_corrupt_month_raises_actionable_error(self):
         path = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade" / "2024-01.csv.gz"
         path.parent.mkdir(parents=True)

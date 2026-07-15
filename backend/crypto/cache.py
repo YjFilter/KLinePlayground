@@ -29,6 +29,17 @@ class CryptoMonthlyCache:
     def _instrument_path(self, source: str, symbol: str) -> Path:
         return self.root / source / symbol.upper() / "instrument.json"
 
+    @staticmethod
+    def _paths_for_range(directory: Path, start: datetime | None, end: datetime | None) -> list[Path]:
+        paths = sorted(directory.glob("*.csv.gz")) if directory.exists() else []
+        start_month = utc_datetime(start).strftime("%Y-%m") if start is not None else None
+        end_month = utc_datetime(end).strftime("%Y-%m") if end is not None else None
+        return [
+            path for path in paths
+            if (start_month is None or path.name[:7] >= start_month)
+            and (end_month is None or path.name[:7] <= end_month)
+        ]
+
     def save_instrument(self, instrument: CryptoInstrument) -> None:
         path = self._instrument_path(instrument.source, instrument.symbol)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,9 +103,8 @@ class CryptoMonthlyCache:
     def load_funding(self, source: str, symbol: str, start: datetime | None = None, end: datetime | None = None) -> list[FundingEvent]:
         directory = self._directory(source, symbol, "funding")
         events = []
-        if directory.exists():
-            for path in sorted(directory.glob("*.csv.gz")):
-                events.extend(self._load_funding_path(source, symbol, path))
+        for path in self._paths_for_range(directory, start, end):
+            events.extend(self._load_funding_path(source, symbol, path))
         deduplicated = sorted({event.timestamp: event for event in events}.values(), key=lambda event: event.timestamp)
         if start is not None:
             start = utc_datetime(start)
@@ -199,7 +209,10 @@ class CryptoMonthlyCache:
 
     def load(self, source: str, symbol: str, kind: str, start: datetime | None = None, end: datetime | None = None) -> pd.DataFrame:
         directory = self._directory(source, symbol, kind)
-        frames = [self._load_path(source, symbol, kind, path) for path in sorted(directory.glob("*.csv.gz"))] if directory.exists() else []
+        frames = [
+            self._load_path(source, symbol, kind, path)
+            for path in self._paths_for_range(directory, start, end)
+        ]
         result = self.merge(pd.DataFrame(columns=CANDLE_COLUMNS), pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=CANDLE_COLUMNS))
         if result.empty:
             return result

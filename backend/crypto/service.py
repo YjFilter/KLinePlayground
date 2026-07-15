@@ -104,7 +104,9 @@ class CryptoDataService:
         mark = self._decorate(mark, source.name, symbol, "mark")
         funding_key = (source.name, symbol)
         if self.cache.funding_covers(source.name, symbol, start, end):
-            self._funding_cache[funding_key] = tuple(self.cache.load_funding(source.name, symbol))
+            self._funding_cache[funding_key] = tuple(
+                self.cache.load_funding(source.name, symbol, start, end)
+            )
         else:
             funding_events = source.fetch_funding(symbol, start, end)
             combined_funding = [*self._funding_cache.get(funding_key, ()), *funding_events]

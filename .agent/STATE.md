@@ -127,3 +127,13 @@ Review the repaired layout in normal use. Source changes remain uncommitted; .ru
 
 ## Next Action
 Use the drawing and crypto futures workflow normally. Keep .runtime/ untracked and excluded from commits.
+
+## BTC and ETH Offline Cache Complete
+- BTC and ETH shorthand inputs now normalize to BTCUSDT and ETHUSDT in both frontend and backend startup paths.
+- Imported Binance official monthly 5-minute trade, mark-price, and funding archives for BTCUSDT and ETHUSDT from January 2024 through June 2026.
+- Verified complete aligned offline coverage from January 2024 through May 2026: 29 months and 254,016 trade plus 254,016 mark bars per symbol.
+- Monthly cache reads now open only the requested month files instead of repeatedly decompressing the entire archive; the reproduced 60-day offline bundle dropped from about 55 seconds per symbol to 7-10 seconds.
+- Real /api/training/start acceptance normalized BTC/ETH correctly, selected the local Binance cache without REST access, and started both sessions in about 12-13 seconds.
+
+## Next Action
+Refresh the browser once to load the new JavaScript, then use BTC or ETH shorthand normally. Keep .runtime/ untracked and excluded from commits.

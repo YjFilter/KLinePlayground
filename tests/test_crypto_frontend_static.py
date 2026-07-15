@@ -45,6 +45,8 @@ class CryptoFrontendStaticTests(unittest.TestCase):
         self.assertIn("const CRYPTO_DATA_MODE = 'crypto_5m'", self.js)
         self.assertIn("function setTrainingMarketType", self.js)
         self.assertIn("async function searchCryptoInstruments", self.js)
+        self.assertIn("function normalizeCryptoSymbol", self.js)
+        self.assertIn("symbol + 'USDT'", self.js)
         self.assertIn("function buildCryptoStartPayload", self.js)
         self.assertIn("function renderCryptoAccount", self.js)
         self.assertIn("function renderCryptoTradeHistory", self.js)

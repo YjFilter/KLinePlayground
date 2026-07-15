@@ -142,10 +142,11 @@ class CryptoAPITests(unittest.TestCase):
                     period="5m",
                     initial_capital=10000,
                     training_id="fallback-test",
-                    payload={"symbol": "BTCUSDT", "start_time": "2025-01-01T00:00:00Z"},
+                    payload={"symbol": "BTC", "start_time": "2025-01-01T00:00:00Z"},
                     max_training_days=1,
                 )
         self.assertEqual(response.get_json()["source"], "bybit")
+        self.assertEqual(get_bundle.call_args.args[0], "BTCUSDT")
         self.assertIsNone(get_bundle.call_args.kwargs["source"])
         self.assertEqual(start_session.call_args.args[1]["stock_code"], "BTCUSDT")
         self.assertEqual(app_module.active_trainings["fallback-test"]["id"], "fallback-test")

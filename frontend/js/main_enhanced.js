@@ -2164,6 +2164,11 @@ async function searchCryptoInstruments(query) {
     return instruments;
 }
 
+function normalizeCryptoSymbol(value) {
+    const symbol = String(value || '').trim().toUpperCase().replace(/[\s/_-]+/g, '');
+    return symbol && !symbol.endsWith('USDT') && !symbol.endsWith('USDC') ? symbol + 'USDT' : symbol;
+}
+
 function buildCryptoStartPayload(isRandomMode) {
     const symbolInput = document.getElementById('crypto-symbol-search');
     const startTimeInput = document.getElementById('crypto-start-time');
@@ -2182,7 +2187,7 @@ function buildCryptoStartPayload(isRandomMode) {
         payload.date_start = document.getElementById('random-start-date').value.trim();
         payload.date_end = document.getElementById('random-end-date').value.trim();
     } else {
-        payload.symbol = (selectedCryptoInstrument?.symbol || symbolInput?.value || '').trim().toUpperCase();
+        payload.symbol = normalizeCryptoSymbol(selectedCryptoInstrument?.symbol || symbolInput?.value || '');
         payload.start_time = startTimeInput?.value || '';
         if (!payload.symbol || !payload.start_time) throw new Error('请选择合约并填写起始时间');
     }
