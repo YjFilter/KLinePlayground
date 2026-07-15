@@ -302,7 +302,7 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
         assert.ok(operations.some(operation => operation[0] === 'lineTo'));
         assert.ok(operations.some(operation => operation[0] === 'setLineDash'));
         assert.ok(operations.some(operation => operation[0] === 'fillText' && String(operation[1]).includes('23.6% (')));
-        assert.ok(operations.some(operation => operation[0] === 'fillText' && String(operation[1]).includes('R:R')));
+        assert.ok(operations.some(operation => operation[0] === 'fillText' && String(operation[1]).includes('盈亏比')));
         assert.ok(operations.some(operation => operation[0] === 'set' && operation[1] === 'lineWidth' && operation[2] >= 2));
         """
         completed = run_node(script)
@@ -356,6 +356,8 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
         const primitive = new drawing.DrawingPrimitive(model);
         primitive.attached({{chart, series, requestUpdate() {{}}}});
         assert.deepEqual(primitive.projectAnchors(), [null, {{x: 110, y: 20}}]);
+        primitive.setBars([{{time: 12}}, {{time: 110}}]);
+        assert.deepEqual(primitive.projectAnchors(), [{{x: 12, y: 10}}, {{x: 110, y: 20}}]);
         const hit = primitive.hitTest(110, 20);
         assert.equal(hit.anchorIndex, 1);
         assert.equal(hit.externalId, `${{model.id}}:anchor:1`);
@@ -408,7 +410,264 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
+    def test_risk_renderer_uses_chinese_colored_account_position_and_ratio_labels(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const operations = [];
+        const context = new Proxy({{measureText: text => ({{width: text.length * 7}})}}, {{
+          get(target, key) {{ if (key in target) return target[key]; return (...args) => operations.push([key, ...args]); }},
+          set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
+        }});
+        const model = drawing.createDrawingModel('long-position', [
+          {{time: 10, price: 100}}, {{time: 20, price: 90}}, {{time: 20, price: 115}}
+        ], {{accountSize: 10000, accountRiskAmount: 200, positionSize: 2}});
+        const primitive = new drawing.DrawingPrimitive(model);
+        primitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{priceToCoordinate: value => 200 - value}}, requestUpdate() {{}},
+        }});
+        primitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
+          callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
+            bitmapSize: {{width: 400, height: 300}}, mediaSize: {{width: 400, height: 300}}}});
+        }}}});
+        const labels = operations.filter(op => op[0] === 'fillText').map(op => op[1]);
+        for (const text of ['入场', '止损', '止盈', '账户 10000.00', '仓量 2', '盈亏比 1.50']) {{
+          assert.ok(labels.some(label => String(label).includes(text)), text);
+        }}
+        assert.ok(operations.filter(op => op[0] === 'fillRect').length >= 6);
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === '#ef5350'));
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === '#26a69a'));
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
 class DrawingControllerRuntimeTests(unittest.TestCase):
+    def test_main_callback_aliases_and_account_provider_populate_risk_model(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 9, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const interactions = [];
+        const tools = [];
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{priceToCoordinate: v => 200 - v, coordinateToPrice: v => 200 - v,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }}, detachPrimitive() {{}}}};
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget,
+          accountSizeProvider: () => 10000,
+          onInteractionChange: active => interactions.push(active),
+          onToolChange: tool => tools.push(tool),
+        }});
+        controller.activateTool('long');
+        element.dispatch('pointerdown', {{clientX: 10, clientY: 100}});
+        element.dispatch('pointerup', {{clientX: 50, clientY: 110}});
+        const model = controller.store.snapshot()[0];
+        assert.equal(model.options.accountSize, 10000);
+        assert.equal(model.options.accountRiskAmount, 100);
+        assert.equal(model.options.positionSize, 10);
+        assert.deepEqual(interactions, [true, false]);
+        assert.deepEqual(tools, ['long', null]);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_two_point_tool_click_without_drag_does_not_commit(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 10, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{priceToCoordinate: v => v, coordinateToPrice: v => v,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }}, detachPrimitive() {{}}}};
+        const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
+        controller.activateTool('rectangle');
+        element.dispatch('pointerdown', {{clientX: 20, clientY: 30}});
+        assert.ok(controller._draftPrimitive);
+        element.dispatch('pointerup', {{clientX: 20, clientY: 30}});
+        assert.equal(controller.store.size, 0);
+        assert.equal(controller._draftPrimitive, null);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_two_point_tool_drag_previews_draft_and_commits_on_release(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 4, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 10, top: 20}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const attached = [];
+        const chart = {{timeScale: () => ({{timeToCoordinate: value => value + 10, coordinateToTime: value => value - 10}})}};
+        const series = {{
+          priceToCoordinate: value => value + 20, coordinateToPrice: value => value - 20,
+          attachPrimitive(primitive) {{ attached.push(primitive); primitive.attached({{chart, series, requestUpdate() {{}}}}); }},
+          detachPrimitive(primitive) {{ attached.splice(attached.indexOf(primitive), 1); }},
+        }};
+        const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
+        controller.activateTool('trend');
+        element.dispatch('pointerdown', {{clientX: 40, clientY: 70}});
+        assert.equal(controller.store.size, 0);
+        assert.ok(controller._draftPrimitive);
+        assert.equal(attached.length, 1);
+        element.dispatch('pointermove', {{clientX: 90, clientY: 110}});
+        assert.deepEqual(controller._draftPrimitive.model().anchors, [
+          {{time: 20, price: 30}}, {{time: 70, price: 70}}
+        ]);
+        assert.equal(controller.store.size, 0);
+        element.dispatch('pointerup', {{clientX: 90, clientY: 110}});
+        assert.equal(controller.store.size, 1);
+        assert.deepEqual(controller.store.snapshot()[0].anchors, [
+          {{time: 20, price: 30}}, {{time: 70, price: 70}}
+        ]);
+        assert.equal(controller._draftPrimitive, null);
+        assert.equal(attached.length, 1);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_risk_tools_create_three_anchors_in_one_drag_with_fixed_ratio(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 5, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{priceToCoordinate: v => 200 - v, coordinateToPrice: v => 200 - v,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }}, detachPrimitive() {{}}}};
+        const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
+        controller.activateTool('long-position');
+        element.dispatch('pointerdown', {{clientX: 10, clientY: 100}});
+        element.dispatch('pointermove', {{clientX: 60, clientY: 110}});
+        assert.deepEqual(controller._draftPrimitive.model().anchors, [
+          {{time: 10, price: 100}}, {{time: 60, price: 90}}, {{time: 60, price: 115}}
+        ]);
+        element.dispatch('pointerup', {{clientX: 60, clientY: 110}});
+        const longModel = controller.store.snapshot()[0];
+        assert.equal(drawing.calculateRiskReward('long', ...longModel.anchors.map(anchor => anchor.price)).rewardRiskRatio, 1.5);
+        controller.activateTool('short-position');
+        element.dispatch('pointerdown', {{clientX: 20, clientY: 100}});
+        element.dispatch('pointerup', {{clientX: 70, clientY: 115}});
+        const shortModel = controller.store.snapshot()[1];
+        assert.deepEqual(shortModel.anchors, [
+          {{time: 20, price: 100}}, {{time: 70, price: 110}}, {{time: 70, price: 85}}
+        ]);
+        assert.equal(drawing.calculateRiskReward('short', ...shortModel.anchors.map(anchor => anchor.price)).rewardRiskRatio, 1.5);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_pointermove_is_raf_coalesced_and_snaps_time_and_ohlc_unless_alt(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 6, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const frames = [];
+        const element = new Target();
+        const keyTarget = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{priceToCoordinate: v => v, coordinateToPrice: v => v,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }}, detachPrimitive() {{}}}};
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget,
+          bars: [{{time: 100, open: 50, high: 60, low: 40, close: 55}}],
+          requestAnimationFrame(callback) {{ frames.push(callback); return frames.length; }}, cancelAnimationFrame() {{}},
+        }});
+        controller.activateTool('trend');
+        element.dispatch('pointerdown', {{clientX: 96, clientY: 53}});
+        element.dispatch('pointermove', {{clientX: 104, clientY: 58}});
+        element.dispatch('pointermove', {{clientX: 106, clientY: 56}});
+        assert.equal(frames.length, 1);
+        assert.deepEqual(controller._draftPrimitive.model().anchors[1], {{time: 100, price: 55}});
+        frames.shift()();
+        assert.deepEqual(controller._draftPrimitive.model().anchors[1], {{time: 100, price: 55}});
+        element.dispatch('pointerup', {{clientX: 106, clientY: 56, altKey: true}});
+        assert.deepEqual(controller.store.snapshot()[0].anchors[1], {{time: 106, price: 56}});
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_invalid_coordinates_are_safe_and_interaction_callback_balances(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 8, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const states = [];
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: x => x < 0 ? null : x}})}};
+        const series = {{priceToCoordinate: v => v, coordinateToPrice: y => y < 0 ? undefined : y,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }}, detachPrimitive() {{}}}};
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget,
+          onInteractionStateChange(active, detail) {{ states.push([active, detail.type]); }},
+        }});
+        controller.activateTool('trend');
+        assert.doesNotThrow(() => element.dispatch('pointerdown', {{clientX: NaN, clientY: 10}}));
+        assert.equal(controller.store.size, 0);
+        element.dispatch('pointerdown', {{clientX: 10, clientY: 10}});
+        assert.doesNotThrow(() => element.dispatch('pointermove', {{clientX: -1, clientY: -1}}));
+        assert.doesNotThrow(() => element.dispatch('pointerup', {{clientX: -1, clientY: -1}}));
+        assert.equal(controller.store.size, 0);
+        assert.deepEqual(states, [[true, 'create'], [false, 'create']]);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_pointerdown_only_prevents_and_captures_for_creation_or_edit_hits(self):
         script = f"""
         const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
@@ -494,12 +753,12 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         controller.setBars(sourceBars);
         assert.notEqual(controller._bars, sourceBars);
         assert.equal(rulerPrimitive._bars, controller._bars);
-        assert.deepEqual(trendPrimitive._bars, []);
-        assert.deepEqual(updates, {{trend: 0, ruler: 1}});
+        assert.equal(trendPrimitive._bars, controller._bars);
+        assert.deepEqual(updates, {{trend: 1, ruler: 1}});
         controller.refresh();
-        assert.deepEqual(updates, {{trend: 1, ruler: 2}});
+        assert.deepEqual(updates, {{trend: 2, ruler: 2}});
         controller.requestUpdate();
-        assert.deepEqual(updates, {{trend: 2, ruler: 3}});
+        assert.deepEqual(updates, {{trend: 3, ruler: 3}});
         """
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -533,10 +792,9 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
         controller.activateTool('trend');
         assert.equal(controller.activeTool, 'trend');
-        for (const [clientX, clientY] of [[20, 40], [40, 60]]) {{
-          element.dispatch('pointerdown', {{clientX, clientY}});
-          element.dispatch('pointerup', {{clientX, clientY}});
-        }}
+        element.dispatch('pointerdown', {{clientX: 20, clientY: 40}});
+        element.dispatch('pointermove', {{clientX: 40, clientY: 60}});
+        element.dispatch('pointerup', {{clientX: 40, clientY: 60}});
         assert.equal(controller.store.size, 1);
         assert.equal(controller.store.snapshot()[0].type, 'trend');
         assert.deepEqual(controller.store.snapshot()[0].anchors, [
@@ -544,10 +802,9 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         ]);
         assert.equal(controller.activeTool, null);
         controller.activateTool('long');
-        for (const [clientX, clientY] of [[30, 120], [60, 115], [60, 135]]) {{
-          element.dispatch('pointerdown', {{clientX, clientY}});
-          element.dispatch('pointerup', {{clientX, clientY}});
-        }}
+        element.dispatch('pointerdown', {{clientX: 30, clientY: 120}});
+        element.dispatch('pointermove', {{clientX: 60, clientY: 135}});
+        element.dispatch('pointerup', {{clientX: 60, clientY: 135}});
         assert.equal(controller.store.size, 2);
         assert.equal(controller.store.snapshot()[1].type, 'long');
         assert.equal(attached.length, 2);
@@ -630,7 +887,6 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
         controller.activateTool('trend');
         element.dispatch('pointerdown', {{pointerId: 1, clientX: 1, clientY: 1}});
-        element.dispatch('pointerup', {{pointerId: 1, clientX: 1, clientY: 1}});
         keyTarget.dispatch('keydown', {{key: 'Escape', target: {{tagName: 'DIV'}}}});
         assert.equal(controller.activeTool, null);
         assert.equal(controller.store.size, 0);
@@ -650,6 +906,11 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         controller.refresh();
         assert.equal(controller.clearAll(), true);
         assert.equal(controller.store.size, 0);
+        assert.equal(controller.undo(), true);
+        assert.equal(controller.store.size, 2);
+        assert.equal(controller.resetAll(), true);
+        assert.equal(controller.store.size, 0);
+        assert.equal(controller.undo(), false);
         """
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)

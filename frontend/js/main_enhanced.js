@@ -45,6 +45,10 @@ let drawingUiAbortController = null;
 let selectedTrainingMarketType = 'a_share';
 let selectedCryptoInstrument = null;
 let cryptoInstrumentSearchTimer = null;
+let periodSwitchAbortController = null;
+let periodSwitchGeneration = 0;
+let periodSwitchFeedbackTimer = null;
+const PERIOD_LOADING_DELAY_MS = 150;
 const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
 const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
 const CHART_PANEL_MIN_HEIGHTS = { chart: 160, 'volume-chart': 32, 'indicator-chart': 52 };
@@ -253,6 +257,8 @@ function applyIntradaySnapshot(snapshot, options) {
         }, null);
     }
 
+    const instrumentLabel = snapshot.symbol || currentTraining?.symbol || currentTraining?.stock_code;
+    if (instrumentLabel) document.getElementById('stock-name').textContent = instrumentLabel;
     updateIntradayReplayStatus(snapshot);
     syncIntradayActivePeriod(snapshot.active_period);
 
@@ -358,6 +364,22 @@ function showLoading(title = '正在加载', detail = '') {
 
 function hideLoading() {
     document.getElementById('loading-overlay')?.classList.add('hidden');
+}
+
+function beginPeriodSwitchFeedback(period) {
+    if (periodSwitchFeedbackTimer) clearTimeout(periodSwitchFeedbackTimer);
+    periodSwitchFeedbackTimer = setTimeout(() => {
+        document.querySelectorAll('.view-period-btn').forEach((button) => {
+            button.classList.toggle('is-loading', button.dataset.period === period);
+        });
+        setChartWindowStatus('正在切换 ' + formatIntradayPeriodBadge(period) + ' 视图...', 'loading');
+    }, PERIOD_LOADING_DELAY_MS);
+}
+
+function endPeriodSwitchFeedback() {
+    if (periodSwitchFeedbackTimer) clearTimeout(periodSwitchFeedbackTimer);
+    periodSwitchFeedbackTimer = null;
+    document.querySelectorAll('.view-period-btn').forEach((button) => button.classList.remove('is-loading'));
 }
 
 function sleep(ms) {
@@ -1039,9 +1061,24 @@ function setupEventListeners() {
     setOrderType('market');
     document.getElementById('end-training-btn').addEventListener('click', endTraining);
     document.getElementById('reset-training-btn').addEventListener('click', resetTraining);
+    document.getElementById('crypto-end-training-btn')?.addEventListener('click', endTraining);
+    document.getElementById('crypto-reset-training-btn')?.addEventListener('click', resetTraining);
 
     // 技术指标选择
     document.getElementById('indicator-select')?.addEventListener('change', changeIndicator);
+    document.querySelectorAll('[data-crypto-action]').forEach((button) => {
+        button.addEventListener('click', () => selectCryptoOrderAction(button.dataset.cryptoAction));
+    });
+    document.getElementById('toggle-volume-panel-btn')?.addEventListener('click', () => toggleChartPanel('volume-chart'));
+    document.getElementById('toggle-indicator-panel-btn')?.addEventListener('click', () => toggleChartPanel('indicator-chart'));
+    document.getElementById('chart-fullscreen-btn')?.addEventListener('click', toggleChartFullscreen);
+    document.addEventListener('fullscreenchange', () => {
+        document.getElementById('chart-fullscreen-btn')?.classList.toggle(
+            'active',
+            document.fullscreenElement === document.querySelector('.chart-workbench')
+        );
+        requestAnimationFrame(resizeCharts);
+    });
 
     // 筹码分布切换
     document.getElementById('toggle-chip-distribution')?.addEventListener('change', updateChipDistribution);
@@ -1516,6 +1553,7 @@ function toggleToolbarForTraining(isTraining) {
  */
 function resetToMainAppState() {
     const cleanupTrainingId = currentTraining?.id;
+    clearSessionDrawings();
     // 1. 暂停任何正在进行的回放
     if (isPlaying) {
         pausePlayback();
@@ -1592,6 +1630,7 @@ function resetToMainAppState() {
 
     // 5. 重置全局状态变量
     currentTraining = null;
+    syncCryptoWorkspaceMode();
     updatePeriodBadge('daily');
     isPlaying = false;
     trainingSetupReturnScreen = 'main';
@@ -2128,6 +2167,53 @@ function setTrainingMarketType(marketType) {
     }
 }
 
+function syncCryptoWorkspaceMode() {
+    const active = isCryptoMode();
+    document.getElementById('main-app')?.classList.toggle('crypto-training-active', active);
+    document.getElementById('training-interface')?.classList.toggle('crypto-workspace-active', active);
+    document.querySelectorAll('[data-crypto-workspace-only]').forEach((element) => {
+        element.classList.toggle('hidden', !active);
+    });
+    document.querySelectorAll('[data-a-share-workspace-only]').forEach((element) => {
+        element.classList.toggle('hidden', active);
+    });
+}
+
+function selectCryptoOrderAction(action) {
+    const select = document.getElementById('crypto-order-action');
+    if (!select || !['open_long', 'open_short', 'close'].includes(action)) return;
+    select.value = action;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    document.querySelectorAll('[data-crypto-action]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.cryptoAction === action);
+        button.setAttribute('aria-pressed', String(button.dataset.cryptoAction === action));
+    });
+}
+
+function toggleChartPanel(panelId) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+    const collapsed = panel.classList.toggle('panel-collapsed');
+    const button = document.querySelector('[aria-controls="' + panelId + '"]');
+    button?.classList.toggle('active', !collapsed);
+    button?.setAttribute('aria-expanded', String(!collapsed));
+    requestAnimationFrame(() => {
+        applyChartPanelRatios(readChartPanelRatios());
+        resizeCharts();
+    });
+}
+
+async function toggleChartFullscreen() {
+    const workbench = document.querySelector('.chart-workbench');
+    if (!workbench) return;
+    if (document.fullscreenElement === workbench) {
+        await document.exitFullscreen?.();
+    } else {
+        await workbench.requestFullscreen?.();
+    }
+    requestAnimationFrame(resizeCharts);
+}
+
 function renderCryptoInstrumentResults(instruments) {
     const container = document.getElementById('crypto-symbol-results');
     if (!container) return;
@@ -2239,6 +2325,38 @@ function destroyDrawingTools() {
     drawingController = null;
 }
 
+function setDrawingStatus(message = '', state = '') {
+    const element = document.getElementById('drawing-status') || document.getElementById('chart-window-status');
+    if (!element) return;
+    element.textContent = message;
+    element.dataset.state = state;
+}
+
+function setDrawingInteractionState(active) {
+    document.getElementById('chart-panels')?.classList.toggle('drawing-interacting', !!active);
+    chart?.applyOptions?.({
+        handleScroll: !active,
+        handleScale: !active,
+    });
+}
+
+function syncDrawingToolbarState(tool = null) {
+    document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
+        const aliases = { 'long-position': 'long', 'short-position': 'short' };
+        const active = (aliases[button.dataset.drawingTool] || button.dataset.drawingTool) === tool;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+    });
+}
+
+function clearSessionDrawings() {
+    drawingController?.resetAll?.();
+    drawingController?.cancelGesture?.();
+    setDrawingInteractionState(false);
+    syncDrawingToolbarState(null);
+    setDrawingStatus('');
+}
+
 function invokeDrawingAction(action) {
     if (!drawingController) return;
     const methodMap = {
@@ -2334,18 +2452,30 @@ function initializeDrawingTools() {
         series: candlestickSeries,
         element: document.getElementById('chart'),
         bars: latestRenderedKlineData,
+        accountSizeProvider: () => Number(currentTraining?.account?.equity ?? currentTraining?.initial_capital ?? 0),
+        onError: (error) => {
+            setDrawingStatus(error?.message || '画线失败，请在K线区域内重试。', 'error');
+            setDrawingInteractionState(false);
+            syncDrawingToolbarState(null);
+        },
+        onInteractionChange: (active) => setDrawingInteractionState(active),
+        onToolChange: (tool) => syncDrawingToolbarState(tool),
     });
 
     document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
         if (button.dataset.drawingBound === '1') return;
         button.dataset.drawingBound = '1';
         button.addEventListener('click', () => {
-            document.querySelectorAll('[data-drawing-tool]').forEach((item) => item.classList.remove('active'));
-            document.querySelectorAll('[data-drawing-tool]').forEach((item) => item.setAttribute('aria-pressed', 'false'));
-            button.classList.add('active');
-            button.setAttribute('aria-pressed', 'true');
             const toolAliases = { 'long-position': 'long', 'short-position': 'short' };
-            drawingController?.activateTool?.(toolAliases[button.dataset.drawingTool] || button.dataset.drawingTool);
+            const tool = toolAliases[button.dataset.drawingTool] || button.dataset.drawingTool;
+            try {
+                drawingController?.activateTool?.(tool);
+                syncDrawingToolbarState(tool);
+                setDrawingStatus(tool === 'select' ? '选择并拖动已有图形。' : '按住并拖动鼠标创建图形。', 'active');
+            } catch (error) {
+                setDrawingStatus(error?.message || '无法启用画线工具。', 'error');
+                syncDrawingToolbarState(null);
+            }
             document.getElementById('drawing-fibonacci-settings')?.classList.toggle(
                 'hidden', button.dataset.drawingTool !== 'fibonacci'
             );
@@ -2392,6 +2522,14 @@ function setVisibleRangeAll(range) {
     chart?.timeScale().setVisibleLogicalRange(range);
     volumeChart?.timeScale().setVisibleLogicalRange(range);
     indicatorChart?.timeScale().setVisibleLogicalRange(range);
+}
+
+function setVisibleTimeRangeAll(range) {
+    [chart, volumeChart, indicatorChart].forEach((item) => {
+        if (!item) return;
+        if (range) item.timeScale().setVisibleRange(range);
+        else item.timeScale().fitContent();
+    });
 }
 function normalizeChartTime(item) {
     if (!item) return 0;
@@ -2793,6 +2931,68 @@ async function refreshTrainingView(options = {}) {
     await updateChipDistribution();
 }
 
+async function switchCryptoViewPeriod(nextPeriod) {
+    if (currentPeriod === nextPeriod && currentTraining?.id) {
+        updatePeriodBadge(nextPeriod);
+        return;
+    }
+    if (!currentTraining?.id || !chart) {
+        updatePeriodBadge(nextPeriod);
+        return;
+    }
+    periodSwitchAbortController?.abort();
+    periodSwitchAbortController = new AbortController();
+    const requestGeneration = ++periodSwitchGeneration;
+    const visibleRange = chart.timeScale().getVisibleRange?.() || null;
+    beginPeriodSwitchFeedback(nextPeriod);
+    try {
+        const response = await fetch(API_BASE + '/training/' + currentTraining.id + '/period', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                period: nextPeriod,
+                request_id: requestGeneration,
+                range_start: visibleRange?.from ?? null,
+                range_end: visibleRange?.to ?? null,
+            }),
+            signal: periodSwitchAbortController.signal,
+        });
+        if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            throw new Error(errorPayload.error || '切换周期失败: ' + response.status);
+        }
+        const data = await response.json();
+        if (requestGeneration !== periodSwitchGeneration) return;
+        const snapshot = extractIntradaySnapshot(data);
+        applyIntradaySnapshot(snapshot, { fitContent: false });
+        currentTraining.period = nextPeriod;
+        const periodBars = snapshot.kline_data || [];
+        const renderedStart = latestRenderedKlineData[0]?.time ?? null;
+        const renderedEnd = latestRenderedKlineData[latestRenderedKlineData.length - 1]?.time ?? null;
+        chartWindowState = {
+            ...chartWindowState,
+            period: nextPeriod,
+            window_start: periodBars[0]?.time || periodBars[0]?.start_time || chartWindowState.window_start,
+            window_end: periodBars[periodBars.length - 1]?.time || snapshot.current_time || chartWindowState.window_end,
+            kline_data: periodBars,
+            volume_data: snapshot.volume_data || buildIntradayVolumeData(periodBars),
+        };
+        const canRestoreRange = visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)
+            && visibleRange.from >= renderedStart && visibleRange.to <= renderedEnd;
+        requestAnimationFrame(() => {
+            if (canRestoreRange) setVisibleTimeRangeAll(visibleRange);
+            else setVisibleTimeRangeAll(null);
+        });
+        setChartWindowStatus('已切换到 ' + formatIntradayPeriodBadge(nextPeriod) + '。', 'success');
+    } catch (error) {
+        if (error?.name === 'AbortError') return;
+        console.error('切换币圈周期失败:', error);
+        setChartWindowStatus(error.message || '切换币圈周期失败。', 'error');
+    } finally {
+        if (requestGeneration === periodSwitchGeneration) endPeriodSwitchFeedback();
+    }
+}
+
 async function switchViewPeriod(period) {
     const nextPeriod = supportedReplayPeriods().indexOf(period) >= 0 ? period : (period === 'weekly' ? 'weekly' : 'daily');
 
@@ -2815,6 +3015,11 @@ async function switchViewPeriod(period) {
         } finally {
             hideLoading();
         }
+        return;
+    }
+
+    if (isCryptoMode()) {
+        await switchCryptoViewPeriod(nextPeriod);
         return;
     }
 
@@ -2944,6 +3149,7 @@ function startTrainingWithConfig(trainingConfig) {
         });
 
         if (response.ok) {
+            clearSessionDrawings();
             currentTraining = await response.json();
             currentTraining.period = period;
             currentReportData = null;
@@ -3017,6 +3223,8 @@ function showTrainingInterface() {
     }
     document.querySelectorAll('.crypto-view-period').forEach((button) => button.classList.toggle('hidden', !isCryptoMode()));
     document.querySelectorAll('.a-share-view-period').forEach((button) => button.classList.toggle('hidden', isCryptoMode()));
+    syncCryptoWorkspaceMode();
+    if (isCryptoMode()) selectCryptoOrderAction('open_long');
     setTrainingViewOnlyMode(false, { showBackToReport: false });
     updateAccountInfo();
     // 隐藏按钮和标题
@@ -4620,10 +4828,10 @@ function renderCryptoAccount(accountPayload) {
     const available = Number(account.available_balance ?? account.available_cash ?? 0);
     const positionValue = Number(position.notional ?? account.position_value ?? 0);
     const unrealized = Number(position.unrealized_pnl ?? account.unrealized_pnl ?? account.floating_pnl ?? 0);
-    document.getElementById('total-assets').textContent = equity.toLocaleString() + ' USDT';
-    document.getElementById('available-cash').textContent = available.toLocaleString() + ' USDT';
-    document.getElementById('position-value').textContent = positionValue.toLocaleString() + ' USDT';
-    document.getElementById('floating-pnl').textContent = unrealized.toLocaleString() + ' USDT';
+    document.getElementById('crypto-total-assets').textContent = equity.toLocaleString() + ' USDT';
+    document.getElementById('crypto-available-cash').textContent = available.toLocaleString() + ' USDT';
+    document.getElementById('crypto-position-value').textContent = positionValue.toLocaleString() + ' USDT';
+    document.getElementById('crypto-floating-pnl').textContent = unrealized.toLocaleString() + ' USDT';
     document.getElementById('crypto-position-side').textContent = position.side || '空仓';
     document.getElementById('crypto-mark-price').textContent = Number(account.mark_price ?? position.mark_price ?? 0).toLocaleString();
     document.getElementById('crypto-liquidation-price').textContent = position.liquidation_price ? Number(position.liquidation_price).toLocaleString() : '--';
@@ -4714,7 +4922,7 @@ async function updateAccountInfo() {
 
 // 获取并刷新整个交易历史列表
 function renderCryptoTradeHistory(records) {
-    const container = document.getElementById('trade-history');
+    const container = document.getElementById('crypto-trade-history');
     if (!container) return;
     if (!records || records.length === 0) {
         container.innerHTML = '<div class="no-trades">暂无合约成交</div>';
@@ -5004,6 +5212,7 @@ async function endTraining() {
         if (response.ok) {
             const report = await response.json();
             pausePlayback();
+            clearSessionDrawings();
             showReport(report);
         } else {
             const error = await response.json();
@@ -5027,6 +5236,7 @@ async function resetTraining() {
 
         if (response.ok) {
             pausePlayback();
+            clearSessionDrawings();
 
             // === intraday_30m 分支: reset 返回的 snapshot 位于 response.snapshot，
             // 重置后重新渲染并同步 active_period ===

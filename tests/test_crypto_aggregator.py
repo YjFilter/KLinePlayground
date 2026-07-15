@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pandas as pd
 from pandas.core.groupby.generic import DataFrameGroupBy
 
+import backend.crypto.aggregator as aggregator_module
 from backend.crypto.aggregator import AGGREGATED_COLUMNS, aggregate_bars
 
 UTC = timezone.utc
@@ -58,6 +59,20 @@ class CryptoAggregatorTests(unittest.TestCase):
         with patch.object(DataFrameGroupBy, "__iter__", side_effect=AssertionError("group iteration is too slow")):
             result = aggregate_bars(frame, "5m", frame.iloc[-1]["timestamp"])
         self.assertEqual(len(result), 100)
+
+    def test_normalized_base_bars_are_reused_without_reprocessing(self):
+        normalize_base_bars = getattr(aggregator_module, "normalize_base_bars", None)
+        self.assertIsNotNone(normalize_base_bars)
+        frame = make_frame(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 12)
+        frame["timestamp"] = frame["timestamp"].astype(str)
+        frame["close"] = frame["close"].astype(str)
+
+        normalized = normalize_base_bars(frame)
+        reused = normalize_base_bars(normalized)
+
+        self.assertIs(reused, normalized)
+        self.assertIsInstance(normalized["timestamp"].dtype, pd.DatetimeTZDtype)
+        self.assertTrue(pd.api.types.is_float_dtype(normalized["close"].dtype))
 
 if __name__ == "__main__":
     unittest.main()

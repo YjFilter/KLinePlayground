@@ -22,14 +22,32 @@ _PERIOD_MINUTES = {
     CryptoPeriod.WEEKLY: 10080,
 }
 
+_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "turnover")
+_NORMALIZED_ATTR = "crypto_base_bars_normalized"
+
+
+def normalize_base_bars(base_bars: pd.DataFrame) -> pd.DataFrame:
+    if base_bars.attrs.get(_NORMALIZED_ATTR):
+        return base_bars
+    frame = base_bars.copy()
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    for column in _NUMERIC_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = 0.0
+        else:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
+    frame.attrs[_NORMALIZED_ATTR] = True
+    return frame
+
 def aggregate_bars(base_bars: pd.DataFrame, period: CryptoPeriod | str, current_time: datetime) -> pd.DataFrame:
     replay_period = CryptoPeriod.parse(period)
     if base_bars.empty:
         return pd.DataFrame(columns=AGGREGATED_COLUMNS)
-    frame = base_bars.copy()
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+    frame = normalize_base_bars(base_bars)
     current = pd.Timestamp(utc_datetime(current_time))
-    revealed = frame.loc[frame["timestamp"] <= current].sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+    revealed_count = int(frame["timestamp"].searchsorted(current, side="right"))
+    revealed = frame.iloc[:revealed_count]
     if revealed.empty:
         return pd.DataFrame(columns=AGGREGATED_COLUMNS)
     minutes = _PERIOD_MINUTES[replay_period]
@@ -48,11 +66,7 @@ def aggregate_bars(base_bars: pd.DataFrame, period: CryptoPeriod | str, current_
             "complete": True,
         })
         return result.reset_index(drop=True).loc[:, AGGREGATED_COLUMNS]
-    for column in ("open", "high", "low", "close", "volume", "turnover"):
-        if column not in revealed.columns:
-            revealed[column] = 0.0
-        else:
-            revealed[column] = pd.to_numeric(revealed[column], errors="coerce").astype(float)
+    revealed = revealed.copy()
     if replay_period == CryptoPeriod.WEEKLY:
         day_start = revealed["timestamp"].dt.normalize()
         revealed["bucket"] = day_start - pd.to_timedelta(revealed["timestamp"].dt.weekday, unit="D")

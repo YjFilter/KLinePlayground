@@ -22,6 +22,9 @@
   ]);
 
   let nextDrawingId = 1;
+  const SNAP_DISTANCE_PX = 8;
+  const DEFAULT_RISK_REWARD_RATIO = 1.5;
+  const DRAFT_DRAWING_ID = '__drawing-draft__';
 
   function assertFinite(value, name) {
     if (!Number.isFinite(value)) {
@@ -184,6 +187,9 @@
     } else if (Number.isFinite(config.accountSize) && Number.isFinite(config.accountRiskPercent)) {
       result.accountRiskAmount = config.accountSize * config.accountRiskPercent / 100;
     }
+    if (Number.isFinite(config.accountSize)) result.accountSize = config.accountSize;
+    const positionSize = Number.isFinite(config.positionSize) ? config.positionSize : config.quantity;
+    if (Number.isFinite(positionSize)) result.positionSize = positionSize;
     return result;
   }
 
@@ -199,7 +205,9 @@
     const modelOptions = normalizedType === 'fibonacci'
       ? normalizeFibonacciSettings(config.options)
       : clone(config.options || {});
-    for (const key of ['accountRiskAmount', 'accountSize', 'accountRiskPercent']) {
+    for (const key of [
+      'accountRiskAmount', 'accountSize', 'accountRiskPercent', 'positionSize', 'quantity'
+    ]) {
       if (Number.isFinite(config[key])) modelOptions[key] = config[key];
     }
     const model = {
@@ -316,6 +324,14 @@
       return true;
     }
 
+    reset() {
+      const changed = this._drawings.length > 0 || this._undoStack.length > 0 || this._redoStack.length > 0;
+      this._drawings = [];
+      this._undoStack = [];
+      this._redoStack = [];
+      return changed;
+    }
+
     undo() {
       if (this._undoStack.length === 0) return false;
       this._redoStack.push(this.snapshot());
@@ -380,6 +396,16 @@
     context.moveTo(start.x, start.y);
     context.lineTo(end.x, end.y);
     context.stroke();
+  }
+
+  function drawLabel(context, text, x, y, color, ratioX, ratioY) {
+    const paddingX = 4 * ratioX;
+    const height = 18 * ratioY;
+    const width = context.measureText(text).width + (paddingX * 2);
+    context.fillStyle = color;
+    context.fillRect(x, y - height, width, height);
+    context.fillStyle = '#ffffff';
+    context.fillText(text, x + paddingX, y - (4 * ratioY));
   }
 
   function applyLineStyle(context, lineStyle, ratio) {
@@ -541,13 +567,53 @@
             model.anchors[2].price,
             model.options
           );
-          context.fillStyle = strokeColor;
-          context.fillText(`Entry ${metrics.entry.toFixed(2)}`, entry.x, entry.y);
-          context.fillText(`Stop ${metrics.stop.toFixed(2)} (${metrics.riskPercent.toFixed(2)}%)`, entry.x, stop.y);
-          context.fillText(`Target ${metrics.target.toFixed(2)} (${metrics.rewardPercent.toFixed(2)}%)`, entry.x, target.y);
-          context.fillText(`R:R ${metrics.rewardRiskRatio.toFixed(2)}`, entry.x, (stop.y + target.y) / 2);
+          const labelX = entry.x + (4 * ratioX);
+          drawLabel(context, `入场 ${metrics.entry.toFixed(2)}`, labelX, entry.y, '#2962ff', ratioX, ratioY);
+          drawLabel(
+            context,
+            `止损 ${metrics.stop.toFixed(2)} (${metrics.riskPercent.toFixed(2)}%)`,
+            labelX,
+            stop.y,
+            '#ef5350',
+            ratioX,
+            ratioY
+          );
+          drawLabel(
+            context,
+            `止盈 ${metrics.target.toFixed(2)} (${metrics.rewardPercent.toFixed(2)}%)`,
+            labelX,
+            target.y,
+            '#26a69a',
+            ratioX,
+            ratioY
+          );
+          const centerY = (stop.y + target.y) / 2;
+          drawLabel(
+            context,
+            `盈亏比 ${metrics.rewardRiskRatio.toFixed(2)}`,
+            labelX,
+            centerY,
+            '#7c4dff',
+            ratioX,
+            ratioY
+          );
+          if (Number.isFinite(metrics.accountSize)) {
+            drawLabel(
+              context, `账户 ${metrics.accountSize.toFixed(2)}`, labelX, centerY + (20 * ratioY),
+              '#ff9800', ratioX, ratioY
+            );
+          }
+          if (Number.isFinite(metrics.positionSize)) {
+            drawLabel(
+              context, `仓量 ${metrics.positionSize}`, labelX, centerY + (40 * ratioY),
+              '#00897b', ratioX, ratioY
+            );
+          }
           if (Number.isFinite(metrics.accountRiskAmount)) {
-            context.fillText(`Risk ${metrics.accountRiskAmount.toFixed(2)}`, entry.x, (entry.y + stop.y) / 2);
+            drawLabel(
+              context, `风险 ${metrics.accountRiskAmount.toFixed(2)}`, labelX, centerY + (60 * ratioY),
+              '#f4511e', ratioX, ratioY
+            );
           }
         } else {
           drawLine(context, first, second);
@@ -614,7 +680,6 @@
     }
 
     setBars(bars) {
-      if (this._model.type !== 'ruler') return false;
       const nextBars = Array.isArray(bars) ? bars : [];
       if (this._bars === nextBars) return false;
       this._bars = nextBars;
@@ -623,7 +688,7 @@
     }
 
     usesBars() {
-      return this._model.type === 'ruler';
+      return true;
     }
 
     requestUpdate() {
@@ -657,7 +722,17 @@
       if (!this._chart || !this._series) return [];
       const timeScale = this._chart.timeScale();
       return this._model.anchors.map((anchor) => {
-        const x = timeScale.timeToCoordinate(anchor.time);
+        let projectedTime = anchor.time;
+        let x = timeScale.timeToCoordinate(projectedTime);
+        if (!Number.isFinite(x) && this._bars.length) {
+          const nearest = this._bars.reduce((best, bar) => (
+            !best || Math.abs(bar.time - anchor.time) < Math.abs(best.time - anchor.time) ? bar : best
+          ), null);
+          if (nearest) {
+            projectedTime = nearest.time;
+            x = timeScale.timeToCoordinate(projectedTime);
+          }
+        }
         const y = this._series.priceToCoordinate(anchor.price);
         return Number.isFinite(x) && Number.isFinite(y) ? {x, y} : null;
       });
@@ -799,11 +874,32 @@
         || (typeof document !== 'undefined' ? document : this.element);
       this.store = parameters.store || new DrawingStore();
       this.onError = parameters.onError || null;
+      this.onInteractionStateChange = parameters.onInteractionStateChange
+        || parameters.onInteractionChange
+        || null;
+      this.onToolChange = parameters.onToolChange || null;
+      this.accountSizeProvider = parameters.accountSizeProvider || null;
+      this.accountRiskPercent = Number.isFinite(parameters.accountRiskPercent)
+        ? parameters.accountRiskPercent
+        : 1;
+      const animationHost = typeof globalThis !== 'undefined' ? globalThis : null;
+      this._requestAnimationFrame = parameters.requestAnimationFrame
+        || (animationHost && typeof animationHost.requestAnimationFrame === 'function'
+          ? animationHost.requestAnimationFrame.bind(animationHost)
+          : (callback) => { callback(); return null; });
+      this._cancelAnimationFrame = parameters.cancelAnimationFrame
+        || (animationHost && typeof animationHost.cancelAnimationFrame === 'function'
+          ? animationHost.cancelAnimationFrame.bind(animationHost)
+          : () => {});
       this.activeTool = null;
       this.selectedId = null;
       this._draftAnchors = [];
+      this._draftPrimitive = null;
       this._gesture = null;
+      this._interactionType = null;
       this._capturedPointerId = null;
+      this._pendingPointerMove = null;
+      this._pointerMoveFrame = null;
       this._bars = clone(Array.isArray(parameters.bars) ? parameters.bars : []);
       this._primitives = new Map();
       this._boundPointerDown = (event) => this._onPointerDown(event);
@@ -826,6 +922,7 @@
       this.cancelGesture();
       this.activeTool = tool;
       if (tool !== 'select') this.select(null);
+      if (this.onToolChange) this.onToolChange(tool);
       return tool;
     }
 
@@ -850,11 +947,11 @@
         if (!primitive) {
           primitive = new DrawingPrimitive(viewModel);
           this._primitives.set(model.id, primitive);
-          if (model.type === 'ruler') primitive.setBars(this._bars);
+          primitive.setBars(this._bars);
           this._attachPrimitive(primitive);
         } else {
           primitive.setModel(viewModel);
-          if (model.type === 'ruler') primitive.setBars(this._bars);
+          primitive.setBars(this._bars);
         }
       }
     }
@@ -864,12 +961,16 @@
       for (const primitive of this._primitives.values()) {
         if (primitive.usesBars()) primitive.setBars(this._bars);
       }
+      if (this._draftPrimitive && this._draftPrimitive.usesBars()) {
+        this._draftPrimitive.setBars(this._bars);
+      }
       return this._bars.length;
     }
 
     requestUpdate() {
       for (const primitive of this._primitives.values()) primitive.requestUpdate();
-      return this._primitives.size;
+      if (this._draftPrimitive) this._draftPrimitive.requestUpdate();
+      return this._primitives.size + (this._draftPrimitive ? 1 : 0);
     }
 
     getRulerMetrics(id) {
@@ -887,9 +988,11 @@
         throw new TypeError('chart and series are required');
       }
       for (const primitive of this._primitives.values()) this._detachPrimitive(primitive);
+      if (this._draftPrimitive) this._detachPrimitive(this._draftPrimitive);
       this.chart = parameters.chart;
       this.series = parameters.series;
       for (const primitive of this._primitives.values()) this._attachPrimitive(primitive);
+      if (this._draftPrimitive) this._attachPrimitive(this._draftPrimitive);
       this.refresh();
     }
 
@@ -991,6 +1094,14 @@
       return changed;
     }
 
+    resetAll() {
+      const changed = this.store.reset();
+      this.selectedId = null;
+      this.cancelGesture();
+      this.refresh();
+      return changed;
+    }
+
     toggleLock() {
       if (!this.selectedId) return false;
       const updated = this.store.update(this.selectedId, (model) => ({...model, locked: !model.locked}));
@@ -1020,9 +1131,14 @@
     }
 
     cancelGesture() {
+      const gesture = this._gesture;
+      this._cancelPendingPointerMove();
+      this._clearDraftPrimitive();
       this._draftAnchors = [];
       this._gesture = null;
       this._releasePointerCapture();
+      if (gesture && gesture.type !== 'create') this.refresh();
+      if (gesture) this._setInteractionState(false, gesture.type);
     }
 
     destroy() {
@@ -1059,10 +1175,173 @@
       return levels.findIndex((level) => level.value === indexOrValue);
     }
 
-    _anchorFromPoint(point) {
-      const time = this.chart.timeScale().coordinateToTime(point.x);
-      const price = this.series.coordinateToPrice(point.y);
-      return normalizeAnchor({time, price});
+    _safePointerEvent(event) {
+      try {
+        return {...normalizePointerEvent(event, this.element), altKey: Boolean(event && event.altKey)};
+      } catch (error) {
+        return null;
+      }
+    }
+
+    _setInteractionState(active, type) {
+      const nextType = active ? type : null;
+      if (this._interactionType === nextType) return;
+      this._interactionType = nextType;
+      if (this.onInteractionStateChange) {
+        this.onInteractionStateChange(Boolean(active), {
+          type,
+          tool: this.activeTool,
+          drawingId: this.selectedId,
+        });
+      }
+    }
+
+    _cancelPendingPointerMove() {
+      if (this._pointerMoveFrame != null) this._cancelAnimationFrame(this._pointerMoveFrame);
+      this._pointerMoveFrame = null;
+      this._pendingPointerMove = null;
+    }
+
+    _clearDraftPrimitive() {
+      if (!this._draftPrimitive) return;
+      this._detachPrimitive(this._draftPrimitive);
+      this._draftPrimitive = null;
+    }
+
+    _setDraftModel(model) {
+      if (!this._draftPrimitive) {
+        this._draftPrimitive = new DrawingPrimitive(model);
+        this._draftPrimitive.setBars(this._bars);
+        this._attachPrimitive(this._draftPrimitive);
+      } else {
+        this._draftPrimitive.setModel(model);
+        this._draftPrimitive.setBars(this._bars);
+      }
+    }
+
+    _createModelForTool(tool, anchors, id) {
+      const normalizedType = normalizeDrawingType(tool);
+      const config = {id, selected: Boolean(id)};
+      if (normalizedType === 'risk-reward') config.side = 'long';
+      if (normalizedType === 'long' || normalizedType === 'short'
+          || normalizedType === 'risk-reward') {
+        let accountSize = NaN;
+        if (this.accountSizeProvider) {
+          try {
+            accountSize = Number(this.accountSizeProvider());
+          } catch (error) {
+            accountSize = NaN;
+          }
+        }
+        const riskPerUnit = anchors.length >= 2
+          ? Math.abs(anchors[0].price - anchors[1].price)
+          : NaN;
+        if (Number.isFinite(accountSize) && accountSize > 0 && Number.isFinite(riskPerUnit)
+            && riskPerUnit > 0) {
+          const accountRiskAmount = accountSize * this.accountRiskPercent / 100;
+          config.accountSize = accountSize;
+          config.accountRiskPercent = this.accountRiskPercent;
+          config.accountRiskAmount = accountRiskAmount;
+          config.positionSize = accountRiskAmount / riskPerUnit;
+        }
+      }
+      return createDrawingModel(tool, anchors, config);
+    }
+
+    _riskAnchors(tool, start, end) {
+      const normalizedType = normalizeDrawingType(tool);
+      const side = normalizedType === 'risk-reward' ? 'long' : normalizedType;
+      const delta = end.price - start.price;
+      if (!Number.isFinite(delta) || delta === 0) return null;
+      let stopPrice;
+      let targetPrice;
+      if (side === 'long') {
+        if (delta < 0) {
+          stopPrice = end.price;
+          targetPrice = start.price + (Math.abs(delta) * DEFAULT_RISK_REWARD_RATIO);
+        } else {
+          targetPrice = end.price;
+          stopPrice = start.price - (Math.abs(delta) / DEFAULT_RISK_REWARD_RATIO);
+        }
+      } else if (delta > 0) {
+        stopPrice = end.price;
+        targetPrice = start.price - (Math.abs(delta) * DEFAULT_RISK_REWARD_RATIO);
+      } else {
+        targetPrice = end.price;
+        stopPrice = start.price + (Math.abs(delta) / DEFAULT_RISK_REWARD_RATIO);
+      }
+      return [
+        clone(start),
+        {time: end.time, price: stopPrice},
+        {time: end.time, price: targetPrice},
+      ];
+    }
+
+    _creationAnchors(tool, start, end) {
+      const normalizedType = normalizeDrawingType(tool);
+      if (normalizedType === 'horizontal' || normalizedType === 'text') return [clone(end)];
+      if (normalizedType === 'long' || normalizedType === 'short'
+          || normalizedType === 'risk-reward') {
+        return this._riskAnchors(tool, start, end);
+      }
+      if (start.time === end.time && start.price === end.price) return null;
+      return [clone(start), clone(end)];
+    }
+
+    _defaultCreationAnchors(tool, anchor) {
+      const normalizedType = normalizeDrawingType(tool);
+      if (normalizedType === 'long' || normalizedType === 'short'
+          || normalizedType === 'risk-reward') {
+        const side = normalizedType === 'risk-reward' ? 'long' : normalizedType;
+        const offset = Math.max(Math.abs(anchor.price) * 0.001, 0.000001);
+        const end = {
+          time: anchor.time,
+          price: side === 'long' ? anchor.price - offset : anchor.price + offset,
+        };
+        return this._riskAnchors(tool, anchor, end);
+      }
+      if (normalizedType === 'horizontal' || normalizedType === 'text') return [clone(anchor)];
+      return [clone(anchor), clone(anchor)];
+    }
+
+    _anchorFromPoint(point, altKey) {
+      const timeScale = this.chart.timeScale();
+      let time = timeScale.coordinateToTime(point.x);
+      let price = this.series.coordinateToPrice(point.y);
+      if (!altKey && Array.isArray(this._bars) && this._bars.length) {
+        let snapBar = null;
+        let snapDistance = Infinity;
+        for (const bar of this._bars) {
+          const barX = timeScale.timeToCoordinate(bar.time);
+          if (!Number.isFinite(barX)) continue;
+          const distance = Math.abs(point.x - barX);
+          if (distance <= SNAP_DISTANCE_PX && distance < snapDistance) {
+            snapBar = bar;
+            snapDistance = distance;
+          }
+        }
+        if (snapBar) {
+          time = snapBar.time;
+          let snapPrice = null;
+          let priceDistance = Infinity;
+          for (const key of ['open', 'high', 'low', 'close']) {
+            if (!Number.isFinite(snapBar[key])) continue;
+            const coordinate = this.series.priceToCoordinate(snapBar[key]);
+            if (!Number.isFinite(coordinate)) continue;
+            const distance = Math.abs(point.y - coordinate);
+            if (distance <= SNAP_DISTANCE_PX && distance < priceDistance) {
+              snapPrice = snapBar[key];
+              priceDistance = distance;
+            }
+          }
+          if (snapPrice != null) price = snapPrice;
+        }
+      }
+      try {
+        return normalizeAnchor({time, price});
+      } catch (error) {
+        return null;
+      }
     }
 
     _capturePointer(pointerId) {
@@ -1085,11 +1364,29 @@
     }
 
     _onPointerDown(event) {
-      const point = normalizePointerEvent(event, this.element);
+      const point = this._safePointerEvent(event);
+      if (!point) return;
       if (this.activeTool && this.activeTool !== 'select') {
+        const anchor = this._anchorFromPoint(point, point.altKey);
+        if (!anchor) return;
+        try {
+          const anchors = this._defaultCreationAnchors(this.activeTool, anchor);
+          const preview = this._createModelForTool(this.activeTool, anchors, DRAFT_DRAWING_ID);
+          this._gesture = {
+            type: 'create',
+            tool: this.activeTool,
+            startAnchor: anchor,
+            preview,
+            invalid: false,
+          };
+          this._setDraftModel(preview);
+        } catch (error) {
+          if (this.onError) this.onError(error);
+          return;
+        }
         if (event.preventDefault) event.preventDefault();
         this._capturePointer(point.pointerId);
-        this._gesture = {type: 'create', point};
+        this._setInteractionState(true, 'create');
         return;
       }
       const hit = this._hitTest(point.x, point.y);
@@ -1112,17 +1409,42 @@
         startPoint: point,
         original: model,
         preview: model,
+        invalid: false,
       };
+      this._setInteractionState(true, this._gesture.type);
     }
 
-    _onPointerMove(event) {
-      if (!this._gesture || this._gesture.type === 'create') return;
-      const point = normalizePointerEvent(event, this.element);
+    _processPointerMove(point) {
       const gesture = this._gesture;
+      if (!gesture) return;
+      if (gesture.type === 'create') {
+        const endAnchor = this._anchorFromPoint(point, point.altKey);
+        const anchors = endAnchor
+          ? this._creationAnchors(gesture.tool, gesture.startAnchor, endAnchor)
+          : null;
+        if (!anchors) {
+          gesture.invalid = true;
+          return;
+        }
+        try {
+          const preview = this._createModelForTool(gesture.tool, anchors, DRAFT_DRAWING_ID);
+          gesture.invalid = false;
+          gesture.preview = preview;
+          this._setDraftModel(preview);
+        } catch (error) {
+          gesture.invalid = true;
+        }
+        return;
+      }
       let anchors;
       if (gesture.type === 'anchor') {
+        const movedAnchor = this._anchorFromPoint(point, point.altKey);
+        if (!movedAnchor) {
+          gesture.invalid = true;
+          return;
+        }
         anchors = gesture.original.anchors.map((anchor, index) => (
-          index === gesture.anchorIndex ? this._anchorFromPoint(point) : clone(anchor)
+          index === gesture.anchorIndex ? movedAnchor : clone(anchor)
         ));
       } else {
         const deltaX = point.x - gesture.startPoint.x;
@@ -1131,7 +1453,10 @@
           const originalX = this.chart.timeScale().timeToCoordinate(anchor.time);
           const originalY = this.series.priceToCoordinate(anchor.price);
           if (!Number.isFinite(originalX) || !Number.isFinite(originalY)) return clone(anchor);
-          return this._anchorFromPoint({x: originalX + deltaX, y: originalY + deltaY});
+          return this._anchorFromPoint(
+            {x: originalX + deltaX, y: originalY + deltaY},
+            point.altKey
+          ) || clone(anchor);
         });
       }
       const candidate = {...gesture.original, anchors};
@@ -1139,38 +1464,54 @@
         serializeDrawing(candidate);
       } catch (error) {
         gesture.invalid = true;
-        if (event.preventDefault) event.preventDefault();
         return;
       }
       gesture.invalid = false;
       gesture.preview = candidate;
       const primitive = this._primitives.get(gesture.original.id);
       if (primitive) primitive.setModel({...gesture.preview, selected: true});
+    }
+
+    _onPointerMove(event) {
+      if (!this._gesture) return;
+      const point = this._safePointerEvent(event);
+      if (!point) return;
+      this._pendingPointerMove = point;
+      if (this._pointerMoveFrame == null) {
+        let completedSynchronously = false;
+        const frame = this._requestAnimationFrame(() => {
+          completedSynchronously = true;
+          this._pointerMoveFrame = null;
+          const pending = this._pendingPointerMove;
+          this._pendingPointerMove = null;
+          if (pending) this._processPointerMove(pending);
+        });
+        this._pointerMoveFrame = completedSynchronously ? null : frame;
+      }
       if (event.preventDefault) event.preventDefault();
     }
 
     _onPointerUp(event) {
       const gesture = this._gesture;
       if (!gesture) return;
-      const point = normalizePointerEvent(event, this.element);
-      if (gesture && gesture.type === 'create') {
-        this._draftAnchors.push(this._anchorFromPoint(point));
-        const required = TOOL_POINT_COUNTS[this.activeTool];
-        if (this._draftAnchors.length === required) {
+      const point = this._safePointerEvent(event);
+      this._cancelPendingPointerMove();
+      if (point) this._processPointerMove(point);
+      if (gesture.type === 'create') {
+        if (!gesture.invalid && gesture.preview && point) {
           try {
-            const model = createDrawingModel(this.activeTool, this._draftAnchors);
+            const model = this._createModelForTool(gesture.tool, gesture.preview.anchors);
             this.store.add(model);
             this.selectedId = model.id;
-            this.activeTool = null;
-            this._draftAnchors = [];
-            this.refresh();
           } catch (error) {
-            this._draftAnchors = [];
-            this.activeTool = null;
             if (this.onError) this.onError(error);
           }
         }
-      } else if (gesture && (gesture.type === 'anchor' || gesture.type === 'body')) {
+        this.activeTool = null;
+        if (this.onToolChange) this.onToolChange(null);
+        this._clearDraftPrimitive();
+        this.refresh();
+      } else if (gesture.type === 'anchor' || gesture.type === 'body') {
         if (!gesture.invalid
             && JSON.stringify(gesture.preview.anchors) !== JSON.stringify(gesture.original.anchors)) {
           this.store.update(gesture.original.id, gesture.preview);
@@ -1179,12 +1520,12 @@
       }
       this._gesture = null;
       this._releasePointerCapture();
+      this._setInteractionState(false, gesture.type);
       if (event.preventDefault) event.preventDefault();
     }
 
     _onPointerCancel(event) {
-      this._gesture = null;
-      this._releasePointerCapture();
+      this.cancelGesture();
       if (event && event.preventDefault) event.preventDefault();
     }
 
@@ -1207,6 +1548,7 @@
       if (key === 'escape') {
         this.cancelGesture();
         this.activeTool = null;
+        if (this.onToolChange) this.onToolChange(null);
         this.select(null);
       } else if (key === 'delete' || key === 'backspace') {
         this.deleteSelected();
@@ -1225,6 +1567,8 @@
 
   return {
     DEFAULT_FIBONACCI_LEVELS,
+    SNAP_DISTANCE_PX,
+    DEFAULT_RISK_REWARD_RATIO,
     resetFibonacciLevels,
     calculateFibonacciLevels,
     calculateRulerMetrics,

@@ -287,7 +287,7 @@ class LegacyBranchPreservedTests(_StaticTestCase):
 
     def test_legacy_switch_view_period_present(self):
         idx = self.js.find("async function switchViewPeriod")
-        body = self.js[idx:idx + 3000]
+        body = self.js[idx:idx + 4500]
         self.assertIn("legacy_daily", body,
                       "switchViewPeriod 必须保留 legacy_daily 分支")
         self.assertIn("refreshTrainingView", body,

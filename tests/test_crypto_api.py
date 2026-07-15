@@ -42,6 +42,28 @@ class _FakeCryptoSession:
         }
 
 
+class _FakePeriodSession:
+    def __init__(self):
+        self.period = "5m"
+        self.max_bars = None
+
+    def snapshot(self, *, max_bars=None, range_start=None, range_end=None):
+        self.max_bars = max_bars
+        return {
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "active_period": self.period,
+            "period": self.period,
+            "current_time": "2025-01-01 00:00:00",
+            "kline_data": [],
+            "volume_data": [],
+        }
+
+    def set_period(self, period, *, max_bars=None, range_start=None, range_end=None):
+        self.period = period
+        return self.snapshot(max_bars=max_bars, range_start=range_start, range_end=range_end)
+
+
 def _bundle(source="binance"):
     start = datetime(2024, 12, 2, tzinfo=timezone.utc)
     bars = pd.DataFrame([{
@@ -191,6 +213,36 @@ class CryptoAPITests(unittest.TestCase):
         self.assertEqual(response.get_json()["symbol"], "BTCUSDT")
         app_module.active_trainings.pop("retry-test", None)
 
+    def test_stale_crypto_period_request_cannot_overwrite_newer_period(self):
+        training_id = "period-order-test"
+        session = _FakePeriodSession()
+        app_module.active_trainings[training_id] = {
+            "id": training_id,
+            "user": "tester",
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "period": "5m",
+            "crypto_session": session,
+        }
+        try:
+            with patch.object(app_module, "_persist_crypto_period") as persist:
+                newer = self.client.post(
+                    f"/api/training/{training_id}/period",
+                    json={"period": "1h", "request_id": 2},
+                )
+                stale = self.client.post(
+                    f"/api/training/{training_id}/period",
+                    json={"period": "15m", "request_id": 1},
+                )
+
+            self.assertEqual(newer.status_code, 200)
+            self.assertEqual(stale.status_code, 200)
+            self.assertEqual(session.period, "1h")
+            self.assertEqual(app_module.active_trainings[training_id]["period"], "1h")
+            persist.assert_called_once_with(app_module.active_trainings[training_id], "1h")
+        finally:
+            app_module.active_trainings.pop(training_id, None)
+
     def test_completed_crypto_history_uses_crypto_chart_window(self):
         report = {
             "market_type": "crypto_perpetual",
@@ -221,6 +273,45 @@ class CryptoAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_json())
         self.assertEqual(response.get_json()["market_type"], "crypto_perpetual")
         chart_service.assert_called_once()
+
+    def test_crypto_period_switch_skips_full_checkpoint_and_persists_period_only(self):
+        training_id = "period-cache-test"
+        app_module.active_trainings[training_id] = {
+            "id": training_id,
+            "user": "tester",
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "period": "5m",
+            "crypto_session": _FakePeriodSession(),
+        }
+        try:
+            with patch.object(
+                app_module,
+                "_checkpoint_crypto_futures",
+                side_effect=AssertionError("period switch must not export the full runtime"),
+            ), patch(
+                "backend.crypto.persistence.CryptoFuturesRepository.update_runtime_period",
+                create=True,
+            ) as update_runtime_period, patch.object(
+                app_module.user_manager.history_manager,
+                "_get_user_db_path",
+                return_value=":memory:",
+            ):
+                response = self.client.post(
+                    f"/api/training/{training_id}/period",
+                    json={"period": "15m"},
+                )
+
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertEqual(response.get_json()["active_period"], "15m")
+            self.assertEqual(app_module.active_trainings[training_id]["period"], "15m")
+            self.assertEqual(
+                app_module.active_trainings[training_id]["crypto_session"].max_bars,
+                app_module.CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT,
+            )
+            update_runtime_period.assert_called_once_with(training_id, "15m")
+        finally:
+            app_module.active_trainings.pop(training_id, None)
 
 
 if __name__ == "__main__":

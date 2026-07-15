@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from .futures_models import ZERO, decimal_value
+from .models import CryptoPeriod
 
 
 SESSION_METADATA_COLUMNS = {
@@ -97,9 +98,10 @@ def migrate_crypto_futures_schema(target: str | Path | sqlite3.Connection) -> No
 
 
 class CryptoFuturesRepository:
-    def __init__(self, target: str | Path | sqlite3.Connection) -> None:
+    def __init__(self, target: str | Path | sqlite3.Connection, *, migrate: bool = True) -> None:
         self.target = target
-        migrate_crypto_futures_schema(target)
+        if migrate:
+            migrate_crypto_futures_schema(target)
 
     def save_session_metadata(self, session_id: str, **metadata: Any) -> None:
         unknown = sorted(set(metadata) - set(SESSION_METADATA_COLUMNS))
@@ -204,6 +206,25 @@ class CryptoFuturesRepository:
                 """,
                 (session_id, encoded),
             )
+            connection.commit()
+
+    def update_runtime_period(self, session_id: str, period: str) -> None:
+        normalized = CryptoPeriod.parse(period).value
+        with _connection(self.target) as (connection, _owned):
+            cursor = connection.execute(
+                """
+                UPDATE crypto_futures_runtime
+                SET payload = json_set(
+                    payload,
+                    '$.training.period', ?,
+                    '$.clock.active_period', ?
+                ), updated_at = CURRENT_TIMESTAMP
+                WHERE session_id = ?
+                """,
+                (normalized, normalized, session_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("no persisted futures runtime state")
             connection.commit()
 
     def load_runtime_state(self, session_id: str) -> dict[str, Any] | None:

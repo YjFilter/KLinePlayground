@@ -6,6 +6,7 @@ import json
 import base64
 import random
 import requests
+from threading import Lock
 from datetime import datetime, timedelta, timezone
 import sqlite3
 import pandas as pd
@@ -402,13 +403,41 @@ def _crypto_next(training):
     })
 
 
-def _crypto_set_period(training, period):
+CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT = 300
+
+
+def _crypto_set_period(training, period, request_id=None, range_start=None, range_end=None):
     if period not in VALID_CRYPTO_PERIODS:
         return jsonify({'error': f'unsupported crypto period: {period}'}), 400
-    training['period'] = period
-    snapshot = training['crypto_session'].set_period(period)
-    _checkpoint_crypto_futures(training)
-    return jsonify(snapshot)
+    lock = training.setdefault('_period_switch_lock', Lock())
+    with lock:
+        latest_request_id = training.get('_period_request_id', -1)
+        if request_id is not None and request_id < latest_request_id:
+            return jsonify(training['crypto_session'].snapshot(
+                max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT,
+                range_start=range_start, range_end=range_end,
+            ))
+        if request_id is not None:
+            training['_period_request_id'] = request_id
+        training['period'] = period
+        snapshot = training['crypto_session'].set_period(
+            period, max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT,
+            range_start=range_start, range_end=range_end,
+        )
+        _persist_crypto_period(training, period)
+        return jsonify(snapshot)
+
+
+def _persist_crypto_period(training, period):
+    from backend.crypto.persistence import CryptoFuturesRepository
+
+    training_id = training.get('id')
+    user = training.get('user')
+    if not training_id or not user:
+        return
+    db_path = user_manager.history_manager._get_user_db_path(user)
+    repository = CryptoFuturesRepository(db_path, migrate=False)
+    repository.update_runtime_period(training_id, period)
 
 
 def _crypto_reset(training):
@@ -2069,7 +2098,19 @@ def switch_period(training_id):
         if not period:
             return jsonify({'error': '缺少 period 参数'}), 400
         if _is_crypto_session(training):
-            return _crypto_set_period(training, period)
+            request_id = data.get('request_id')
+            if request_id is not None:
+                request_id = int(request_id)
+            range_start = data.get('range_start')
+            range_end = data.get('range_end')
+            if range_start is not None:
+                range_start = datetime.fromtimestamp(float(range_start), tz=timezone.utc)
+            if range_end is not None:
+                range_end = datetime.fromtimestamp(float(range_end), tz=timezone.utc)
+            return _crypto_set_period(
+                training, period, request_id=request_id,
+                range_start=range_start, range_end=range_end,
+            )
         if not _is_intraday_session(training):
             return jsonify({'error': '该会话不支持周期切换 (仅 intraday_30m 模式)'}), 400
 

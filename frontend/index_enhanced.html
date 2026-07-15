@@ -431,22 +431,29 @@
 
             <main class="chart-container chart-workbench" style="position: relative;">
                 <div class="chart-header">
-                    <div class="stock-info">
-                        <span id="stock-name">股票名称</span>
-                        <span id="current-period" class="period-badge">日K</span>
-                        <span id="current-date">当前日期</span>
-                        <span id="current-price">当前价格</span>
-                    </div>
-                    <div class="chart-actions">
-                        <div class="view-period-switch">
-                            <button class="view-period-btn crypto-view-period hidden" data-period="5m">5分钟</button>
-                            <button class="view-period-btn crypto-view-period hidden" data-period="15m">15分钟</button>
-                            <button class="view-period-btn shared-view-period" data-period="30m">30分钟</button>
-                            <button class="view-period-btn crypto-view-period hidden" data-period="1h">1小时</button>
-                            <button class="view-period-btn a-share-view-period" data-period="4h_session">4小时</button>
-                            <button class="view-period-btn crypto-view-period hidden" data-period="4h">4小时</button>
-                            <button class="view-period-btn shared-view-period active" data-period="daily">日线</button>
-                            <button class="view-period-btn shared-view-period" data-period="weekly">周线</button>
+                    <div class="market-period-toolbar">
+                        <div class="stock-info">
+                            <span id="stock-name">股票名称</span>
+                            <span id="current-period" class="period-badge">日K</span>
+                            <span id="current-date">当前日期</span>
+                            <span id="current-price">当前价格</span>
+                        </div>
+                        <div class="chart-actions">
+                            <div class="view-period-switch">
+                                <button class="view-period-btn crypto-view-period hidden" data-period="5m">5分钟</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="15m">15分钟</button>
+                                <button class="view-period-btn shared-view-period" data-period="30m">30分钟</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="1h">1小时</button>
+                                <button class="view-period-btn a-share-view-period" data-period="4h_session">4小时</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="4h">4小时</button>
+                                <button class="view-period-btn shared-view-period active" data-period="daily">日线</button>
+                                <button class="view-period-btn shared-view-period" data-period="weekly">周线</button>
+                            </div>
+                            <div class="chart-panel-controls" role="group" aria-label="图表面板控制">
+                                <button id="toggle-volume-panel-btn" type="button" aria-controls="volume-chart" aria-expanded="true">成交量</button>
+                                <button id="toggle-indicator-panel-btn" type="button" aria-controls="indicator-chart" aria-expanded="true">指标</button>
+                                <button id="chart-fullscreen-btn" type="button" aria-controls="chart-panels" aria-label="全屏图表">全屏</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -491,6 +498,7 @@
                         <button type="button" data-drawing-action="redo" aria-label="重做绘图操作" title="重做">↷</button>
                         <button type="button" data-drawing-action="clear" aria-label="清空全部图形" title="清空全部">×</button>
                     </div>
+                    <span id="drawing-status" class="drawing-status" aria-live="polite"></span>
                     <div id="drawing-fibonacci-settings" class="drawing-settings hidden" aria-label="斐波那契设置">
                         <div class="drawing-settings-header"><strong>斐波那契档位</strong><button type="button" data-fibonacci-action="close" aria-label="关闭斐波那契设置">×</button></div>
                         <div id="drawing-fibonacci-levels"></div>
@@ -520,6 +528,16 @@
             </main>
 
             <aside class="right-panel trade-console">
+                <div class="control-section account-console-section hidden" data-crypto-workspace-only>
+                    <h3>账户</h3>
+                    <div class="account-info">
+                        <div class="info-item"><span>总资产</span><span id="crypto-total-assets">10,000 USDT</span></div>
+                        <div class="info-item"><span>可用资金</span><span id="crypto-available-cash">10,000 USDT</span></div>
+                        <div class="info-item"><span>持仓市值</span><span id="crypto-position-value">0 USDT</span></div>
+                        <div class="info-item"><span>浮动盈亏</span><span id="crypto-floating-pnl">0 USDT</span></div>
+                    </div>
+                </div>
+
                 <div class="control-section">
                     <div class="playback-controls" style="margin-bottom: 5px;">
                         <button id="play-pause-btn" class="btn btn-primary">
@@ -539,6 +557,10 @@
                         </select>
                         <label>s/bar</label>
                     </div>
+                    <div class="crypto-session-actions hidden" data-crypto-workspace-only>
+                        <button id="crypto-reset-training-btn" type="button">重置训练</button>
+                        <button id="crypto-end-training-btn" type="button">结束训练</button>
+                    </div>
                 </div>
 
                 <div class="info-section">
@@ -554,14 +576,14 @@
                     </div>
                 </div>
 
-                <div class="control-section">
+                <div class="control-section position-console-section">
                     <h3>当前持仓</h3>
                     <div id="current-positions" class="positions-list">
                         <div class="no-positions">暂无持仓</div>
                     </div>
                 </div>
 
-                <div class="control-section">
+                <div class="control-section" data-a-share-workspace-only>
                     <h3>交易操作</h3>
                     <div id="a-share-trading-panel" class="trade-controls trade-controls-advanced">
                         <div class="order-type-switch" aria-label="买入订单类型">
@@ -616,7 +638,7 @@
                     <div id="pending-orders" class="pending-orders hidden"></div>
                 </div>
 
-                <div id="crypto-trading-panel" class="control-section hidden">
+                <div id="crypto-trading-panel" class="control-section order-console-section hidden">
                     <h3>USDT 永续合约</h3>
                     <div class="crypto-position-grid">
                         <div><span>方向</span><strong id="crypto-position-side">空仓</strong></div>
@@ -625,6 +647,11 @@
                         <div><span>保证金率</span><strong id="crypto-margin-ratio">--</strong></div>
                     </div>
                     <div id="crypto-funding-summary" class="crypto-funding-summary">资金费：--</div>
+                    <div class="crypto-direction-buttons" role="group" aria-label="合约方向">
+                        <button type="button" data-crypto-action="open_long" class="crypto-direction-long">开多</button>
+                        <button type="button" data-crypto-action="open_short" class="crypto-direction-short">开空</button>
+                        <button type="button" data-crypto-action="close" class="crypto-direction-close">平仓</button>
+                    </div>
                     <div class="crypto-order-grid">
                         <label>方向
                             <select id="crypto-order-action">
@@ -653,6 +680,13 @@
                     </div>
                     <button id="crypto-submit-order" type="button" class="btn btn-primary">提交合约订单</button>
                     <div id="crypto-pending-orders" class="pending-orders hidden"></div>
+                </div>
+
+                <div class="info-section record-console-section hidden" data-crypto-workspace-only>
+                    <h3>交易记录</h3>
+                    <div id="crypto-trade-history" class="trade-list">
+                        <div class="no-trades">暂无交易记录</div>
+                    </div>
                 </div>
 
                 <div class="shortcut-trigger-container">

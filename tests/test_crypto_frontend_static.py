@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "frontend" / "index_enhanced.html"
+CSS_PATH = ROOT / "frontend" / "css" / "style_enhanced.css"
 JS_PATH = ROOT / "frontend" / "js" / "main_enhanced.js"
 
 
@@ -11,6 +12,7 @@ class CryptoFrontendStaticTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = HTML_PATH.read_text(encoding="utf-8")
+        cls.css = CSS_PATH.read_text(encoding="utf-8")
         cls.js = JS_PATH.read_text(encoding="utf-8")
 
     def test_setup_has_explicit_market_selector(self):
@@ -65,6 +67,50 @@ class CryptoFrontendStaticTests(unittest.TestCase):
         self.assertIn("isCryptoMode() ? formatted + ' USDT'", self.js)
         self.assertIn("formatMarketPrice(barData.close)", self.js)
         self.assertIn("formatMarketPrice(barData.open)", self.js)
+
+    def test_crypto_workspace_has_aicoin_two_column_contract(self):
+        self.assertIn("#main-app.crypto-training-active", self.css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(320px, 340px)", self.css)
+        self.assertIn("grid-column: auto", self.css)
+        self.assertIn("#volume-chart.panel-collapsed", self.css)
+        self.assertIn("display: none !important", self.css)
+        self.assertIn("#main-app.crypto-training-active .workspace-sidebar", self.css)
+        self.assertIn("display: none", self.css)
+        self.assertIn("--crypto-shell: #0b0e11", self.css)
+        self.assertIn("@media (max-width: 980px)", self.css)
+
+    def test_crypto_console_has_direction_and_compact_sections(self):
+        for action in ("open_long", "open_short", "close"):
+            self.assertIn(f'data-crypto-action="{action}"', self.html)
+        self.assertIn('id="crypto-end-training-btn"', self.html)
+        self.assertIn('id="crypto-reset-training-btn"', self.html)
+        self.assertIn('id="crypto-total-assets"', self.html)
+        self.assertIn('id="crypto-trade-history"', self.html)
+        self.assertIn('class="control-section" data-a-share-workspace-only', self.html)
+        self.assertEqual(self.html.count('id="total-assets"'), 1)
+        self.assertEqual(self.html.count('id="trade-history"'), 1)
+        for class_name in (
+            "account-console-section",
+            "position-console-section",
+            "order-console-section",
+            "record-console-section",
+        ):
+            self.assertIn(class_name, self.html)
+
+    def test_existing_crypto_control_ids_remain_unique(self):
+        for element_id in (
+            "crypto-order-action",
+            "crypto-order-type",
+            "crypto-order-leverage",
+            "crypto-margin",
+            "crypto-limit-price",
+            "crypto-submit-order",
+            "crypto-pending-orders",
+            "trade-history",
+            "total-assets",
+            "available-cash",
+        ):
+            self.assertEqual(self.html.count(f'id="{element_id}"'), 1, element_id)
 
 
 if __name__ == "__main__":

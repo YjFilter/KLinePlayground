@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from .aggregator import aggregate_bars
+from .aggregator import aggregate_bars, normalize_base_bars
 from .models import CryptoPeriod, utc_datetime
 from .replay_clock import CryptoReplayClock
 
@@ -19,9 +19,7 @@ class CryptoReplaySession:
         missing = sorted(required - set(base_bars.columns))
         if missing:
             raise ValueError(f"crypto replay bars missing columns: {', '.join(missing)}")
-        frame = base_bars.copy()
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-        frame = frame.sort_values("timestamp").reset_index(drop=True)
+        frame = normalize_base_bars(base_bars)
         if frame.empty:
             raise ValueError("crypto replay bars cannot be empty")
         selected = frame.iloc[0]["timestamp"].to_pydatetime() if initial_time is None else utc_datetime(initial_time)
@@ -39,6 +37,8 @@ class CryptoReplaySession:
         self._source = source
         self._on_bar = on_bar
         self._clock = CryptoReplayClock(frame["timestamp"], initial_time=selected, active_period=active_period)
+        self._aggregation_cache: dict[tuple[datetime, str], pd.DataFrame] = {}
+        self._snapshot_cache: dict[tuple[datetime, str, int | None, datetime | None, datetime | None], dict[str, Any]] = {}
 
     @property
     def clock(self):
@@ -48,15 +48,47 @@ class CryptoReplaySession:
     def base_bars(self):
         return self._base_bars
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(
+        self, *, max_bars: int | None = None, range_start: datetime | None = None,
+        range_end: datetime | None = None,
+    ) -> dict[str, Any]:
+        if max_bars is not None and max_bars <= 0:
+            raise ValueError("max_bars must be positive")
+        normalized_start = None if range_start is None else utc_datetime(range_start)
+        normalized_end = None if range_end is None else utc_datetime(range_end)
         current_time = self._clock.current_time
-        aggregated = aggregate_bars(self._base_bars, self._clock.active_period, current_time)
+        period = self._clock.active_period.value
+        cache_key = (current_time, period, max_bars, normalized_start, normalized_end)
+        cached = self._snapshot_cache.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+        aggregation_key = (current_time, period)
+        aggregated = self._aggregation_cache.get(aggregation_key)
+        if aggregated is None:
+            aggregated = aggregate_bars(self._base_bars, self._clock.active_period, current_time)
+            self._aggregation_cache[aggregation_key] = aggregated
         plan = self._clock.plan_next()
-        kline_data = [self._serialize_aggregated(row) for row in aggregated.to_dict("records")]
+        visible = aggregated
+        if normalized_start is not None or normalized_end is not None:
+            end_times = pd.to_datetime(aggregated["end_time"], utc=True)
+            lower = pd.Timestamp(normalized_start) if normalized_start is not None else end_times.iloc[0]
+            upper = pd.Timestamp(normalized_end) if normalized_end is not None else end_times.iloc[-1]
+            matching = aggregated.index[(end_times >= lower) & (end_times <= upper)]
+            if len(matching):
+                focus_end = min(int(matching[-1]) + 51, len(aggregated))
+            else:
+                focus_end = min(int(end_times.searchsorted(upper, side="right")) + 50, len(aggregated))
+            focus_start = 0 if max_bars is None else max(focus_end - max_bars, 0)
+            visible = aggregated.iloc[focus_start:focus_end]
+        elif max_bars is not None:
+            visible = aggregated.tail(max_bars)
+        if max_bars is not None and len(visible) > max_bars:
+            visible = visible.tail(max_bars)
+        kline_data = [self._serialize_aggregated(row) for row in visible.to_dict("records")]
         current_base = self._base_bars.loc[self._base_bars["timestamp"] == pd.Timestamp(current_time)]
         current_base_bar = None if current_base.empty else self._serialize_base(current_base.iloc[0])
         current_complete = bool(aggregated.iloc[-1]["complete"]) if not aggregated.empty else False
-        return {
+        snapshot = {
             "market_type": "crypto_perpetual",
             "data_mode": "crypto_5m",
             "symbol": self._symbol,
@@ -73,10 +105,15 @@ class CryptoReplaySession:
             "current_base_bar": current_base_bar,
             "finished": plan.finished,
         }
+        self._snapshot_cache[cache_key] = snapshot
+        return dict(snapshot)
 
-    def set_period(self, period):
+    def set_period(
+        self, period, *, max_bars: int | None = None, range_start: datetime | None = None,
+        range_end: datetime | None = None,
+    ):
         self._clock.set_period(period)
-        return self.snapshot()
+        return self.snapshot(max_bars=max_bars, range_start=range_start, range_end=range_end)
 
     def advance(self):
         plan = self._clock.plan_next()
@@ -92,6 +129,7 @@ class CryptoReplaySession:
                 self._on_bar(timestamp, row.copy())
             completed.append(timestamp)
         self._clock.advance(plan)
+        self._invalidate_cache()
         snapshot = self.snapshot()
         snapshot["completed_times"] = [value.strftime(TIME_FORMAT) for value in completed]
         snapshot["order_events"] = []
@@ -99,7 +137,12 @@ class CryptoReplaySession:
 
     def reset(self):
         self._clock.reset()
+        self._invalidate_cache()
         return self.snapshot()
+
+    def _invalidate_cache(self):
+        self._aggregation_cache.clear()
+        self._snapshot_cache.clear()
 
     @classmethod
     def _serialize_aggregated(cls, row):

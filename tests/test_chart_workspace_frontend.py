@@ -51,6 +51,27 @@ class ChartWorkspaceStructureTests(unittest.TestCase):
         self.assertIn("'volume-chart': 32", self.js)
         self.assertIn("'indicator-chart': 52", self.js)
 
+    def test_crypto_chart_chrome_has_required_static_controls(self):
+        self.assertIn('class="market-period-toolbar"', self.html)
+        self.assertIn('id="toggle-volume-panel-btn"', self.html)
+        self.assertIn('id="toggle-indicator-panel-btn"', self.html)
+        self.assertIn('id="chart-fullscreen-btn"', self.html)
+        self.assertIn('aria-controls="volume-chart"', self.html)
+        self.assertIn('aria-controls="indicator-chart"', self.html)
+        self.assertIn('aria-controls="chart-panels"', self.html)
+
+    def test_crypto_drawing_toolbar_becomes_horizontal(self):
+        self.assertIn("#main-app.crypto-training-active .drawing-toolbar", self.css)
+        self.assertIn("flex-direction: row", self.css)
+        self.assertIn("overflow-x: auto", self.css)
+
+    def test_crypto_layout_degrades_vertically_below_980(self):
+        media_start = self.css.index("@media (max-width: 980px)")
+        responsive_css = self.css[media_start:]
+        self.assertIn("#main-app.crypto-training-active .training-workspace", responsive_css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr)", responsive_css)
+        self.assertIn(".trade-console", responsive_css)
+
 
 class LocalIndicatorIntegrationTests(unittest.TestCase):
     @classmethod

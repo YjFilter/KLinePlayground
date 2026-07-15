@@ -137,3 +137,17 @@ Use the drawing and crypto futures workflow normally. Keep .runtime/ untracked a
 
 ## Next Action
 Refresh the browser once to load the new JavaScript, then use BTC or ETH shorthand normally. Keep .runtime/ untracked and excluded from commits.
+## AICoin-Style Crypto Replay and Drawing Refactor Complete (2026-07-16)
+- Crypto training now uses an isolated dark two-column workspace: maximized chart area plus a fixed 320-340px replay/trading console. The original A-share three-column layout, left-side account information, and trade history remain intact.
+- The crypto console includes playback, visible reset/end controls, account/position/order/history sections, large long/short/close direction selectors, collapsible volume/indicator panes, and chart fullscreen.
+- Trend, rectangle, Fibonacci, ruler, long-position, and short-position tools now use pointer drag with live draft preview, requestAnimationFrame coalescing, 8px time/OHLC snapping, Alt bypass, and chart pan/zoom suspension during drawing.
+- Long/short tools create Chinese risk/reward overlays in one drag with fixed 1.5:1 reward/risk, account equity, estimated position size, risk, entry, stop, and target labels. Anchors reproject to the nearest available bar when switching periods.
+- Drawings remain in browser runtime during one training session, survive period switches, and are hard-reset with undo/redo history cleared on end, reset, new training, or exit.
+- Crypto period switching now sends only one /period request, versions and aborts rapid requests, serializes backend mutations with a per-session lock, and rejects stale request IDs so SQLite restart state cannot be overwritten by an older response.
+- Period snapshots reuse normalized/aggregated caches and return at most 300 bars centered on the current visible time range. Invalid old ranges fall back to fitContent; earlier/later history remains available through the explicit chart-window actions.
+- Real BTC browser acceptance confirmed BTCUSDT title, 680px + 340px layout at the available desktop viewport, visible reset/end controls, long/short selection, seven periods, real panel collapse to display:none/0px, and a Chinese 1.5:1 long-position overlay.
+- Performance acceptance on a fresh offline BTC session: cold period switches 154-273ms and cached switches 102-152ms; all requests remained local.
+- Verification passed: JavaScript syntax, Python compileall, reviewer re-check with no remaining Critical/Important issues, 66 focused tests, and the full 540-test suite plus 37 subtests.
+
+## Next Action
+Use the crypto replay workspace normally at http://127.0.0.1:5000/. Keep .runtime/ and offline market data untracked and excluded from commits.

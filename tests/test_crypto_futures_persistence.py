@@ -124,6 +124,30 @@ class CryptoFuturesPersistenceTests(unittest.TestCase):
         self.assertEqual(restarted.engine.simulator.fills[-1].fill_id, "fill-2")
         self.assertIsInstance(restarted.engine.simulator.position.quantity, Decimal)
 
+    def test_runtime_period_update_preserves_state_and_restores_active_period(self):
+        repository = CryptoFuturesRepository(self.db_path)
+        repository.save_runtime_state("period-1", {
+            "version": 1,
+            "clock": {
+                "current_time": "2024-01-01T00:10:00+00:00",
+                "active_period": "5m",
+            },
+            "training": {
+                "period": "5m",
+                "initial_period": "5m",
+                "status": "active",
+            },
+            "orders": [{"order_id": "order-1"}],
+        })
+
+        repository.update_runtime_period("period-1", "15m")
+
+        state = CryptoFuturesRepository(self.db_path).load_runtime_state("period-1")
+        self.assertEqual(state["clock"]["active_period"], "15m")
+        self.assertEqual(state["training"]["period"], "15m")
+        self.assertEqual(state["training"]["initial_period"], "5m")
+        self.assertEqual(state["orders"], [{"order_id": "order-1"}])
+
 
 if __name__ == "__main__":
     unittest.main()

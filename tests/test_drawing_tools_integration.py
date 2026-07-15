@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "frontend" / "index_enhanced.html"
 JS_PATH = ROOT / "frontend" / "js" / "main_enhanced.js"
+DRAWING_JS_PATH = ROOT / "frontend" / "js" / "drawing_tools.js"
 
 
 class DrawingToolsIntegrationStaticTests(unittest.TestCase):
@@ -12,6 +13,7 @@ class DrawingToolsIntegrationStaticTests(unittest.TestCase):
     def setUpClass(cls):
         cls.html = HTML_PATH.read_text(encoding="utf-8")
         cls.js = JS_PATH.read_text(encoding="utf-8")
+        cls.drawing_js = DRAWING_JS_PATH.read_text(encoding="utf-8")
 
     def test_drawing_module_loads_before_main(self):
         drawing_index = self.html.find('js/drawing_tools.js')
@@ -52,6 +54,13 @@ class DrawingToolsIntegrationStaticTests(unittest.TestCase):
     def test_period_and_window_updates_sync_without_clearing(self):
         self.assertGreaterEqual(self.js.count("syncDrawingToolBars("), 3)
         self.assertNotIn("clearDrawingsOnPeriodChange", self.js)
+
+    def test_drawing_runtime_exposes_drag_draft_snap_and_interaction_contracts(self):
+        for token in (
+            "_draftPrimitive", "requestAnimationFrame", "onInteractionStateChange",
+            "SNAP_DISTANCE_PX", "盈亏比", "账户", "仓量",
+        ):
+            self.assertIn(token, self.drawing_js)
 
 
 if __name__ == "__main__":
