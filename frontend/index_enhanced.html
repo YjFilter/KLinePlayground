@@ -435,19 +435,23 @@
                         <span id="current-bar-status" class="replay-status-value">--</span>
                     </div>
                 </div>
-                <div id="chart" class="chart"></div>
-                <div id="volume-chart" class="volume-chart"></div>
-                <div id="indicator-chart" class="indicator-chart">
-                    <div id="indicator-header" class="indicator-header">
-                        <label>技术指标</label>
-                        <select id="indicator-select">
-                            <option value="MACD">MACD</option>
-                            <option value="KDJ">KDJ</option>
-                            <option value="RSI">RSI</option>
-                            <option value="BOLL">BOLL</option>
-                        </select>
+                <div id="chart-panels" class="chart-panels">
+                    <div id="chart" class="chart" data-panel="main"></div>
+                    <div class="chart-panel-splitter" data-before-panel="chart" data-after-panel="volume-chart" role="separator" aria-orientation="horizontal" aria-label="调整K线图和成交量图高度" tabindex="0"></div>
+                    <div id="volume-chart" class="volume-chart" data-panel="volume"></div>
+                    <div class="chart-panel-splitter" data-before-panel="volume-chart" data-after-panel="indicator-chart" role="separator" aria-orientation="horizontal" aria-label="调整成交量图和技术指标图高度" tabindex="0"></div>
+                    <div id="indicator-chart" class="indicator-chart" data-panel="indicator">
+                        <div id="indicator-header" class="indicator-header">
+                            <label>技术指标</label>
+                            <select id="indicator-select">
+                                <option value="MACD">MACD</option>
+                                <option value="KDJ">KDJ</option>
+                                <option value="RSI">RSI</option>
+                                <option value="BOLL">BOLL</option>
+                            </select>
+                        </div>
+                        <div id="indicator-canvas" class="indicator-canvas"></div>
                     </div>
-                    <div id="indicator-canvas" class="indicator-canvas"></div>
                 </div>
             </main>
 
@@ -598,6 +602,7 @@
     </div>
 
     <script src="js/marked.min.js"></script>
+    <script src="js/indicator_math.js"></script>
     <script src="js/main_enhanced.js"></script>
 </body>
 </html>

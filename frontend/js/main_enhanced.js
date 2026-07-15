@@ -35,7 +35,14 @@ let chartWindowState = createEmptyChartWindowState();
 let chartWindowRequestChain = Promise.resolve();
 let chartWindowRequestGeneration = 0;
 let chartWindowLoadingDirection = null;
-
+let chartPanelResizeObserver = null;
+let chartPanelResizeFrame = null;
+let chartPanelResizing = false;
+let activeChartPanelSplitter = null;
+let chartPanelRatios = null;
+const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
+const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
+const CHART_PANEL_MIN_HEIGHTS = { chart: 160, 'volume-chart': 32, 'indicator-chart': 52 };
 function createEmptyChartWindowState() {
     return {
         kline_data: [],
@@ -191,25 +198,18 @@ function applyIntradaySnapshot(snapshot, options) {
 
     if (currentTraining) {
         currentTraining.latestProgress = null;
-        currentTraining.tradeMarkers = [];
     }
 
     candlestickSeries.setData(chartData);
     volumeSeries.setData(volumeData);
     replaceRenderedKlineData(chartData);
+    loadTechnicalIndicator(currentIndicatorType);
 
     // 清空均线系列，intraday 模式不计算 MA
     maPeriods.forEach(function (p) {
         if (maSeries[p]) maSeries[p].setData([]);
     });
-    // 清空交易标记（intraday 模式不通过 legacy trade_markers 接口维护标记）
-    try {
-        if (tradeMarkerSeries && candlestickSeries) {
-            LightweightCharts.createSeriesMarkers(candlestickSeries, []);
-        }
-    } catch (markerErr) {
-        console.warn('清空 intraday 交易标记失败:', markerErr);
-    }
+    updateTradeMarkers(currentTraining?.tradeMarkers || chartWindowState.trade_markers || []);
 
     const lastBar = klineData[klineData.length - 1];
     const lastChartBar = chartData[chartData.length - 1];
@@ -1003,7 +1003,8 @@ function setupEventListeners() {
     document.getElementById('return-main-menu-btn')?.addEventListener('click', resetToMainAppState);
 
 
-    // 监听窗口大小变化
+    // 监听窗口大小变化和图表面板拖拽
+    setupChartPanelResizers();
     window.addEventListener('resize', resizeCharts);
 }
 
@@ -1080,6 +1081,181 @@ function setupKeyboardShortcuts() {
     });
 }
 
+function getChartPanelElements() {
+    const container = document.getElementById('chart-panels');
+    const panels = {
+        chart: document.getElementById('chart'),
+        'volume-chart': document.getElementById('volume-chart'),
+        'indicator-chart': document.getElementById('indicator-chart'),
+    };
+    return { container, panels };
+}
+
+function normalizeChartPanelRatios(candidate) {
+    const source = candidate && typeof candidate === 'object' ? candidate : CHART_PANEL_DEFAULT_RATIOS;
+    const values = Object.keys(CHART_PANEL_DEFAULT_RATIOS).map((panelId) => {
+        const value = Number(source[panelId]);
+        return Number.isFinite(value) && value > 0 ? value : CHART_PANEL_DEFAULT_RATIOS[panelId];
+    });
+    const total = values.reduce((sum, value) => sum + value, 0) || 1;
+    return {
+        chart: values[0] / total,
+        'volume-chart': values[1] / total,
+        'indicator-chart': values[2] / total,
+    };
+}
+
+function readChartPanelRatios() {
+    if (chartPanelRatios) return chartPanelRatios;
+    try {
+        chartPanelRatios = normalizeChartPanelRatios(JSON.parse(localStorage.getItem(CHART_PANEL_STORAGE_KEY) || 'null'));
+    } catch (error) {
+        chartPanelRatios = normalizeChartPanelRatios(null);
+    }
+    return chartPanelRatios;
+}
+
+function persistChartPanelRatios() {
+    if (!chartPanelRatios) return;
+    localStorage.setItem(CHART_PANEL_STORAGE_KEY, JSON.stringify(chartPanelRatios));
+}
+
+function setChartPanelHeight(panel, height) {
+    if (!panel || !Number.isFinite(height)) return;
+    panel.style.flex = `0 0 ${Math.round(height)}px`;
+    panel.style.height = `${Math.round(height)}px`;
+}
+
+function getChartPanelAvailableHeight(container) {
+    const splitterHeight = Array.from(container.querySelectorAll('.chart-panel-splitter'))
+        .reduce((sum, splitter) => sum + splitter.getBoundingClientRect().height, 0);
+    return Math.max(0, container.clientHeight - splitterHeight);
+}
+
+function applyChartPanelRatios(candidateRatios) {
+    const { container, panels } = getChartPanelElements();
+    if (!container || container.clientHeight <= 0) return;
+    chartPanelRatios = normalizeChartPanelRatios(candidateRatios || readChartPanelRatios());
+    const availableHeight = getChartPanelAvailableHeight(container);
+    if (availableHeight <= 0) return;
+
+    const panelIds = Object.keys(panels);
+    const heights = {};
+    panelIds.forEach((panelId) => {
+        heights[panelId] = Math.max(CHART_PANEL_MIN_HEIGHTS[panelId], availableHeight * chartPanelRatios[panelId]);
+    });
+
+    let overflow = panelIds.reduce((sum, panelId) => sum + heights[panelId], 0) - availableHeight;
+    ['chart', 'indicator-chart', 'volume-chart'].forEach((panelId) => {
+        if (overflow <= 0) return;
+        const reducible = Math.max(0, heights[panelId] - CHART_PANEL_MIN_HEIGHTS[panelId]);
+        const reduction = Math.min(reducible, overflow);
+        heights[panelId] -= reduction;
+        overflow -= reduction;
+    });
+    if (overflow < 0) heights.chart += Math.abs(overflow);
+
+    panelIds.forEach((panelId) => setChartPanelHeight(panels[panelId], heights[panelId]));
+    window.requestAnimationFrame(resizeCharts);
+}
+
+function updateChartPanelRatiosFromDom() {
+    const { container, panels } = getChartPanelElements();
+    if (!container) return;
+    const availableHeight = getChartPanelAvailableHeight(container);
+    if (availableHeight <= 0) return;
+    chartPanelRatios = normalizeChartPanelRatios({
+        chart: panels.chart.getBoundingClientRect().height / availableHeight,
+        'volume-chart': panels['volume-chart'].getBoundingClientRect().height / availableHeight,
+        'indicator-chart': panels['indicator-chart'].getBoundingClientRect().height / availableHeight,
+    });
+}
+
+function resizeChartPanelPair(splitter, delta) {
+    const beforePanel = document.getElementById(splitter.dataset.beforePanel);
+    const afterPanel = document.getElementById(splitter.dataset.afterPanel);
+    if (!beforePanel || !afterPanel) return;
+    const beforeStart = Number(splitter.dataset.beforeStart);
+    const afterStart = Number(splitter.dataset.afterStart);
+    if (!Number.isFinite(beforeStart) || !Number.isFinite(afterStart)) return;
+    const pairHeight = beforeStart + afterStart;
+    const beforeMinimum = CHART_PANEL_MIN_HEIGHTS[beforePanel.id];
+    const afterMinimum = CHART_PANEL_MIN_HEIGHTS[afterPanel.id];
+    const nextBefore = Math.min(pairHeight - afterMinimum, Math.max(beforeMinimum, beforeStart + delta));
+    setChartPanelHeight(beforePanel, nextBefore);
+    setChartPanelHeight(afterPanel, pairHeight - nextBefore);
+    updateChartPanelRatiosFromDom();
+    resizeCharts();
+}
+
+function beginChartPanelResize(splitter, clientY) {
+    const beforePanel = document.getElementById(splitter.dataset.beforePanel);
+    const afterPanel = document.getElementById(splitter.dataset.afterPanel);
+    if (!beforePanel || !afterPanel) return;
+    splitter.dataset.dragStartY = String(clientY);
+    splitter.dataset.beforeStart = String(beforePanel.getBoundingClientRect().height);
+    splitter.dataset.afterStart = String(afterPanel.getBoundingClientRect().height);
+}
+
+function setupChartPanelResizers() {
+    const { container } = getChartPanelElements();
+    if (!container || container.dataset.resizersReady === 'true') return;
+    container.dataset.resizersReady = 'true';
+    applyChartPanelRatios(readChartPanelRatios());
+
+    const finishResize = (event) => {
+        if (!activeChartPanelSplitter) return;
+        activeChartPanelSplitter.releasePointerCapture?.(event.pointerId);
+        activeChartPanelSplitter.classList.remove('is-dragging');
+        document.body.classList.remove('chart-panel-resizing');
+        activeChartPanelSplitter = null;
+        chartPanelResizing = false;
+        updateChartPanelRatiosFromDom();
+        persistChartPanelRatios();
+    };
+
+    container.querySelectorAll('.chart-panel-splitter').forEach((splitter) => {
+        splitter.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            activeChartPanelSplitter = splitter;
+            chartPanelResizing = true;
+            beginChartPanelResize(splitter, event.clientY);
+            splitter.classList.add('is-dragging');
+            document.body.classList.add('chart-panel-resizing');
+            splitter.setPointerCapture?.(event.pointerId);
+        });
+        splitter.addEventListener('keydown', (event) => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            beginChartPanelResize(splitter, 0);
+            resizeChartPanelPair(splitter, event.key === 'ArrowDown' ? 16 : -16);
+            persistChartPanelRatios();
+        });
+    });
+
+    window.addEventListener('pointermove', (event) => {
+        if (!chartPanelResizing || !activeChartPanelSplitter) return;
+        resizeChartPanelPair(
+            activeChartPanelSplitter,
+            event.clientY - Number(activeChartPanelSplitter.dataset.dragStartY),
+        );
+    });
+    window.addEventListener('pointerup', finishResize);
+    window.addEventListener('pointercancel', finishResize);
+    window.addEventListener('blur', finishResize);
+
+    if (typeof ResizeObserver !== 'undefined') {
+        chartPanelResizeObserver?.disconnect();
+        chartPanelResizeObserver = new ResizeObserver(() => {
+            if (chartPanelResizing) return;
+            window.cancelAnimationFrame(chartPanelResizeFrame);
+            chartPanelResizeFrame = window.requestAnimationFrame(() => {
+                applyChartPanelRatios(chartPanelRatios || readChartPanelRatios());
+            });
+        });
+        chartPanelResizeObserver.observe(container);
+    }
+}
 // 处理窗口大小变化
 function resizeCharts() {
     if (chart && !document.getElementById('training-interface').classList.contains('hidden')) {
@@ -1278,6 +1454,7 @@ function toggleToolbarForTraining(isTraining) {
             el.classList.toggle('hidden', isTraining);
         }
     });
+    document.getElementById('main-app')?.classList.toggle('training-active', isTraining);
 }
 
 /**
@@ -1942,6 +2119,34 @@ function normalizeTradeMarkers(markers) {
         .sort((left, right) => left.time - right.time);
 }
 
+function alignTradeMarkerTimeToRenderedBar(markerTime) {
+    const normalizedTime = normalizeChartTime({ time: markerTime });
+    if (!normalizedTime || latestRenderedKlineData.length === 0) return normalizedTime;
+    let left = 0;
+    let right = latestRenderedKlineData.length - 1;
+    let candidate = null;
+    while (left <= right) {
+        const middle = Math.floor((left + right) / 2);
+        const barTime = Number(latestRenderedKlineData[middle].time);
+        if (barTime === normalizedTime) return barTime;
+        if (barTime < normalizedTime) {
+            candidate = barTime;
+            left = middle + 1;
+        } else {
+            right = middle - 1;
+        }
+    }
+    return candidate || normalizedTime;
+}
+
+function syncActiveTradeMarkers(markers) {
+    const normalizedMarkers = normalizeTradeMarkers(markers);
+    if (currentTraining) currentTraining.tradeMarkers = normalizedMarkers;
+    if (!chartWindowState.read_only) chartWindowState.trade_markers = normalizedMarkers;
+    updateTradeMarkers(normalizedMarkers);
+    lastKnownTradeCount = normalizedMarkers.length;
+}
+
 function mergeChartWindow(existing, incoming) {
     const base = existing || createEmptyChartWindowState();
     const next = incoming || {};
@@ -2037,10 +2242,14 @@ function applyChartWindow(payload, options = {}) {
         merged.has_earlier = previous.has_earlier;
     }
     chartWindowState = merged;
+    if (currentTraining && !merged.read_only) {
+        currentTraining.tradeMarkers = merged.trade_markers || [];
+    }
 
     candlestickSeries.setData(merged.kline_data);
     volumeSeries.setData(merged.volume_data);
     replaceRenderedKlineData(merged.kline_data);
+    loadTechnicalIndicator(currentIndicatorType);
     maPeriods.forEach((period) => maSeries[period]?.setData([]));
     updateTradeMarkers(merged.trade_markers || payload.trade_markers || []);
 
@@ -2468,6 +2677,7 @@ function showTrainingInterface() {
 
 // 图表管理
 function initializeChart() {
+    applyChartPanelRatios(readChartPanelRatios());
     const palette = getThemePalette();
     // 初始化主图表
     const chartContainer = document.getElementById('chart');
@@ -2559,15 +2769,8 @@ function initializeChart() {
 
     renderChartLegend();
 
-    // 添加交易标记系列
-    tradeMarkerSeries = chart.addSeries(LightweightCharts.LineSeries, {
-        color: 'transparent',
-        lineWidth: 0,
-        crosshairMarkerVisible: false,
-        lastValueVisible: false,
-        priceLineVisible: false
-    });
-    tradeMarkerSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    // 创建并复用同一个交易标记图层，成交后只更新标记数据。
+    tradeMarkerSeries = LightweightCharts.createSeriesMarkers(candlestickSeries, []);
 
     // 初始化成交量图表
     const volumeContainer = document.getElementById('volume-chart');
@@ -3151,7 +3354,7 @@ function checkLimitStatus(barData, progress) {
 //         size: 1
 //     }));
 //
-//     LightweightCharts.createSeriesMarkers(candlestickSeries, markerData);
+//     tradeMarkerSeries.setMarkers(markerData);
 // }
 function updateTradeMarkers(markers) {
     if (!tradeMarkerSeries || !markers) return;
@@ -3164,7 +3367,8 @@ function updateTradeMarkers(markers) {
     });
 
     const markerData = markers.map(marker => {
-        const klineData = candlestickMap.get(marker.time);
+        const alignedTime = alignTradeMarkerTimeToRenderedBar(marker.time);
+        const klineData = candlestickMap.get(alignedTime);
         let shape;
 
         if (klineData) {
@@ -3185,7 +3389,7 @@ function updateTradeMarkers(markers) {
         }
 
         return {
-            time: marker.time,
+            time: alignTradeMarkerTimeToRenderedBar(marker.time),
             position: shape === 'arrowDown' ? 'aboveBar' : 'belowBar',
             color: marker.type === 'B' ? '#ff4d4f' : '#008000',
             shape: shape,
@@ -3194,7 +3398,7 @@ function updateTradeMarkers(markers) {
         };
     });
 
-    LightweightCharts.createSeriesMarkers(candlestickSeries, markerData);
+    tradeMarkerSeries.setMarkers(markerData);
 }
 
 // 回放控制
@@ -3363,212 +3567,150 @@ async function updateMovingAverages() {
     }
 }
 
-async function loadTechnicalIndicator(indicatorType) {
-    // === intraday_30m 分支: 指标接口由 legacy kline_processor 支持，
-    // intraday 模式不具备该后端依赖，因此清空已有指标系列并直接返回 ===
-    if (isIntradayMode()) {
-        try {
-            if (bollSeries.upper) {
-                chart.removeSeries(bollSeries.upper);
-                chart.removeSeries(bollSeries.middle);
-                chart.removeSeries(bollSeries.lower);
-                bollSeries = {};
-                const bollInfoEl = document.getElementById('boll-info-content');
-                if (bollInfoEl) bollInfoEl.remove();
-                renderChartLegend();
-            }
-            if (currentIndicatorSeries.length > 0 && indicatorChart) {
-                currentIndicatorSeries.forEach(series => indicatorChart.removeSeries(series));
-                currentIndicatorSeries = [];
-            }
-        } catch (e) {
-            console.error('intraday 模式清空指标系列失败:', e);
-        }
-        return;
+function getTechnicalIndicatorConfig(indicatorType) {
+    if (indicatorType === 'MACD') {
+        return {
+            fast: parseInt(document.getElementById('macd-fast')?.value, 10) || 12,
+            slow: parseInt(document.getElementById('macd-slow')?.value, 10) || 26,
+            signal: parseInt(document.getElementById('macd-signal')?.value, 10) || 9,
+        };
     }
+    if (indicatorType === 'KDJ') {
+        return {
+            n: parseInt(document.getElementById('kdj-n')?.value, 10) || 9,
+            m1: parseInt(document.getElementById('kdj-m1')?.value, 10) || 3,
+            m2: parseInt(document.getElementById('kdj-m2')?.value, 10) || 3,
+        };
+    }
+    if (indicatorType === 'RSI') {
+        const periods = String(document.getElementById('rsi-periods')?.value || '6,12,24')
+            .split(',')
+            .map((value) => parseInt(value.trim(), 10))
+            .filter((value) => Number.isFinite(value) && value > 0);
+        return { periods: periods.length ? periods : [6, 12, 24] };
+    }
+    return {
+        period: parseInt(document.getElementById('boll-period')?.value, 10) || 20,
+        stdDev: parseFloat(document.getElementById('boll-std-dev')?.value) || 2,
+    };
+}
 
+function clearTechnicalIndicatorSeries() {
+    if (bollSeries.upper && chart) {
+        Object.values(bollSeries).forEach((series) => chart.removeSeries(series));
+    }
+    bollSeries = {};
+    if (indicatorChart && currentIndicatorSeries.length > 0) {
+        currentIndicatorSeries.forEach((series) => indicatorChart.removeSeries(series));
+    }
+    currentIndicatorSeries = [];
+    renderChartLegend();
+    renderIndicatorLegend();
+}
+
+function createIndicatorLineSeries(color, title) {
+    const series = indicatorChart.addSeries(LightweightCharts.LineSeries, {
+        color,
+        lineWidth: 1,
+        crosshairMarkerVisible: false,
+        priceLineVisible: false,
+        lastValueVisible: false,
+    });
+    if (title) series.indicatorTitle = title;
+    return series;
+}
+
+async function loadTechnicalIndicator(indicatorType) {
+    if (!chart || !indicatorChart || !window.KLineIndicatorMath) return;
     const visibleLogicalRange = chart.timeScale().getVisibleLogicalRange();
+    const indicatorChartElement = document.getElementById('indicator-chart');
+    const indicatorCanvasElement = document.getElementById('indicator-canvas');
+    const indicatorHeaderElement = document.getElementById('indicator-header');
+    const infoElement = document.getElementById('indicator-info-display');
+
     try {
-        // 获取DOM元素，并检查是否存在
-        const indicatorChartElement = document.getElementById('indicator-chart');
-        const indicatorCanvasElement = document.getElementById('indicator-canvas');
-        const indicatorHeaderElement = document.getElementById('indicator-header');
+        clearTechnicalIndicatorSeries();
+        indicatorCanvasElement?.style.removeProperty('display');
+        indicatorChartElement?.classList.remove('indicator-collapsed');
+        if (indicatorHeaderElement) indicatorHeaderElement.style.display = 'inline-flex';
 
-        // 如果之前显示的是BOLL，先移除主图上的BOLL线
-        if (bollSeries.upper) {
-            chart.removeSeries(bollSeries.upper);
-            chart.removeSeries(bollSeries.middle);
-            chart.removeSeries(bollSeries.lower);
-            bollSeries = {}; // 清空
-
-            // 立即清除界面残留的 BOLL 标签
-            const bollInfoEl = document.getElementById('boll-info-content');
-            if (bollInfoEl) {
-                bollInfoEl.remove();
+        const data = window.KLineIndicatorMath.calculate(
+            indicatorType,
+            latestRenderedKlineData,
+            getTechnicalIndicatorConfig(indicatorType),
+        );
+        if (!data.data || data.data.length === 0) {
+            if (infoElement) {
+                infoElement.style.display = 'block';
+                infoElement.textContent = '当前已加载K线不足，暂时无法计算该指标';
             }
-            
+            return;
+        }
+        if (infoElement) infoElement.style.display = 'none';
+
+        if (data.type === 'MACD') {
+            const difSeries = createIndicatorLineSeries('#ff6b6b', 'DIF');
+            const deaSeries = createIndicatorLineSeries('#4ecdc4', 'DEA');
+            const histogramSeries = indicatorChart.addSeries(LightweightCharts.HistogramSeries, {
+                crosshairMarkerVisible: false,
+                priceLineVisible: false,
+                lastValueVisible: false,
+            });
+            difSeries.setData(data.data.map((item) => ({ time: item.time, value: item.dif })));
+            deaSeries.setData(data.data.map((item) => ({ time: item.time, value: item.dea })));
+            histogramSeries.setData(data.data.map((item) => ({
+                time: item.time,
+                value: item.histogram,
+                color: item.histogram >= 0 ? '#ff4d4f' : '#008000',
+            })));
+            currentIndicatorSeries.push(difSeries, deaSeries, histogramSeries);
+        } else if (data.type === 'KDJ') {
+            const kSeries = createIndicatorLineSeries('#ff6b6b', 'K');
+            const dSeries = createIndicatorLineSeries('#4ecdc4', 'D');
+            const jSeries = createIndicatorLineSeries('#45b7d1', 'J');
+            kSeries.setData(data.data.map((item) => ({ time: item.time, value: item.k })));
+            dSeries.setData(data.data.map((item) => ({ time: item.time, value: item.d })));
+            jSeries.setData(data.data.map((item) => ({ time: item.time, value: item.j })));
+            currentIndicatorSeries.push(kSeries, dSeries, jSeries);
+        } else if (data.type === 'RSI') {
+            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9c74f', '#90be6d', '#f8961e'];
+            data.periods.forEach((period, index) => {
+                const series = createIndicatorLineSeries(colors[index % colors.length], `RSI(${period})`);
+                series.rsiTitle = `RSI(${period})`;
+                series.setData(data.data.map((item) => ({ time: item.time, value: item[`rsi${period}`] })));
+                currentIndicatorSeries.push(series);
+            });
+        } else if (data.type === 'BOLL') {
+            const colors = { upper: '#ff6b6b', middle: '#4ecdc4', lower: '#45b7d1' };
+            Object.keys(colors).forEach((key) => {
+                bollSeries[key] = chart.addSeries(LightweightCharts.LineSeries, {
+                    color: colors[key],
+                    lineWidth: 2,
+                    priceLineVisible: false,
+                    crosshairMarkerVisible: false,
+                    lastValueVisible: false,
+                });
+                bollSeries[key].setData(data.data.map((item) => ({ time: item.time, value: item[key] })));
+                const indicatorLine = createIndicatorLineSeries(colors[key], key.toUpperCase());
+                indicatorLine.setData(data.data.map((item) => ({ time: item.time, value: item[key] })));
+                currentIndicatorSeries.push(indicatorLine);
+            });
             renderChartLegend();
         }
 
-        // 清除下方指标图表的所有现有系列
-        if (currentIndicatorSeries.length > 0) {
-            currentIndicatorSeries.forEach(series => indicatorChart.removeSeries(series));
-            currentIndicatorSeries = []; // 清空数组
-        }
-
-        if (indicatorCanvasElement) {
-            indicatorCanvasElement.style.display = (indicatorType === 'BOLL') ? 'none' : 'block';
-        }
-        if (indicatorChartElement) {
-            indicatorChartElement.classList.toggle('indicator-collapsed', indicatorType === 'BOLL');
-        }
-        if (indicatorHeaderElement) {
-            indicatorHeaderElement.style.display = 'block'; // 确保选择器总是可见
-        }
-
-        // 如果选择的是BOLL，则直接在主图上绘制并返回
-        if (indicatorType === 'BOLL') {
-            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/indicators/BOLL?${getViewPeriodQuery()}`);
-            const data = await response.json();
-            if (data.type === 'BOLL' && data.data) {
-                const upperData = data.data.map(item => ({ time: item.time, value: item.upper }));
-                const middleData = data.data.map(item => ({ time: item.time, value: item.middle }));
-                const lowerData = data.data.map(item => ({ time: item.time, value: item.lower }));
-
-                // 在主图表(chart)上添加BOLL线
-                bollSeries.upper = chart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#ff6b6b',
-                    lineWidth: 2,
-                    priceLineVisible: false,
-                    crosshairMarkerVisible: false,
-                    lastValueVisible: false
-                });
-                bollSeries.middle = chart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#4ecdc4',
-                    lineWidth: 2,
-                    priceLineVisible: false,
-                    crosshairMarkerVisible: false,
-                    lastValueVisible: false
-                });
-                bollSeries.lower = chart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#45b7d1',
-                    lineWidth: 2,
-                    priceLineVisible: false,
-                    crosshairMarkerVisible: false,
-                    lastValueVisible: false
-                });
-
-                bollSeries.upper.setData(upperData);
-                bollSeries.middle.setData(middleData);
-                bollSeries.lower.setData(lowerData);
-                renderChartLegend();
-            }
-        } else {
-            // --- 如果不是BOLL，则按原逻辑在下方图表绘制 ---
-            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/indicators/${indicatorType}?${getViewPeriodQuery()}`);
-            const data = await response.json();
-
-            // 根据指标类型创建新的系列 (此部分代码保持不变)
-            if (data.type === 'MACD' && data.data) {
-                const difData = data.data.map(item => ({ time: item.time, value: item.dif }));
-                const deaData = data.data.map(item => ({ time: item.time, value: item.dea }));
-                const histogramData = data.data.map(item => ({
-                    time: item.time,
-                    value: item.histogram,
-                    color: item.histogram >= 0 ? '#ff4d4f' : '#008000'
-                }));
-
-                const difSeries = indicatorChart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#ff6b6b',
-                    lineWidth: 1,
-                    crosshairMarkerVisible: false,
-                    priceLineVisible: false,
-                    lastValueVisible: false
-                });
-                const deaSeries = indicatorChart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#4ecdc4',
-                    lineWidth: 1,
-                    crosshairMarkerVisible: false,
-                    priceLineVisible: false,
-                    lastValueVisible: false
-                });
-                const histogramSeries = indicatorChart.addSeries(LightweightCharts.HistogramSeries, {
-                    crosshairMarkerVisible: false,
-                    priceLineVisible: false,
-                    lastValueVisible: false
-                });
-                difSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-                deaSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-                histogramSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-
-                currentIndicatorSeries.push(difSeries, deaSeries, histogramSeries);
-
-                difSeries.setData(difData);
-                deaSeries.setData(deaData);
-                histogramSeries.setData(histogramData);
-                renderIndicatorLegend();
-
-            } else if (data.type === 'RSI' && data.data && data.periods) {
-                const rsiColors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9c74f', '#90be6d', '#f8961e'];
-                data.periods.forEach((period, index) => {
-                    const rsiData = data.data.map(item => ({ time: item.time, value: item[`rsi${period}`] }));
-                    const rsiSeries = indicatorChart.addSeries(LightweightCharts.LineSeries, {
-                        color: rsiColors[index % rsiColors.length],
-                        lineWidth: 1,
-                        crosshairMarkerVisible: false,
-                        priceLineVisible: false,
-                        lastValueVisible: false,
-                    });
-                    rsiSeries.rsiTitle = `RSI(${period})`;
-                    currentIndicatorSeries.push(rsiSeries);
-                    rsiSeries.setData(rsiData);
-                    rsiSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-                });
-                renderIndicatorLegend();
-
-            } else if (data.type === 'KDJ' && data.data) {
-                const kData = data.data.map(item => ({ time: item.time, value: item.k }));
-                const dData = data.data.map(item => ({ time: item.time, value: item.d }));
-                const jData = data.data.map(item => ({ time: item.time, value: item.j }));
-
-                const kSeries = indicatorChart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#ff6b6b',
-                    lineWidth: 1,
-                    crosshairMarkerVisible: false
-                });
-                const dSeries = indicatorChart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#4ecdc4',
-                    lineWidth: 1,
-                    crosshairMarkerVisible: false
-                });
-                const jSeries = indicatorChart.addSeries(LightweightCharts.LineSeries, {
-                    color: '#45b7d1',
-                    lineWidth: 1,
-                    crosshairMarkerVisible: false
-                });
-                kSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-                dSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-                jSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-
-                currentIndicatorSeries.push(kSeries, dSeries, jSeries);
-                kSeries.setData(kData);
-                dSeries.setData(dData);
-                jSeries.setData(jData);
-                renderIndicatorLegend();
-            }
-        }
-
+        renderIndicatorLegend();
     } catch (error) {
         console.error(`加载技术指标失败: ${error}`);
+        if (infoElement) {
+            infoElement.style.display = 'block';
+            infoElement.textContent = '技术指标计算失败';
+        }
     } finally {
-        // 2. 恢复之前保存的可见逻辑范围
-        // 只有在范围有效时才恢复
-        if (visibleLogicalRange !== null) {
+        if (visibleLogicalRange !== null && indicatorChart) {
             indicatorChart.timeScale().setVisibleLogicalRange(visibleLogicalRange);
         }
     }
 }
-
 function changeIndicator() {
     const select = document.getElementById('indicator-select');
     currentIndicatorType = select.value;
@@ -4039,10 +4181,7 @@ async function executeBuy(priceType = 'close', reason = '') {
                 addTradeRecord(result.trade);
             }
             if (result.trade_markers) {
-                updateTradeMarkers(result.trade_markers);
-            }
-            if (result.trade_markers) {
-                lastKnownTradeCount = result.trade_markers.length;
+                syncActiveTradeMarkers(result.trade_markers);
             }
         } else {
             const error = await response.json();
@@ -4092,7 +4231,7 @@ async function executeSell(priceType = 'close', reason = '') {
             const result = await response.json();
             updateAccountInfo();
             addTradeRecord(result.trade);
-            updateTradeMarkers(result.trade_markers);
+            syncActiveTradeMarkers(result.trade_markers);
         } else {
             const error = await response.json();
             alert(error.message || '卖出失败');
@@ -4331,7 +4470,7 @@ async function forceLiquidatePosition() {
                 const result = await sellResponse.json();
                 updateAccountInfo();
                 addTradeRecord(result.trade);
-                updateTradeMarkers(result.trade_markers);
+                syncActiveTradeMarkers(result.trade_markers);
                 console.log(`成功卖出 ${sellQuantity} 手。`);
 
                 // 卖出后再次检查，如果已经全部卖完，直接成功返回

@@ -312,11 +312,14 @@ class IntradayAvoidsLegacyOnlyEndpointsTests(_StaticTestCase):
         self.assertIn("isIntradayMode()", body,
                       "updateChipDistribution 必须在 intraday 模式提前返回")
 
-    def test_load_technical_indicator_skipped_for_intraday(self):
+    def test_load_technical_indicator_avoids_legacy_endpoint(self):
         idx = self.js.find("async function loadTechnicalIndicator")
-        body = self.js[idx:idx + 1500]
-        self.assertIn("isIntradayMode()", body,
-                      "loadTechnicalIndicator 必须在 intraday 模式提前返回")
+        end = self.js.find("\nfunction changeIndicator", idx)
+        body = self.js[idx:end]
+        self.assertIn("KLineIndicatorMath.calculate", body,
+                      "技术指标必须使用当前已揭示K线在浏览器本地计算")
+        self.assertNotIn("/indicators/", body,
+                         "intraday 技术指标不得请求 legacy indicators 接口")
 
     def test_update_adjustment_skipped_for_intraday(self):
         idx = self.js.find("async function updateAdjustment")

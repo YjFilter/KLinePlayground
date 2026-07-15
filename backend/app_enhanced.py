@@ -1004,6 +1004,7 @@ def _intraday_trade(training, data):
         return jsonify({
             'success': True,
             'trade': result['trade'],
+            'trade_markers': _trade_markers(trade_simulator.trade_history),
             'pending_orders': order_manager.to_dict(),
             'data_mode': DATA_MODE_INTRADAY_30M,
         })

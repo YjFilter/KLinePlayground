@@ -2495,3 +2495,154 @@ body[data-theme="dark"] .chip-current-line {
     .history-card-actions .btn:last-child { grid-column: 1 / -1; }
     .trade-reason-modal-content { padding: 26px 22px; }
 }
+
+/* Resizable chart workspace */
+.chart-panels {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.chart-panels > .chart {
+    flex: 1 1 420px;
+    min-height: 160px;
+}
+
+.chart-panels > .volume-chart {
+    flex: 0 0 82px;
+    min-height: 32px;
+    height: auto;
+}
+
+.chart-panels > .indicator-chart {
+    flex: 0 0 112px;
+    min-height: 52px;
+    height: auto;
+}
+
+.chart-panels > .indicator-chart.indicator-collapsed {
+    min-height: 52px;
+    height: auto;
+}
+
+.chart-panel-splitter {
+    position: relative;
+    z-index: 20;
+    flex: 0 0 9px;
+    cursor: row-resize;
+    touch-action: none;
+    outline: none;
+    background: var(--surface-muted);
+}
+
+.chart-panel-splitter::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 54px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--border-strong);
+    transform: translate(-50%, -50%);
+    transition: width 0.16s ease, background-color 0.16s ease;
+}
+
+.chart-panel-splitter:hover::after,
+.chart-panel-splitter:focus-visible::after,
+.chart-panel-splitter.is-dragging::after {
+    width: 82px;
+    background: var(--primary);
+}
+
+body.chart-panel-resizing {
+    cursor: row-resize;
+    user-select: none;
+}
+
+@media (max-width: 980px) {
+    .chart-panels {
+        min-height: 620px;
+        overflow-y: auto;
+    }
+}
+
+/* Compact active-training chrome */
+#main-app.training-active .toolbar {
+    min-height: 42px;
+    padding: 5px 14px;
+    gap: 10px;
+}
+
+#main-app.training-active .current-user {
+    font-size: 13px;
+}
+
+#main-app.training-active .user-stats {
+    gap: 5px;
+}
+
+#main-app.training-active .stat-item {
+    min-width: 0;
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 10px;
+    flex-direction: row;
+    gap: 4px;
+    font-size: 11px;
+}
+
+#main-app.training-active .bar-id-display {
+    padding: 3px 8px;
+    font-size: 11px;
+}
+
+#main-app.training-active .chart-workbench {
+    padding: 8px;
+}
+
+#main-app.training-active .chart-header {
+    margin-bottom: 4px;
+    padding: 7px 10px;
+    border-radius: 10px;
+}
+
+#main-app.training-active #stock-name {
+    font-size: 18px;
+}
+
+#main-app.training-active .view-period-switch {
+    padding: 2px;
+}
+
+#main-app.training-active .view-period-btn {
+    padding: 5px 10px;
+}
+
+#main-app.training-active .chart-window-toolbar {
+    min-height: 28px;
+    padding: 3px 10px;
+    gap: 8px;
+}
+
+#main-app.training-active .chart-window-toolbar button {
+    padding: 3px 8px;
+    font-size: 11px;
+}
+
+#main-app.training-active .replay-status-bar {
+    gap: 8px;
+    padding: 4px 10px;
+    margin-bottom: 4px;
+    border-radius: 10px;
+}
+
+#main-app.training-active .replay-status-label {
+    font-size: 11px;
+}
+
+#main-app.training-active .replay-status-value {
+    font-size: 12px;
+}

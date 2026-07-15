@@ -90,3 +90,24 @@ Run final blind-box and restart browser acceptance, then close Phase 5 or fix an
 
 ## Next Action
 Phase 5 is ready for normal use. The next milestone should expand the intraday cache pool beyond `600000` so blind-box stock selection has a larger local universe without depending on unstable public stock-list endpoints.
+
+## Resizable Chart Workspace and Local Indicators Complete
+- Main K-line, volume, and technical-indicator panels now share a resizable workspace with two mouse/touch/keyboard-accessible horizontal splitters.
+- Panel proportions persist in browser local storage and Lightweight Charts resize continuously through drag and container changes.
+- MACD, KDJ, RSI, and BOLL now calculate locally from the currently rendered/revealed K-line window, so intraday sessions no longer depend on or skip the legacy indicator endpoint.
+- Browser acceptance passed at a 1900x1000 desktop viewport: main chart 441->401 px, volume 114->154->184 px, indicator 156->126 px; all four indicators produced non-empty canvases; 30m->daily switching preserved time and next advanced to the daily close; console errors 0.
+- Automated verification passed: JavaScript syntax checks, 61 focused frontend/history tests, and the full 368-test suite.
+
+## Next Action
+Use the repaired chart workspace normally. `.runtime/` remains intentionally untracked and must not be committed.
+
+
+## Compact Training Layout and Immediate Daily Trade Markers Complete
+- Active training now applies a compact toolbar/header/status layout: desktop toolbar 42px, stock header 48px, history toolbar 30px, and replay status 27px.
+- New panel defaults prioritize the K-line view; volume and indicator panes can shrink to 32px and 52px. Browser drag acceptance expanded the main chart from 584px to 714px.
+- Intraday trade responses now return the complete marker list immediately. Frontend state preserves markers across snapshots, aligns timestamps to the current rendered period, and reuses one Lightweight Charts marker layer.
+- Browser acceptance on daily view passed without any period switch: buy markers appeared at 2025-07-14 10:00 and 15:00, then a sell marker appeared at 2025-07-15 15:00. Marker layer contained B, B, S and console errors were 0.
+- Automated verification passed: 132 focused tests and the full 373-test suite.
+
+## Next Action
+Review the repaired layout in normal use. Source changes remain uncommitted; .runtime/ remains intentionally untracked.

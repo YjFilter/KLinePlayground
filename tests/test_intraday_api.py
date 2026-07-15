@@ -681,6 +681,17 @@ class IntradayTradeTests(IntradayAPITestBase):
         })
         self.assertEqual(resp.get_json()["data_mode"], "intraday_30m")
 
+    def test_trade_returns_markers_immediately(self):
+        tid = self._start_intraday_and_get_id(period="daily", start_date="2025-01-02")
+        resp = self.client.post(f"/api/training/{tid}/trade", json={
+            "action": "buy", "quantity": 10, "order_type": "market",
+        })
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        markers = resp.get_json()["trade_markers"]
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(markers[0]["type"], "B")
+        self.assertEqual(markers[0]["time"], "2025-01-02 10:00:00")
+
 
 # ---------------------------------------------------------------------------
 # Acceptance: Account, pending-order, reset, end routes remain usable
