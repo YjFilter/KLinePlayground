@@ -39,6 +39,27 @@ class CryptoReplaySessionTests(unittest.TestCase):
         self.assertEqual(result["current_time"], "2024-01-01 00:10:00")
         self.assertEqual(result["completed_times"], ["2024-01-01 00:05:00", "2024-01-01 00:10:00"])
 
+    def test_advance_delta_returns_only_the_changed_five_minute_bar(self):
+        frame = make_frame(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 8)
+        session = CryptoReplaySession(frame, active_period="5m")
+
+        result = session.advance_delta(max_bars=120)
+
+        self.assertNotIn("kline_data", result)
+        self.assertEqual(result["new_bar"]["time"], "2024-01-01 00:05:00")
+        self.assertEqual(result["new_volume"], {"time": "2024-01-01 00:05:00", "value": 2.0})
+        self.assertFalse(result["requires_full_refresh"])
+        self.assertEqual(result["completed_times"], ["2024-01-01 00:05:00"])
+
+    def test_advance_delta_does_not_build_a_full_snapshot(self):
+        frame = make_frame(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 1000)
+        session = CryptoReplaySession(frame, active_period="5m")
+
+        with patch.object(session, "snapshot", side_effect=AssertionError("full snapshot is too expensive")):
+            result = session.advance_delta(max_bars=120)
+
+        self.assertEqual(result["new_bar"]["time"], "2024-01-01 00:05:00")
+
     def test_callback_failure_does_not_commit_and_reset_restores_state(self):
         frame = make_frame(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 5)
         session = CryptoReplaySession(frame, on_bar=lambda timestamp, row: (_ for _ in ()).throw(RuntimeError("boom")))

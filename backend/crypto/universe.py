@@ -42,15 +42,27 @@ class CryptoUniverse:
                 failures.append(f"{source.name}: {exc}")
         raise CryptoUniverseError("unable to load crypto instrument universe; " + "; ".join(failures))
 
-    def eligible_instruments(self, *, refresh: bool = False) -> list[CryptoInstrument]:
+    def _eligible_from(self, instruments) -> list[CryptoInstrument]:
         current = utc_datetime(self.now())
         minimum_listing = current - timedelta(days=180)
-        result = []
-        for instrument in self.snapshot(refresh=refresh).instruments:
+        eligible = []
+        for instrument in instruments:
             perpetual = "perpetual" in instrument.contract_type.lower()
             if instrument.active and instrument.quote_asset.upper() == "USDT" and perpetual and utc_datetime(instrument.listed_at) <= minimum_listing:
-                result.append(instrument)
-        return sorted(result, key=lambda item: (-item.quote_turnover_24h, item.symbol))
+                eligible.append(instrument)
+        eligible.sort(key=lambda item: (-item.quote_turnover_24h, item.symbol.upper(), item.source))
+        result = []
+        seen_symbols = set()
+        for instrument in eligible:
+            symbol = instrument.symbol.upper()
+            if symbol in seen_symbols:
+                continue
+            seen_symbols.add(symbol)
+            result.append(instrument)
+        return result
+
+    def eligible_instruments(self, *, refresh: bool = False) -> list[CryptoInstrument]:
+        return self._eligible_from(self.snapshot(refresh=refresh).instruments)
 
     def top_instruments(self, limit: int = 50, *, refresh: bool = False) -> list[CryptoInstrument]:
         if limit < 0:
@@ -59,6 +71,16 @@ class CryptoUniverse:
 
     def search(self, query: str = "", limit: int = 20, *, refresh: bool = False) -> list[CryptoInstrument]:
         term = query.strip().upper()
+        if term and not refresh and self._snapshot is None and self.sources:
+            targeted_search = getattr(self.sources[0], "search_instruments", None)
+            if targeted_search is not None:
+                try:
+                    instruments = targeted_search(term)
+                except Exception:
+                    pass
+                else:
+                    matches = [item for item in self._eligible_from(instruments) if term in item.symbol.upper() or term in item.base_asset.upper()]
+                    return matches[:limit]
         matches = [item for item in self.eligible_instruments(refresh=refresh) if not term or term in item.symbol.upper() or term in item.base_asset.upper()]
         return matches[:limit]
 

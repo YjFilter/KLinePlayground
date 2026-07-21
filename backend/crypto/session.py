@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from .aggregator import aggregate_bars, normalize_base_bars
+from .aggregator import _bucket_start, aggregate_bars, normalize_base_bars
 from .models import CryptoPeriod, utc_datetime
 from .replay_clock import CryptoReplayClock
 
@@ -32,6 +32,9 @@ class CryptoReplaySession:
         if frame.empty or pd.Timestamp(selected) not in set(frame["timestamp"]):
             raise ValueError("initial_time must exist within the crypto replay range")
         self._base_bars = frame
+        self._base_bar_index = {
+            value.to_pydatetime(): index for index, value in enumerate(frame["timestamp"])
+        }
         self._initial_time = selected
         self._symbol = symbol.upper()
         self._source = source
@@ -85,8 +88,7 @@ class CryptoReplaySession:
         if max_bars is not None and len(visible) > max_bars:
             visible = visible.tail(max_bars)
         kline_data = [self._serialize_aggregated(row) for row in visible.to_dict("records")]
-        current_base = self._base_bars.loc[self._base_bars["timestamp"] == pd.Timestamp(current_time)]
-        current_base_bar = None if current_base.empty else self._serialize_base(current_base.iloc[0])
+        current_base_bar = self._serialize_base(self._base_bars.iloc[self._clock.current_index])
         current_complete = bool(aggregated.iloc[-1]["complete"]) if not aggregated.empty else False
         snapshot = {
             "market_type": "crypto_perpetual",
@@ -124,7 +126,7 @@ class CryptoReplaySession:
             return snapshot
         completed = []
         for timestamp in plan.base_bar_times:
-            row = self._base_bars.loc[self._base_bars["timestamp"] == pd.Timestamp(timestamp)].iloc[0]
+            row = self._base_bars.iloc[self._base_bar_index[timestamp]]
             if self._on_bar is not None:
                 self._on_bar(timestamp, row.copy())
             completed.append(timestamp)
@@ -134,6 +136,56 @@ class CryptoReplaySession:
         snapshot["completed_times"] = [value.strftime(TIME_FORMAT) for value in completed]
         snapshot["order_events"] = []
         return snapshot
+
+    def advance_delta(self, *, max_bars: int | None = None):
+        if max_bars is not None and max_bars <= 0:
+            raise ValueError("max_bars must be positive")
+        plan = self._clock.plan_next()
+        if plan.finished:
+            return self._delta_payload(None, [], requires_full_refresh=False)
+        period = self._clock.active_period
+        previous_bucket = _bucket_start(pd.Timestamp(plan.current_time), period)
+        target_bucket = _bucket_start(pd.Timestamp(plan.target_time), period)
+        requires_full_refresh = previous_bucket == target_bucket and plan.current_time != plan.target_time
+        completed = []
+        for timestamp in plan.base_bar_times:
+            row = self._base_bars.iloc[self._base_bar_index[timestamp]]
+            if self._on_bar is not None:
+                self._on_bar(timestamp, row.copy())
+            completed.append(timestamp)
+        self._clock.advance(plan)
+        self._invalidate_cache()
+        bucket_start_index = int(self._base_bars["timestamp"].searchsorted(target_bucket, side="left"))
+        bucket_bars = self._base_bars.iloc[bucket_start_index:self._clock.current_index + 1]
+        aggregated = aggregate_bars(bucket_bars, period, self._clock.current_time)
+        new_bar = None if aggregated.empty else self._serialize_aggregated(aggregated.iloc[-1])
+        payload = self._delta_payload(new_bar, completed, requires_full_refresh=requires_full_refresh)
+        if requires_full_refresh:
+            payload["refresh_snapshot"] = self.snapshot(max_bars=max_bars)
+        return payload
+
+    def _delta_payload(self, new_bar, completed, *, requires_full_refresh):
+        plan = self._clock.plan_next()
+        current_base_bar = self._serialize_base(self._base_bars.iloc[self._clock.current_index])
+        return {
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "symbol": self._symbol,
+            "source": self._source,
+            "current_time": self._clock.current_time.strftime(TIME_FORMAT),
+            "active_period": self._clock.active_period.value,
+            "period": self._clock.active_period.value,
+            "base_interval": "5m",
+            "current_bar_complete": False if new_bar is None else bool(new_bar["complete"]),
+            "next_boundary": plan.target_time.strftime(TIME_FORMAT) if plan.target_time is not None else None,
+            "current_base_bar": current_base_bar,
+            "finished": plan.finished,
+            "new_bar": new_bar,
+            "new_volume": None if new_bar is None else {"time": new_bar["time"], "value": new_bar["volume"]},
+            "requires_full_refresh": requires_full_refresh,
+            "completed_times": [value.strftime(TIME_FORMAT) for value in completed],
+            "order_events": [],
+        }
 
     def reset(self):
         self._clock.reset()

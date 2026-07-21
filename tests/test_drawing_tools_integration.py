@@ -58,7 +58,7 @@ class DrawingToolsIntegrationStaticTests(unittest.TestCase):
     def test_drawing_runtime_exposes_drag_draft_snap_and_interaction_contracts(self):
         for token in (
             "_draftPrimitive", "requestAnimationFrame", "onInteractionStateChange",
-            "SNAP_DISTANCE_PX", "盈亏比", "账户", "仓量",
+            "SNAP_DISTANCE_PX", "_hoveredId", "pointerleave", "入场", "RR",
         ):
             self.assertIn(token, self.drawing_js)
 

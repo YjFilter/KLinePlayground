@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ import pandas as pd
 from flask import jsonify
 
 import backend.app_enhanced as app_module
+from backend.crypto.models import CryptoInstrument
 
 
 class _FakeInstrument:
@@ -96,6 +98,76 @@ class CryptoAPITests(unittest.TestCase):
             app_module.VALID_CRYPTO_PERIODS,
             ("5m", "15m", "30m", "1h", "4h", "daily", "weekly"),
         )
+
+    def test_crypto_universe_prefers_persisted_instruments_before_network(self):
+        cached = CryptoInstrument(
+            "BTCUSDT",
+            "binance",
+            "BTC",
+            "USDT",
+            "PERPETUAL",
+            "TRADING",
+            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            Decimal("0.1"),
+            Decimal("0.001"),
+            Decimal("0.001"),
+            Decimal("5"),
+            Decimal("100"),
+        )
+        cache = SimpleNamespace(list_instruments=lambda: [cached])
+        service = SimpleNamespace(cache=cache)
+        network_source = SimpleNamespace(name="network", list_instruments=lambda: (_ for _ in ()).throw(AssertionError("network should not be called")))
+        with patch.object(app_module, "_crypto_universe_instance", None), patch.object(app_module, "_get_crypto_instrument_cache", return_value=cache), patch.object(app_module, "_get_crypto_sources", return_value=(network_source,)):
+            result = app_module._get_crypto_universe().search("BTC")
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT"])
+
+    def test_crypto_universe_skips_network_when_cache_has_data(self):
+        """Explicit mock proof that network list_instruments() is never called."""
+        from unittest.mock import Mock
+        cached_btc = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=timezone.utc), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
+        cached_eth = CryptoInstrument("ETHUSDT", "binance", "ETH", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=timezone.utc), Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), Decimal("5"), Decimal("90"))
+        cache = SimpleNamespace(list_instruments=lambda: [cached_btc, cached_eth])
+        service = SimpleNamespace(cache=cache)
+        binance_mock = Mock()
+        binance_mock.name = "binance"
+        binance_mock.list_instruments.side_effect = AssertionError("binance list_instruments must not be called when cache has data")
+        bybit_mock = Mock()
+        bybit_mock.name = "bybit"
+        bybit_mock.list_instruments.side_effect = AssertionError("bybit list_instruments must not be called when cache has data")
+        with patch.object(app_module, "_crypto_universe_instance", None), patch.object(app_module, "_get_crypto_instrument_cache", return_value=cache), patch.object(app_module, "_get_crypto_sources", return_value=(binance_mock, bybit_mock)):
+            universe = app_module._get_crypto_universe()
+            result = universe.search("BTC")
+            result2 = universe.search("ETH")
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT"])
+        self.assertEqual([item.symbol for item in result2], ["ETHUSDT"])
+        binance_mock.list_instruments.assert_not_called()
+        bybit_mock.list_instruments.assert_not_called()
+
+    def test_crypto_universe_does_not_build_network_sources_when_cache_has_data(self):
+        cached = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=timezone.utc), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
+        cache = SimpleNamespace(list_instruments=lambda: [cached])
+        with patch.object(app_module, "_crypto_universe_instance", None), \
+                patch.object(app_module, "_get_crypto_instrument_cache", return_value=cache, create=True), \
+                patch.object(app_module, "_get_crypto_sources") as get_sources:
+            result = app_module._get_crypto_universe().search("BTC")
+
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT"])
+        get_sources.assert_not_called()
+
+    def test_crypto_universe_falls_back_to_network_when_cache_empty(self):
+        """When the local cache has no instruments, the universe falls back to network sources."""
+        from unittest.mock import Mock
+        cache = SimpleNamespace(list_instruments=lambda: [])
+        service = SimpleNamespace(cache=cache)
+        network_instrument = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=timezone.utc), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
+        binance_mock = Mock()
+        binance_mock.name = "binance"
+        binance_mock.list_instruments.return_value = [network_instrument]
+        with patch.object(app_module, "_crypto_universe_instance", None), patch.object(app_module, "_get_crypto_instrument_cache", return_value=cache), patch.object(app_module, "_get_crypto_sources", return_value=(binance_mock,)):
+            universe = app_module._get_crypto_universe()
+            result = universe.search("BTC")
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT"])
+        binance_mock.list_instruments.assert_called_once()
 
     def test_instrument_search_returns_normalized_payload(self):
         with patch.object(app_module, "_get_crypto_universe", return_value=_FakeUniverse()):

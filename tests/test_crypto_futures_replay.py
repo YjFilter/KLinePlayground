@@ -42,6 +42,25 @@ def make_executor(period, start, count):
 
 
 class FuturesReplayExecutorTests(unittest.TestCase):
+    def test_funding_before_replay_start_is_not_charged_to_a_new_position(self):
+        start = datetime(2024, 1, 1, 5, 10, tzinfo=UTC)
+        trade, mark = make_frames(start, 3)
+        simulator = FuturesSimulator(initial_balance="10000", quantity_step="0.001", min_quantity="0.001", min_notional="5", leverage=5)
+        engine = FuturesEngine(simulator, FuturesOrderBook(simulator))
+        clock = CryptoReplayClock(trade["timestamp"], initial_time=start, active_period="5m")
+        past = FundingEvent(source="binance", symbol="BTCUSDT", timestamp=start - timedelta(hours=8), rate=Decimal("0.01"), mark_price=Decimal("100"))
+        current = FundingEvent(source="binance", symbol="BTCUSDT", timestamp=start + timedelta(minutes=5), rate=Decimal("0.001"), mark_price=Decimal("100"))
+        executor = FuturesReplayExecutor(
+            clock=clock, trade_bars=trade, mark_bars=mark, engine=engine,
+            funding_events=(past, current), symbol="BTCUSDT", source="binance",
+        )
+        executor.submit_order(action="open_long", order_type="market", margin="1000", leverage=5)
+
+        result = executor.advance()
+
+        self.assertEqual([event["timestamp"] for event in result["funding_events"]], [current.timestamp.isoformat()])
+        self.assertEqual(simulator.account.funding_paid, Decimal("5.000"))
+
     def test_large_periods_equal_repeated_five_minute_advances(self):
         cases = {
             "1h": (datetime(2024, 1, 7, 0, 0, tzinfo=UTC), 13),

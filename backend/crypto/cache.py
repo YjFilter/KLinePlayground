@@ -6,10 +6,17 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-import pandas as pd
+def _load_pandas():
+    import pandas as pd
+    return pd
+
 
 from .models import CryptoInstrument, CryptoRange, FundingEvent, utc_datetime
-from .validator import validate_crypto_frame
+
+
+def _validate_frame(frame, *, kind):
+    from .validator import validate_crypto_frame
+    return validate_crypto_frame(frame, kind=kind)
 
 CANDLE_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
 
@@ -19,6 +26,7 @@ class CryptoCacheCorruption(RuntimeError):
 class CryptoMonthlyCache:
     def __init__(self, root: Path):
         self.root = Path(root)
+        self._instrument_paths_cache = None
 
     def _directory(self, source: str, symbol: str, kind: str) -> Path:
         return self.root / source / symbol.upper() / kind
@@ -55,6 +63,7 @@ class CryptoMonthlyCache:
         }
         temp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         temp.replace(path)
+        self._instrument_paths_cache = None
 
     def load_instrument(self, source: str, symbol: str) -> CryptoInstrument | None:
         path = self._instrument_path(source, symbol)
@@ -72,7 +81,42 @@ class CryptoMonthlyCache:
         except Exception as exc:
             raise CryptoCacheCorruption(f"corrupt crypto instrument cache for {source}/{symbol}: {exc}") from exc
 
+    def _scan_instrument_paths(self) -> tuple[Path, ...]:
+        return tuple(sorted(self.root.glob("*/*/instrument.json"))) if self.root.exists() else ()
+
+    def _instrument_paths(self) -> tuple[Path, ...]:
+        if self._instrument_paths_cache is None:
+            self._instrument_paths_cache = self._scan_instrument_paths()
+        return self._instrument_paths_cache
+
+    def list_instruments(self) -> list[CryptoInstrument]:
+        instruments = []
+        for path in self._instrument_paths():
+            source = path.parent.parent.name
+            symbol = path.parent.name
+            instrument = self.load_instrument(source, symbol)
+            if instrument is not None:
+                instruments.append(instrument)
+        return sorted(instruments, key=lambda item: (item.symbol, item.source))
+
+    def search_instruments(self, query: str) -> list[CryptoInstrument]:
+        paths = self._instrument_paths()
+        if not paths:
+            raise FileNotFoundError("no cached crypto instruments")
+        term = query.strip().upper()
+        instruments = []
+        for path in paths:
+            symbol = path.parent.name
+            if term and term not in symbol.upper():
+                continue
+            source = path.parent.parent.name
+            instrument = self.load_instrument(source, symbol)
+            if instrument is not None:
+                instruments.append(instrument)
+        return sorted(instruments, key=lambda item: (-item.quote_turnover_24h, item.symbol, item.source))
+
     def save_funding(self, source: str, symbol: str, events: list[FundingEvent], start: datetime, end: datetime) -> None:
+        pd = _load_pandas()
         start = utc_datetime(start)
         end = utc_datetime(end)
         cursor = datetime(start.year, start.month, 1, tzinfo=timezone.utc)
@@ -126,6 +170,7 @@ class CryptoMonthlyCache:
         return any(datetime.fromisoformat(left) <= start and datetime.fromisoformat(right) >= end for left, right in merged)
 
     def _load_funding_path(self, source: str, symbol: str, path: Path) -> list[FundingEvent]:
+        pd = _load_pandas()
         if not path.exists():
             return []
         try:
@@ -148,6 +193,7 @@ class CryptoMonthlyCache:
 
     @staticmethod
     def merge(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+        pd = _load_pandas()
         frames = [value for value in (existing, incoming) if value is not None and not value.empty]
         if not frames:
             return pd.DataFrame(columns=CANDLE_COLUMNS)
@@ -157,7 +203,8 @@ class CryptoMonthlyCache:
         return merged[columns].drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
 
     def save(self, source: str, symbol: str, kind: str, frame: pd.DataFrame) -> None:
-        validation = validate_crypto_frame(frame, kind=kind)
+        pd = _load_pandas()
+        validation = _validate_frame(frame, kind=kind)
         if not validation.is_valid:
             codes = ", ".join(sorted({issue.code for issue in validation.issues}))
             raise ValueError(f"invalid crypto {kind} frame for {source}/{symbol}: {codes}")
@@ -187,6 +234,7 @@ class CryptoMonthlyCache:
             metadata_temp.replace(metadata_path)
 
     def _load_path(self, source, symbol, kind, path, *, missing_ok=False):
+        pd = _load_pandas()
         if not path.exists():
             if missing_ok:
                 return pd.DataFrame(columns=CANDLE_COLUMNS)
@@ -200,7 +248,7 @@ class CryptoMonthlyCache:
             for column in ("open", "high", "low", "close", "volume", "turnover"):
                 if column in frame.columns:
                     frame[column] = frame[column].map(lambda value: Decimal(value) if pd.notna(value) and value != "" else None)
-            validation = validate_crypto_frame(frame, kind=kind)
+            validation = _validate_frame(frame, kind=kind)
             if not validation.is_valid:
                 raise ValueError(", ".join(issue.code for issue in validation.issues))
             return frame
@@ -208,6 +256,7 @@ class CryptoMonthlyCache:
             raise CryptoCacheCorruption(f"corrupt crypto cache for {source}/{symbol}/{kind}/{path.stem.replace('.csv', '')}: {exc}") from exc
 
     def load(self, source: str, symbol: str, kind: str, start: datetime | None = None, end: datetime | None = None) -> pd.DataFrame:
+        pd = _load_pandas()
         directory = self._directory(source, symbol, kind)
         frames = [
             self._load_path(source, symbol, kind, path)
@@ -247,6 +296,7 @@ class CryptoMonthlyCache:
         return CryptoRange(frame["timestamp"].min().to_pydatetime(), frame["timestamp"].max().to_pydatetime())
 
     def missing_ranges(self, source: str, symbol: str, kind: str, start: datetime, end: datetime) -> list[tuple[datetime, datetime]]:
+        pd = _load_pandas()
         start = utc_datetime(start)
         end = utc_datetime(end)
         timestamps = pd.to_datetime(self.load(source, symbol, kind, start, end)["timestamp"], utc=True)

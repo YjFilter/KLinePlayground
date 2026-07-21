@@ -1,12 +1,13 @@
-from flask import Flask, request, jsonify
+from flask import Flask, Response, request, jsonify
 from flask_cors import CORS
+import hmac
 import os
 import sys
 import json
 import base64
 import random
 import requests
-from threading import Lock
+from threading import Lock, Timer
 from datetime import datetime, timedelta, timezone
 import sqlite3
 import pandas as pd
@@ -16,6 +17,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from backend.data_manager import DataManager
+from backend.cloud_state import CloudStateError, CloudUserArchiveStore
 from backend.kline_processor_enhanced import KLineProcessorEnhanced
 from backend.market_rules import get_limit_status, is_buy_blocked, is_sell_blocked
 from backend.order_manager import PendingOrderManager
@@ -39,8 +41,37 @@ if getattr(sys, 'frozen', False):
     project_root = os.path.join(os.path.dirname(sys.executable), '..')
 else:
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-users_dir_path = os.path.join(project_root, 'users')
+is_vercel_runtime = bool(os.environ.get('VERCEL'))
+users_dir_path = os.environ.get(
+    'KLINE_USERS_DIR',
+    os.path.join('/tmp', 'kline-playground', 'users') if is_vercel_runtime else os.path.join(project_root, 'users'),
+)
 data_dir_path = os.path.join(project_root, 'data')
+os.environ.setdefault('KLINE_USERS_DIR', users_dir_path)
+deployment_auth_user = os.environ.get('KLINE_DEPLOYMENT_USER', 'kline')
+deployment_auth_password = os.environ.get('KLINE_DEPLOYMENT_PASSWORD', '')
+
+
+@app.before_request
+def require_deployment_auth():
+    if request.endpoint == 'health_check':
+        return None
+    if not is_vercel_runtime or not deployment_auth_password:
+        return None
+    authorization = request.authorization
+    valid_user = authorization is not None and hmac.compare_digest(
+        authorization.username or '', deployment_auth_user,
+    )
+    valid_password = authorization is not None and hmac.compare_digest(
+        authorization.password or '', deployment_auth_password,
+    )
+    if valid_user and valid_password:
+        return None
+    return Response(
+        'Authentication required',
+        401,
+        {'WWW-Authenticate': 'Basic realm="KLine Playground", charset="UTF-8"'},
+    )
 
 # 初始化管理器
 data_manager = DataManager(data_dir=data_dir_path)
@@ -61,12 +92,117 @@ MARKET_TYPE_A_SHARE = "a_share"
 MARKET_TYPE_CRYPTO_PERPETUAL = "crypto_perpetual"
 DATA_MODE_CRYPTO_5M = "crypto_5m"
 VALID_CRYPTO_PERIODS = ("5m", "15m", "30m", "1h", "4h", "daily", "weekly")
+DEFAULT_CRYPTO_MAKER_FEE_RATE = "0.0002"
+DEFAULT_CRYPTO_TAKER_FEE_RATE = "0.0005"
+MAX_CRYPTO_FEE_RATE = "0.01"
+CRYPTO_REPLAY_CHECKPOINT_DELAY_SECONDS = 0.0 if is_vercel_runtime else 0.75
 # 懒加载的 IntradayDataService 单例；legacy_daily 路径不会触发其创建，
 # 因此旧用户不会因缺少 baostock 等可选依赖而受影响。
 _intraday_service_instance = None
 _crypto_sources_instance = None
+_crypto_instrument_cache_instance = None
 _crypto_data_service_instance = None
 _crypto_universe_instance = None
+
+cloud_user_store = CloudUserArchiveStore(users_dir_path)
+cloud_state_ready = not cloud_user_store.enabled
+cloud_state_last_error = None
+
+
+def _restore_cloud_users():
+    global cloud_state_ready, cloud_state_last_error
+    if not cloud_user_store.enabled:
+        cloud_state_ready = True
+        return []
+    try:
+        restored = cloud_user_store.restore_all()
+    except CloudStateError as exc:
+        cloud_state_ready = False
+        cloud_state_last_error = str(exc)
+        raise
+    cloud_state_ready = True
+    cloud_state_last_error = None
+    return restored
+
+
+def _request_cloud_username():
+    view_args = request.view_args or {}
+    username = view_args.get('username')
+    if username:
+        return str(username)
+    payload = request.get_json(silent=True) if request.is_json else None
+    if isinstance(payload, dict):
+        username = payload.get('user') or payload.get('username')
+        if username:
+            return str(username)
+    training_id = view_args.get('training_id')
+    if training_id:
+        training = active_trainings.get(training_id)
+        if training and training.get('user'):
+            return str(training['user'])
+        for candidate in user_manager.get_users():
+            if str(training_id).startswith(f"{candidate}_"):
+                return str(candidate)
+    return None
+
+
+if cloud_user_store.enabled:
+    try:
+        _restore_cloud_users()
+    except CloudStateError as exc:
+        print(f"Cloud user restore deferred: {exc}")
+
+
+@app.before_request
+def restore_cloud_request_state():
+    if not cloud_user_store.enabled:
+        return None
+    view_args = request.view_args or {}
+    training_id = view_args.get('training_id')
+    if training_id and training_id not in active_trainings:
+        try:
+            _restore_cloud_users()
+            _restore_crypto_training(training_id)
+        except (CloudStateError, ValueError):
+            pass
+    username = _request_cloud_username()
+    request.environ['kline.cloud_username'] = username or ''
+    if username and not os.path.isdir(os.path.join(users_dir_path, username)):
+        try:
+            cloud_user_store.restore_user(username)
+        except CloudStateError as exc:
+            return jsonify({'error': str(exc), 'code': 'cloud_state_unavailable'}), 503
+    return None
+
+
+@app.after_request
+def persist_cloud_request_state(response):
+    global cloud_state_ready, cloud_state_last_error
+    if not cloud_user_store.enabled or request.method not in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        return response
+    if response.status_code >= 400:
+        return response
+    username = request.environ.get('kline.cloud_username') or _request_cloud_username()
+    if not username:
+        return response
+    try:
+        if request.method == 'DELETE' and request.endpoint == 'delete_user':
+            cloud_user_store.delete_user(username)
+        else:
+            cloud_user_store.save_user(username)
+    except (CloudStateError, FileNotFoundError) as exc:
+        cloud_state_ready = False
+        cloud_state_last_error = str(exc)
+        error_response = jsonify({
+            'error': 'cloud persistence failed',
+            'detail': str(exc),
+            'code': 'cloud_state_persist_failed',
+        })
+        error_response.status_code = 503
+        return error_response
+    cloud_state_ready = True
+    cloud_state_last_error = None
+    return response
 
 
 def _get_intraday_data_service():
@@ -100,16 +236,24 @@ def _get_crypto_sources():
     return _crypto_sources_instance
 
 
+def _get_crypto_instrument_cache():
+    global _crypto_instrument_cache_instance
+    if _crypto_instrument_cache_instance is None:
+        from backend.crypto.cache import CryptoMonthlyCache
+
+        cache_root = os.path.join(data_dir_path, 'crypto')
+        _crypto_instrument_cache_instance = CryptoMonthlyCache(cache_root)
+    return _crypto_instrument_cache_instance
+
+
 def _get_crypto_data_service():
     global _crypto_data_service_instance
     if _crypto_data_service_instance is None:
-        from backend.crypto.cache import CryptoMonthlyCache
         from backend.crypto.service import CryptoDataService
 
-        cache_root = os.path.join(data_dir_path, 'crypto')
         _crypto_data_service_instance = CryptoDataService(
             sources=_get_crypto_sources(),
-            cache=CryptoMonthlyCache(cache_root),
+            cache=_get_crypto_instrument_cache(),
         )
     return _crypto_data_service_instance
 
@@ -128,10 +272,42 @@ def _get_crypto_universe():
             except Exception:
                 return False
 
+        class CachedCryptoSource:
+            name = 'offline-cache'
+
+            def list_instruments(self):
+                instruments = _get_crypto_instrument_cache().list_instruments()
+                if not instruments:
+                    raise RuntimeError('no cached crypto instruments')
+                return instruments
+
+            def search_instruments(self, query):
+                return _get_crypto_instrument_cache().search_instruments(query)
+
+        class DeferredCryptoSource:
+            def __init__(self, name, index):
+                self.name = name
+                self.index = index
+
+            def list_instruments(self):
+                sources = _get_crypto_sources()
+                if self.index >= len(sources):
+                    raise RuntimeError(f'{self.name} crypto source is unavailable')
+                return sources[self.index].list_instruments()
+
         _crypto_universe_instance = CryptoUniverse(
-            _get_crypto_sources(), availability_checker=availability_checker,
+            (
+                CachedCryptoSource(),
+                DeferredCryptoSource('binance', 0),
+                DeferredCryptoSource('bybit', 1),
+            ),
+            availability_checker=availability_checker,
         )
     return _crypto_universe_instance
+
+
+_get_crypto_instrument_cache()
+_get_crypto_universe()
 
 
 def _serialize_crypto_instrument(instrument):
@@ -390,17 +566,41 @@ def _crypto_get_data(training):
 
 
 def _crypto_next(training):
-    snapshot = training['crypto_session'].advance()
-    _checkpoint_crypto_futures(training)
-    snapshot.update(_crypto_snapshot(training))
-    return jsonify({
-        'data_mode': DATA_MODE_CRYPTO_5M,
-        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
-        'snapshot': snapshot,
-        'finished': snapshot.get('finished', False),
-        'completed_times': snapshot.get('completed_times', []),
-        'order_events': snapshot.get('order_events', []),
-    })
+    lock = training.setdefault('_crypto_next_lock', Lock())
+    if not lock.acquire(blocking=False):
+        return jsonify({'error': '下一根 K 线正在推进，请稍候。', 'code': 'advance_in_progress'}), 409
+    try:
+        delta = training['crypto_session'].advance_delta(max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT)
+        _schedule_crypto_checkpoint(training)
+        payload = _crypto_futures_payload(training, compact=True)
+        position = payload['position']
+        delta.update({
+            'bars': [] if delta.get('new_bar') is None else [delta['new_bar']],
+            'progress': {
+                'current_time': delta.get('current_time'),
+                'next_boundary': delta.get('next_boundary'),
+                'finished': delta.get('finished', False),
+                'current_bar_complete': delta.get('current_bar_complete', False),
+            },
+            'account': payload['account'],
+            'position': position,
+            'positions': [] if position.get('side') == 'flat' else [position],
+            'pending_orders': payload['pending_orders'],
+            'fills': payload['fills'],
+            'trade_markers': payload['trade_markers'],
+            'order_constraints': payload['order_constraints'],
+        })
+        payload.update({
+            'data_mode': DATA_MODE_CRYPTO_5M,
+            'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+            'delta': delta,
+            'finished': delta.get('finished', False),
+            'completed_times': delta.get('completed_times', []),
+            'order_events': delta.get('order_events', []),
+        })
+        return jsonify(payload)
+    finally:
+        lock.release()
 
 
 CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT = 300
@@ -467,7 +667,11 @@ def _initialize_crypto_futures(training):
         min_notional=instrument.min_notional,
         leverage=training.get('leverage', 5),
     )
-    order_book = FuturesOrderBook(simulator)
+    order_book = FuturesOrderBook(
+        simulator,
+        maker_fee_rate=training.get('maker_fee_rate', DEFAULT_CRYPTO_MAKER_FEE_RATE),
+        taker_fee_rate=training.get('taker_fee_rate', DEFAULT_CRYPTO_TAKER_FEE_RATE),
+    )
     engine = FuturesEngine(simulator, order_book)
     executor = FuturesReplayExecutor(
         clock=training['crypto_session'].clock,
@@ -483,11 +687,27 @@ def _initialize_crypto_futures(training):
     return executor
 
 
-def _crypto_futures_payload(training):
+def _crypto_futures_payload(training, *, compact=False):
     executor = training['futures_executor']
-    payload = executor.snapshot()
     simulator = executor.engine.simulator
     mark_price = simulator.last_mark_price or simulator.position.entry_price
+    if compact:
+        simulator_snapshot = simulator.snapshot(mark_price)
+        payload = {
+            'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+            'data_mode': DATA_MODE_CRYPTO_5M,
+            'symbol': executor.symbol,
+            'source': executor.source,
+            'current_time': executor.clock.current_time.isoformat(),
+            'active_period': executor.clock.active_period.value,
+            'finished': not executor.clock.has_next(),
+            'account': simulator_snapshot['account'],
+            'position': simulator_snapshot['position'],
+            'fills': [fill.to_dict() for fill in simulator.fills[-20:]],
+            'trade_markers': executor._trade_markers(),
+        }
+    else:
+        payload = executor.snapshot()
     liquidation_price = executor.engine.liquidation_price()
     position = payload['position']
     position.update({
@@ -500,21 +720,100 @@ def _crypto_futures_payload(training):
         'margin_ratio': float(simulator.margin_ratio(mark_price) / 100),
         'funding_net': float(simulator.account.funding_received - simulator.account.funding_paid),
     })
+    order_book = executor.engine.order_book
+    leverage = int(training.get('leverage', simulator.leverage))
+    trade_price = executor._trade_bars[executor.clock.current_time]['close']
+    payload['order_constraints'] = {
+        'maker_fee_rate': float(order_book.maker_fee_rate),
+        'taker_fee_rate': float(order_book.taker_fee_rate),
+        'reserved_margin': float(order_book.reserved_margin),
+        'leverage': leverage,
+        'current_price': float(trade_price),
+        'quantity_step': float(simulator.quantity_step),
+        'min_quantity': float(simulator.min_quantity),
+        'min_notional': float(simulator.min_notional),
+        'max_market_margin': float(order_book.max_open_margin(order_type='market', leverage=leverage)),
+        'max_limit_margin': float(order_book.max_open_margin(order_type='limit', leverage=leverage)),
+        'max_breakout_margin': float(order_book.max_open_margin(order_type='breakout', leverage=leverage)),
+    }
     payload['pending_orders'] = [
         order.to_dict() for order in executor.engine.order_book.active_orders
     ]
     return payload
 
 
+def _crypto_update_fee_rates(training, data):
+    from backend.crypto.futures_models import decimal_value
+
+    executor = training['futures_executor']
+    order_book = executor.engine.order_book
+    simulator = executor.engine.simulator
+    if not simulator.position.is_flat or order_book.active_orders:
+        return jsonify({'error': '请在空仓且无挂单时修改手续费率。'}), 400
+    try:
+        maker = decimal_value(data.get('maker_fee_rate'))
+        taker = decimal_value(data.get('taker_fee_rate'))
+        maximum = decimal_value(MAX_CRYPTO_FEE_RATE)
+        if maker < 0 or taker < 0 or maker > maximum or taker > maximum:
+            raise ValueError('fee rate out of range')
+        order_book.set_fee_rates(maker_fee_rate=maker, taker_fee_rate=taker)
+    except (TypeError, ValueError, ArithmeticError):
+        return jsonify({'error': '手续费率必须是 0% 到 1% 之间的有效数字。'}), 400
+    training['maker_fee_rate'] = format(maker, 'f')
+    training['taker_fee_rate'] = format(taker, 'f')
+    _checkpoint_crypto_futures(training)
+    payload = _crypto_futures_payload(training)
+    payload.update({'success': True, 'message': '手续费率已更新，仅影响后续成交。'})
+    return jsonify(payload)
+
+
 def _crypto_trade(training, data):
     executor = training['futures_executor']
-    order = executor.submit_order(
-        action=data.get('action'),
-        order_type=data.get('order_type', 'market'),
-        margin=data.get('margin'),
-        leverage=int(data.get('leverage', training.get('leverage', 5))),
-        limit_price=data.get('limit_price'),
-    )
+    try:
+        order = executor.submit_order(
+            action=data.get('action'),
+            order_type=data.get('order_type', 'market'),
+            margin=data.get('margin'),
+            leverage=int(data.get('leverage', training.get('leverage', 5))),
+            limit_price=data.get('limit_price'),
+            trigger_price=data.get('trigger_price'),
+            tp_price=data.get('tp_price'),
+            sl_price=data.get('sl_price'),
+        )
+    except ValueError as error:
+        message = str(error)
+        structured_code = getattr(error, 'code', None)
+        structured_message = getattr(error, 'message', None)
+        if structured_code and structured_message:
+            return jsonify({
+                'error': structured_message,
+                'message': structured_message,
+                'code': structured_code,
+            }), 400
+        error_map = {
+            'insufficient available margin including fee': (
+                'insufficient_margin', '可用保证金不足，请降低保证金并预留手续费。'
+            ),
+            'margin must be positive': ('invalid_margin', '保证金必须大于 0。'),
+            'margin is required for open orders': ('invalid_margin', '请输入开仓保证金。'),
+            'cannot close a flat position': ('no_position', '当前没有可平仓的持仓。'),
+            'limit_price is required for limit orders': ('invalid_limit_price', '限价单必须填写限价。'),
+            'limit_price must be positive': ('invalid_limit_price', '限价必须大于 0。'),
+            'trigger_price is required for breakout orders': ('invalid_trigger_price', '突破单必须填写触发价。'),
+            'trigger_price must be positive': ('invalid_trigger_price', '触发价必须大于 0。'),
+            'leverage can change only while flat without active orders': (
+                'leverage_locked', '存在持仓或挂单时不能修改杠杆。'
+            ),
+            'tp/sl can only be set on opening orders': ('invalid_tp_sl', '止盈止损只能设置在开仓单上。'),
+            'tp_price must be positive': ('invalid_tp_sl', '止盈价必须大于 0。'),
+            'sl_price must be positive': ('invalid_tp_sl', '止损价必须大于 0。'),
+            'tp_price must be above entry price for long': ('invalid_tp_sl', '做多止盈价必须高于开仓价。'),
+            'sl_price must be below entry price for long': ('invalid_tp_sl', '做多止损价必须低于开仓价。'),
+            'tp_price must be below entry price for short': ('invalid_tp_sl', '做空止盈价必须低于开仓价。'),
+            'sl_price must be above entry price for short': ('invalid_tp_sl', '做空止损价必须高于开仓价。'),
+        }
+        code, localized = error_map.get(message, ('invalid_order', '合约订单参数无效，请检查后重试。'))
+        return jsonify({'error': localized, 'message': localized, 'code': code}), 400
     training['leverage'] = order.leverage
     _checkpoint_crypto_futures(training)
     payload = _crypto_futures_payload(training)
@@ -566,6 +865,8 @@ def _crypto_end(training, training_id):
         'trade_markers': payload['trade_markers'],
         'account': account,
         'position': payload['position'],
+        'maker_fee_rate': payload['order_constraints']['maker_fee_rate'],
+        'taker_fee_rate': payload['order_constraints']['taker_fee_rate'],
     })
     session_data = {
         'session_id': training_id,
@@ -640,6 +941,8 @@ def _crypto_runtime_state(training, *, status=None):
         'max_training_days': training.get('max_training_days'),
         'initial_capital': training['initial_capital'],
         'leverage': training.get('leverage', 5),
+        'maker_fee_rate': format(training['futures_executor'].engine.order_book.maker_fee_rate, 'f'),
+        'taker_fee_rate': format(training['futures_executor'].engine.order_book.taker_fee_rate, 'f'),
         'status': status or training.get('status', 'active'),
     }
     return state
@@ -651,19 +954,57 @@ def _checkpoint_crypto_futures(training):
     training_id = training.get('id')
     if not training_id or not training.get('futures_executor'):
         return
-    db_path = user_manager.history_manager._get_user_db_path(training['user'])
-    repository = CryptoFuturesRepository(db_path)
-    repository.save_session_metadata(
-        training_id,
-        market_type=MARKET_TYPE_CRYPTO_PERPETUAL,
-        symbol=training['symbol'],
-        quote_currency='USDT',
-        base_interval='5m',
-        timezone='UTC',
-        source=training['source'],
-        simulator_type='isolated_futures',
-    )
-    repository.save_runtime_state(training_id, _crypto_runtime_state(training))
+    write_lock = training.setdefault('_crypto_checkpoint_write_lock', Lock())
+    with write_lock:
+        db_path = user_manager.history_manager._get_user_db_path(training['user'])
+        repository = CryptoFuturesRepository(db_path)
+        repository.save_session_metadata(
+            training_id,
+            market_type=MARKET_TYPE_CRYPTO_PERPETUAL,
+            symbol=training['symbol'],
+            quote_currency='USDT',
+            base_interval='5m',
+            timezone='UTC',
+            source=training['source'],
+            simulator_type='isolated_futures',
+        )
+        repository.save_runtime_state(training_id, _crypto_runtime_state(training))
+
+
+def _schedule_crypto_checkpoint(training):
+    if app.config.get('TESTING'):
+        return
+    if CRYPTO_REPLAY_CHECKPOINT_DELAY_SECONDS <= 0:
+        _checkpoint_crypto_futures(training)
+        return
+    schedule_lock = training.setdefault('_crypto_checkpoint_schedule_lock', Lock())
+    with schedule_lock:
+        previous = training.get('_crypto_checkpoint_timer')
+        if previous is not None:
+            previous.cancel()
+        generation = int(training.get('_crypto_checkpoint_generation', 0)) + 1
+        training['_crypto_checkpoint_generation'] = generation
+        timer = Timer(
+            CRYPTO_REPLAY_CHECKPOINT_DELAY_SECONDS,
+            _run_scheduled_crypto_checkpoint,
+            args=(training, generation),
+        )
+        timer.daemon = True
+        training['_crypto_checkpoint_timer'] = timer
+        timer.start()
+
+
+def _run_scheduled_crypto_checkpoint(training, generation):
+    if generation != training.get('_crypto_checkpoint_generation'):
+        return
+    next_lock = training.setdefault('_crypto_next_lock', Lock())
+    with next_lock:
+        if generation == training.get('_crypto_checkpoint_generation') and training.get('status') == 'active':
+            _checkpoint_crypto_futures(training)
+    schedule_lock = training.setdefault('_crypto_checkpoint_schedule_lock', Lock())
+    with schedule_lock:
+        if generation == training.get('_crypto_checkpoint_generation'):
+            training['_crypto_checkpoint_timer'] = None
 
 
 def _parse_crypto_runtime_time(value):
@@ -744,6 +1085,8 @@ def _restore_crypto_training(training_id):
             'max_training_days': int(metadata.get('max_training_days') or 1),
             'initial_capital': float(metadata.get('initial_capital') or 0),
             'leverage': int(metadata.get('leverage') or 5),
+            'maker_fee_rate': format(executor.engine.order_book.maker_fee_rate, 'f'),
+            'taker_fee_rate': format(executor.engine.order_book.taker_fee_rate, 'f'),
             'crypto_session': session,
             'crypto_bundle': bundle,
             'instrument': bundle.instrument,
@@ -2259,6 +2602,16 @@ def get_full_data(training_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/training/<training_id>/fee-rates', methods=['POST'])
+def update_crypto_fee_rates(training_id):
+    if training_id not in active_trainings:
+        return jsonify({'error': '训练会话不存在'}), 404
+    training = active_trainings[training_id]
+    if not _is_crypto_session(training):
+        return jsonify({'error': '手续费率设置仅适用于币圈合约训练。'}), 400
+    return _crypto_update_fee_rates(training, request.get_json(silent=True) or {})
+
+
 @app.route('/api/training/<training_id>/trade', methods=['POST'])
 def execute_trade(training_id):
     """执行交易"""
@@ -2270,7 +2623,9 @@ def execute_trade(training_id):
         training = active_trainings[training_id]
 
         if _is_crypto_session(training):
-            return _crypto_trade(training, data)
+            lock = training.setdefault('_crypto_next_lock', Lock())
+            with lock:
+                return _crypto_trade(training, data or {})
 
         # === intraday_30m 分支: 使用当前 base bar 的 close，保存完整 time/display period ===
         if _is_intraday_session(training):
@@ -2413,14 +2768,38 @@ def cancel_pending_order(training_id, order_id):
             return jsonify({'error': '训练会话不存在'}), 404
         training = active_trainings[training_id]
         if _is_crypto_session(training):
-            cancelled = training['futures_executor'].engine.order_book.cancel_order(
-                str(order_id), training['crypto_session'].clock.current_time,
-            )
+            lock = training.setdefault('_crypto_next_lock', Lock())
+            with lock:
+                order_book = training['futures_executor'].engine.order_book
+                normalized_order_id = str(order_id)
+                order = next(
+                    (candidate for candidate in order_book.orders if candidate.order_id == normalized_order_id),
+                    None,
+                )
+                cancelled = order_book.cancel_order(
+                    normalized_order_id, training['crypto_session'].clock.current_time,
+                )
+                if cancelled:
+                    _checkpoint_crypto_futures(training)
+                pending_orders = _crypto_futures_payload(training)['pending_orders']
             if not cancelled:
-                return jsonify({'error': 'order does not exist or is no longer active'}), 404
+                if order is None:
+                    return jsonify({
+                        'error': '订单不存在，挂单列表已刷新。',
+                        'code': 'order_not_found',
+                        'pending_orders': pending_orders,
+                    }), 404
+                return jsonify({
+                    'error': '订单已成交或已撤销，挂单列表已刷新。',
+                    'code': 'order_inactive',
+                    'order_status': order.status,
+                    'pending_orders': pending_orders,
+                }), 409
             return jsonify({
                 'success': True,
-                'pending_orders': _crypto_futures_payload(training)['pending_orders'],
+                'order_id': normalized_order_id,
+                'order_status': 'cancelled',
+                'pending_orders': pending_orders,
             })
         order_manager = training.get('order_manager')
         if not order_manager or not order_manager.cancel_order(order_id):
@@ -2710,7 +3089,11 @@ def health_check():
     return jsonify({
         'status': 'ok',
         'timestamp': datetime.now().isoformat(),
-        'active_trainings': len(active_trainings)
+        'active_trainings': len(active_trainings),
+        'cloud_state_enabled': cloud_user_store.enabled,
+        'cloud_state_ready': cloud_state_ready,
+        'cloud_state_error': cloud_state_last_error,
+        'cloud_user_count': len(user_manager.get_users()),
     })
 
 if __name__ == '__main__':

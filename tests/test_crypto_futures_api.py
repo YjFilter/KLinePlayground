@@ -13,6 +13,7 @@ import backend.app_enhanced as app_module
 from backend.crypto.futures_engine import FuturesEngine
 from backend.crypto.futures_orders import FuturesOrderBook
 from backend.crypto.futures_simulator import FuturesSimulator
+from backend.crypto.persistence import CryptoFuturesRepository
 from backend.crypto.session import CryptoReplaySession
 from backend.crypto.trading import FuturesReplayExecutor
 
@@ -135,6 +136,199 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertEqual(records.status_code, 200, records.get_json())
         self.assertEqual(records.get_json()[0]["action"], "open_long")
 
+    def test_account_exposes_fee_aware_open_margin_constraints(self):
+        response = self.client.get(f"/api/training/{self.training_id}/account")
+        self.assertEqual(response.status_code, 200, response.get_json())
+        constraints = response.get_json()["order_constraints"]
+        self.assertEqual(constraints["maker_fee_rate"], 0.0002)
+        self.assertEqual(constraints["taker_fee_rate"], 0.0005)
+        self.assertEqual(constraints["leverage"], 5)
+        self.assertEqual(constraints["quantity_step"], 0.001)
+        self.assertEqual(constraints["min_quantity"], 0.001)
+        self.assertEqual(constraints["min_notional"], 5.0)
+        self.assertGreater(constraints["current_price"], 0)
+        self.assertLess(constraints["max_market_margin"], 10000)
+        self.assertLessEqual(constraints["max_limit_margin"], 10000)
+
+        order = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={
+                "action": "open_short",
+                "order_type": "market",
+                "margin": constraints["max_market_margin"],
+                "leverage": 5,
+            },
+        )
+        self.assertEqual(order.status_code, 200, order.get_json())
+        self.assertEqual(order.get_json()["position"]["side"], "short")
+
+    def test_breakout_order_accepts_trigger_price_and_uses_taker_margin_constraint(self):
+        account = self.client.get(f"/api/training/{self.training_id}/account").get_json()
+        self.assertEqual(
+            account["order_constraints"]["max_breakout_margin"],
+            account["order_constraints"]["max_market_margin"],
+        )
+
+        response = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={
+                "action": "open_long",
+                "order_type": "breakout",
+                "margin": 100,
+                "leverage": 5,
+                "trigger_price": 105,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        order = response.get_json()["order"]
+        self.assertEqual(order["order_type"], "breakout")
+        self.assertEqual(order["trigger_price"], 105.0)
+        self.assertEqual(response.get_json()["pending_orders"][0]["order_id"], order["order_id"])
+
+    def test_crypto_next_returns_delta_and_compact_account_payload(self):
+        response = self.client.post(f"/api/training/{self.training_id}/next")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        payload = response.get_json()
+        self.assertIn("delta", payload)
+        self.assertIn("new_bar", payload["delta"])
+        self.assertNotIn("snapshot", payload)
+        self.assertNotIn("kline_data", payload["delta"])
+        self.assertIn("account", payload)
+        self.assertIn("position", payload)
+        self.assertIn("pending_orders", payload)
+        self.assertNotIn("equity_snapshots", payload)
+
+    def test_crypto_next_restores_active_runtime_before_route(self):
+        training_id = "restore-route"
+        training = _training(training_id)
+        training["user"] = "restore-user"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "history.db"
+            repository = CryptoFuturesRepository(db_path)
+            repository.save_session_metadata(
+                training_id,
+                market_type="crypto_perpetual",
+                symbol="BTCUSDT",
+                quote_currency="USDT",
+                base_interval="5m",
+                timezone="UTC",
+                source="binance",
+                simulator_type="isolated_futures",
+            )
+            repository.save_runtime_state(training_id, app_module._crypto_runtime_state(training))
+            bundle = training["crypto_bundle"]
+            service = SimpleNamespace(get_bundle=lambda *args, **kwargs: bundle)
+            app_module.active_trainings.pop(training_id, None)
+            try:
+                with patch.object(app_module.user_manager, "get_users", return_value=["restore-user"]), \
+                     patch.object(app_module.user_manager.history_manager, "_get_user_db_path", return_value=str(db_path)), \
+                     patch.object(app_module, "_get_crypto_data_service", return_value=service):
+                    response = self.client.post(f"/api/training/{training_id}/next")
+                payload = response.get_json()
+                self.assertEqual(response.status_code, 200, payload)
+                self.assertEqual(payload["delta"]["current_time"], "2025-01-01 00:05:00")
+                self.assertNotIn("snapshot", payload)
+                self.assertIn(training_id, app_module.active_trainings)
+            finally:
+                app_module.active_trainings.pop(training_id, None)
+
+    def test_crypto_next_schedules_checkpoint_instead_of_writing_synchronously(self):
+        with patch.object(app_module, "_schedule_crypto_checkpoint") as schedule:
+            response = self.client.post(f"/api/training/{self.training_id}/next")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        schedule.assert_called_once_with(app_module.active_trainings[self.training_id])
+        self.checkpoint.assert_not_called()
+
+    def test_fee_rates_can_be_updated_before_trading_and_affect_new_fills(self):
+        response = self.client.post(
+            f"/api/training/{self.training_id}/fee-rates",
+            json={"maker_fee_rate": 0.0001, "taker_fee_rate": 0.0003},
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        constraints = response.get_json()["order_constraints"]
+        self.assertEqual(constraints["maker_fee_rate"], 0.0001)
+        self.assertEqual(constraints["taker_fee_rate"], 0.0003)
+
+        order = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={"action": "open_long", "order_type": "market", "margin": 100, "leverage": 5},
+        )
+        self.assertEqual(order.status_code, 200, order.get_json())
+        fill = order.get_json()["fills"][-1]
+        self.assertAlmostEqual(fill["fee"], fill["quantity"] * fill["price"] * 0.0003)
+        self.assertGreaterEqual(self.checkpoint.call_count, 2)
+
+    def test_fee_rates_reject_changes_after_a_position_is_open(self):
+        order = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={"action": "open_long", "order_type": "market", "margin": 100, "leverage": 5},
+        )
+        self.assertEqual(order.status_code, 200, order.get_json())
+
+        response = self.client.post(
+            f"/api/training/{self.training_id}/fee-rates",
+            json={"maker_fee_rate": 0.0001, "taker_fee_rate": 0.0003},
+        )
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertIn("空仓", response.get_json()["error"])
+
+    def test_unaffordable_crypto_order_returns_localized_400_error(self):
+        response = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={"action": "open_long", "order_type": "market", "margin": 10000, "leverage": 5},
+        )
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertEqual(response.get_json()["code"], "insufficient_margin")
+        self.assertIn("手续费", response.get_json()["error"])
+        self.assertNotIn("insufficient available margin", response.get_json()["error"])
+
+    def test_invalid_limit_direction_returns_stable_error_code_and_message(self):
+        response = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={
+                "action": "open_long",
+                "order_type": "limit",
+                "margin": 100,
+                "leverage": 5,
+                "limit_price": 100,
+            },
+        )
+
+        self.assertEqual(response.status_code, 400, response.get_json())
+        payload = response.get_json()
+        self.assertEqual(payload["code"], "invalid_limit_direction")
+        self.assertEqual(payload["message"], payload["error"])
+
+    def test_duplicate_pending_entry_is_rejected_until_original_is_cancelled(self):
+        first = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={
+                "action": "open_long",
+                "order_type": "limit",
+                "margin": 100,
+                "leverage": 5,
+                "limit_price": 99,
+            },
+        )
+        self.assertEqual(first.status_code, 200, first.get_json())
+
+        duplicate = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={
+                "action": "open_long",
+                "order_type": "breakout",
+                "margin": 100,
+                "leverage": 5,
+                "trigger_price": 105,
+            },
+        )
+
+        self.assertEqual(duplicate.status_code, 400, duplicate.get_json())
+        self.assertEqual(duplicate.get_json()["code"], "duplicate_pending_order")
+
     def test_limit_order_is_pending_until_next_bar_and_can_be_cancelled(self):
         response = self.client.post(
             f"/api/training/{self.training_id}/trade",
@@ -150,8 +344,33 @@ class CryptoFuturesAPITests(unittest.TestCase):
         order_id = response.get_json()["order"]["order_id"]
         self.assertEqual(len(response.get_json()["pending_orders"]), 1)
 
+        self.checkpoint.reset_mock()
         cancelled = self.client.delete(f"/api/training/{self.training_id}/orders/{order_id}")
         self.assertEqual(cancelled.status_code, 200, cancelled.get_json())
+        self.assertEqual(cancelled.get_json()["pending_orders"], [])
+        self.checkpoint.assert_called_once_with(app_module.active_trainings[self.training_id])
+
+    def test_cancel_inactive_crypto_order_returns_authoritative_pending_orders(self):
+        response = self.client.post(
+            f"/api/training/{self.training_id}/trade",
+            json={
+                "action": "open_short",
+                "order_type": "limit",
+                "margin": 100,
+                "leverage": 5,
+                "limit_price": 105,
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.get_json())
+        order_id = response.get_json()["order"]["order_id"]
+        order_book = app_module.active_trainings[self.training_id]["futures_executor"].engine.order_book
+        self.assertTrue(order_book.cancel_order(order_id, START + timedelta(minutes=1)))
+
+        cancelled = self.client.delete(f"/api/training/{self.training_id}/orders/{order_id}")
+
+        self.assertEqual(cancelled.status_code, 409, cancelled.get_json())
+        self.assertEqual(cancelled.get_json()["code"], "order_inactive")
+        self.assertEqual(cancelled.get_json()["order_status"], "cancelled")
         self.assertEqual(cancelled.get_json()["pending_orders"], [])
 
     def test_end_saves_crypto_report_instead_of_resetting(self):
@@ -169,6 +388,20 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertEqual(saved["report_data"]["symbol"], "BTCUSDT")
         self.assertEqual(saved["report_data"]["simulator_type"], "isolated_futures")
         persist.assert_called_once()
+
+    def test_reset_preserves_custom_fee_rates(self):
+        updated = self.client.post(
+            f"/api/training/{self.training_id}/fee-rates",
+            json={"maker_fee_rate": 0.0001, "taker_fee_rate": 0.0003},
+        )
+        self.assertEqual(updated.status_code, 200, updated.get_json())
+
+        response = self.client.post(f"/api/training/{self.training_id}/reset")
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        constraints = response.get_json()["snapshot"]["order_constraints"]
+        self.assertEqual(constraints["maker_fee_rate"], 0.0001)
+        self.assertEqual(constraints["taker_fee_rate"], 0.0003)
 
     def test_reset_recreates_empty_futures_account(self):
         self.client.post(

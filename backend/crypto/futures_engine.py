@@ -241,8 +241,19 @@ class FuturesEngine:
         liquidation = self.check_liquidation(timestamp=event_time, mark_low=mark["low"], mark_high=mark["high"])
         fills = []
         if liquidation is None:
-            fills.extend(self.order_book.process_bar(timestamp=event_time, **trade, reduce_only=True))
-            fills.extend(self.order_book.process_bar(timestamp=event_time, **trade, reduce_only=False))
+            trigger_prices = {"trigger_high": mark["high"], "trigger_low": mark["low"]}
+            fills.extend(self.order_book.process_bar(
+                timestamp=event_time,
+                **trade,
+                **trigger_prices,
+                reduce_only=True,
+            ))
+            fills.extend(self.order_book.process_bar(
+                timestamp=event_time,
+                **trade,
+                **trigger_prices,
+                reduce_only=False,
+            ))
 
         equity = self.simulator.equity(mark["close"])
         snapshot = {
@@ -266,9 +277,9 @@ class FuturesEngine:
     def _bar_values(bar: dict[str, Any] | Any) -> dict[str, Decimal]:
         def read(name: str):
             if isinstance(bar, dict):
-                return bar[name]
-            return getattr(bar, name)
-        return {name: decimal_value(read(name)) for name in ("high", "low", "close")}
+                return bar.get(name, bar["close"] if name == "open" else None)
+            return getattr(bar, name, getattr(bar, "close") if name == "open" else None)
+        return {name: decimal_value(read(name)) for name in ("open", "high", "low", "close")}
 
     def to_state(self) -> dict[str, Any]:
         return {

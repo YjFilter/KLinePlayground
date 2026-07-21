@@ -1,0 +1,17 @@
+[project]
+name = "kline-playground-service"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "flask",
+  "flask-cors",
+  "pandas",
+  "numpy",
+  "requests",
+  "akshare",
+  "baostock==0.9.3",
+  "psycopg[binary]",
+]
+
+[tool.uv]
+package = false

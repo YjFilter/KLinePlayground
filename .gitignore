@@ -6540,3 +6540,7 @@ chart_render_temp.html
 !.env.example
 build/
 dist/
+.vercel
+.env*
+
+/.runtime/

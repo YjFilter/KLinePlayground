@@ -48,6 +48,10 @@ let cryptoInstrumentSearchTimer = null;
 let periodSwitchAbortController = null;
 let periodSwitchGeneration = 0;
 let periodSwitchFeedbackTimer = null;
+let cryptoOrderConstraints = null;
+let cryptoOrderSubmitting = false;
+let cryptoNextInFlight = false;
+let cryptoFeeSubmitting = false;
 const PERIOD_LOADING_DELAY_MS = 150;
 const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
 const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
@@ -170,6 +174,7 @@ function buildIntradayKlineChartData(klineData) {
             high: Number(bar.high),
             low: Number(bar.low),
             close: Number(bar.close),
+            volume: Number(bar.volume) || 0,
         };
     });
 }
@@ -994,16 +999,59 @@ function setupEventListeners() {
             });
         }, 250);
     });
+    document.getElementById('crypto-order-action')?.addEventListener('change', (event) => {
+        selectCryptoOrderAction(event.target.value, false);
+    });
     document.getElementById('crypto-order-type')?.addEventListener('change', (event) => {
-        document.getElementById('crypto-limit-price-group')?.classList.toggle('hidden', event.target.value !== 'limit');
+        setCryptoOrderType(event.target.value);
+    });
+    document.querySelectorAll('[data-crypto-order-type]').forEach((button) => {
+        button.addEventListener('click', () => setCryptoOrderType(button.dataset.cryptoOrderType || 'market'));
+    });
+    document.getElementById('crypto-order-leverage')?.addEventListener('change', () => {
+        refreshCryptoMarginFraction();
+        refreshCryptoOrderPreview();
     });
     document.getElementById('crypto-submit-order')?.addEventListener('click', submitCryptoOrder);
+    document.getElementById('crypto-save-fee-rates')?.addEventListener('click', submitCryptoFeeRates);
+    document.getElementById('crypto-limit-price')?.addEventListener('input', () => {
+        refreshCryptoOrderPreview();
+        refreshCryptoTpSlPnl();
+    });
+    document.querySelectorAll('[data-crypto-price-offset]').forEach((button) => {
+        button.addEventListener('click', () => applyCryptoPriceOffset(button));
+    });
     document.querySelectorAll('[data-crypto-margin-fraction]').forEach((button) => {
-        button.addEventListener('click', () => {
-            const available = Number(currentTraining?.account?.available_balance || currentTraining?.available_balance || 0);
-            const input = document.getElementById('crypto-margin');
-            if (input) input.value = Math.max(0, available * Number(button.dataset.cryptoMarginFraction || 0)).toFixed(2);
+        button.addEventListener('click', () => applyCryptoMarginFraction(button));
+    });
+    document.getElementById('crypto-margin')?.addEventListener('input', () => {
+        document.querySelectorAll('[data-crypto-margin-fraction]').forEach((button) => {
+            button.classList.remove('active');
+            button.setAttribute('aria-pressed', 'false');
         });
+        refreshCryptoOrderPreview();
+        refreshCryptoTpSlPnl();
+    });
+
+    // 止盈止损
+    document.getElementById('crypto-tpsl-enabled')?.addEventListener('change', (event) => {
+        document.getElementById('crypto-tpsl-fields')?.classList.toggle('hidden', !event.target.checked);
+        if (!event.target.checked) {
+            const tpInput = document.getElementById('crypto-tp-price');
+            const slInput = document.getElementById('crypto-sl-price');
+            if (tpInput) tpInput.value = '';
+            if (slInput) slInput.value = '';
+            refreshCryptoTpSlPnl();
+        }
+        refreshCryptoOrderPreview();
+    });
+    document.getElementById('crypto-tp-price')?.addEventListener('input', () => {
+        refreshCryptoTpSlPnl();
+        refreshCryptoOrderPreview();
+    });
+    document.getElementById('crypto-sl-price')?.addEventListener('input', () => {
+        refreshCryptoTpSlPnl();
+        refreshCryptoOrderPreview();
     });
 
     // 回放控制
@@ -1072,13 +1120,7 @@ function setupEventListeners() {
     document.getElementById('toggle-volume-panel-btn')?.addEventListener('click', () => toggleChartPanel('volume-chart'));
     document.getElementById('toggle-indicator-panel-btn')?.addEventListener('click', () => toggleChartPanel('indicator-chart'));
     document.getElementById('chart-fullscreen-btn')?.addEventListener('click', toggleChartFullscreen);
-    document.addEventListener('fullscreenchange', () => {
-        document.getElementById('chart-fullscreen-btn')?.classList.toggle(
-            'active',
-            document.fullscreenElement === document.querySelector('.chart-workbench')
-        );
-        requestAnimationFrame(resizeCharts);
-    });
+    document.getElementById('chart-focus-exit-btn')?.addEventListener('click', () => setChartFocusMode(false));
 
     // 筹码分布切换
     document.getElementById('toggle-chip-distribution')?.addEventListener('change', updateChipDistribution);
@@ -1095,6 +1137,7 @@ function setupEventListeners() {
 
     // 监听窗口大小变化和图表面板拖拽
     setupChartPanelResizers();
+    setupCryptoConsoleResizer();
     window.addEventListener('resize', resizeCharts);
 }
 
@@ -1105,28 +1148,29 @@ function setupKeyboardShortcuts() {
             isShiftKeyPressed = true;
             updatePriceMode();
         }
+        if (event.key === 'Escape' && document.getElementById('main-app')?.classList.contains('chart-focus-mode')) {
+            event.preventDefault();
+            setChartFocusMode(false);
+            return;
+        }
         // 只在训练界面激活快捷键
         if (document.getElementById('training-interface').classList.contains('hidden') || isViewOnlyMode) {
             return;
         }
 
-        // 如果是由于按住按键导致的重复触发，则忽略大多数操作
-        // 但允许数字键的重复输入（如果焦点在输入框内）
+        // 焦点在任意输入框/下拉框/文本域时，跳过所有快捷键，允许正常输入
+        const activeTag = document.activeElement?.tagName;
+        const isFormElementFocused = activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA';
+        if (isFormElementFocused) {
+            return;
+        }
+
+        // 如果是由于按住按键导致的重复触发，则忽略
         if (event.repeat) {
-            // 检查当前焦点是否在输入框，如果不在，则阻止所有重复事件
-            const quantityInput = document.getElementById('trade-quantity');
-            if (document.activeElement !== quantityInput) {
-                return;
-            }
-            // 如果焦点在输入框，且按下的不是数字，也阻止
-            if (!/^[0-9]$/.test(event.key)) {
-                return;
-            }
-            // 此时，允许在输入框中按住数字键进行输入
+            return;
         }
 
         const quantityInput = document.getElementById('trade-quantity');
-        const isInputFocused = document.activeElement === quantityInput;
 
         switch (event.key.toLowerCase()) {
             case 'b':
@@ -1151,13 +1195,10 @@ function setupKeyboardShortcuts() {
 
             case '0': case '1': case '2': case '3': case '4':
             case '5': case '6': case '7': case '8': case '9':
-                if (!isInputFocused) {
-                    event.preventDefault();
-                    quantityInput.focus();
-                    quantityInput.value = event.key;
-                }
-                // 如果焦点已在输入框，则不作处理，允许默认的输入行为
-                // 这样用户就可以正常输入多位数，并且按住数字键也能连续输入
+                // 此处焦点不在任何输入框（已在上方提前返回），直接重定向到数量输入
+                event.preventDefault();
+                quantityInput.focus();
+                quantityInput.value = event.key;
                 break;
         }
 
@@ -1346,6 +1387,157 @@ function setupChartPanelResizers() {
         chartPanelResizeObserver.observe(container);
     }
 }
+
+// === Crypto console resizer (vertical splitter + collapse) ===
+const CRYPTO_CONSOLE_WIDTH_KEY = 'kline-crypto-console-width-v1';
+const CRYPTO_CONSOLE_COLLAPSED_KEY = 'kline-crypto-console-collapsed-v1';
+const CRYPTO_CONSOLE_DEFAULT_WIDTH = 340;
+const CRYPTO_CONSOLE_MIN_WIDTH = 280;
+const CRYPTO_CONSOLE_MAX_WIDTH = 520;
+
+let cryptoConsoleResizing = false;
+
+function readCryptoConsoleLayout() {
+    let width = CRYPTO_CONSOLE_DEFAULT_WIDTH;
+    let collapsed = false;
+    try {
+        const storedWidth = localStorage.getItem(CRYPTO_CONSOLE_WIDTH_KEY);
+        if (storedWidth) {
+            const parsed = parseInt(storedWidth, 10);
+            if (Number.isFinite(parsed) && parsed >= CRYPTO_CONSOLE_MIN_WIDTH && parsed <= CRYPTO_CONSOLE_MAX_WIDTH) {
+                width = parsed;
+            }
+        }
+        const storedCollapsed = localStorage.getItem(CRYPTO_CONSOLE_COLLAPSED_KEY);
+        if (storedCollapsed === 'true') collapsed = true;
+    } catch (e) {
+        // localStorage may be unavailable
+    }
+    // Clamp to 45% of viewport
+    const maxViewport = Math.floor(window.innerWidth * 0.45);
+    if (width > maxViewport) width = Math.max(CRYPTO_CONSOLE_MIN_WIDTH, maxViewport);
+    return { width, collapsed };
+}
+
+function persistCryptoConsoleLayout(layout) {
+    try {
+        if (layout.width !== undefined) localStorage.setItem(CRYPTO_CONSOLE_WIDTH_KEY, String(layout.width));
+        if (layout.collapsed !== undefined) localStorage.setItem(CRYPTO_CONSOLE_COLLAPSED_KEY, String(layout.collapsed));
+    } catch (e) {
+        // localStorage may be unavailable
+    }
+}
+
+function applyCryptoConsoleLayout(layout) {
+    const mainApp = document.getElementById('main-app');
+    if (!mainApp) return;
+    const clamped = Math.max(CRYPTO_CONSOLE_MIN_WIDTH, Math.min(CRYPTO_CONSOLE_MAX_WIDTH, layout.width || CRYPTO_CONSOLE_DEFAULT_WIDTH));
+    mainApp.style.setProperty('--crypto-console-width', clamped + 'px');
+    mainApp.classList.toggle('crypto-console-collapsed', !!layout.collapsed);
+    // Update collapse button icon and aria
+    const collapseBtn = document.getElementById('crypto-console-collapse-btn');
+    if (collapseBtn) {
+        collapseBtn.textContent = layout.collapsed ? '‹' : '›';
+        collapseBtn.setAttribute('aria-label', layout.collapsed ? '展开交易台' : '收起交易台');
+        collapseBtn.setAttribute('title', layout.collapsed ? '展开交易台' : '收起交易台');
+    }
+}
+
+function toggleCryptoConsoleCollapsed() {
+    const layout = readCryptoConsoleLayout();
+    layout.collapsed = !layout.collapsed;
+    persistCryptoConsoleLayout(layout);
+    applyCryptoConsoleLayout(layout);
+    resizeCharts();
+}
+
+function setupCryptoConsoleResizer() {
+    const splitter = document.getElementById('crypto-console-splitter');
+    const collapseBtn = document.getElementById('crypto-console-collapse-btn');
+    const collapsedTab = document.getElementById('crypto-console-collapsed-tab');
+    const mainApp = document.getElementById('main-app');
+    if (!splitter || !mainApp) return;
+
+    // Collapse button
+    collapseBtn?.addEventListener('click', toggleCryptoConsoleCollapsed);
+
+    // Collapsed tab click to expand
+    collapsedTab?.addEventListener('click', toggleCryptoConsoleCollapsed);
+    collapsedTab?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleCryptoConsoleCollapsed();
+        }
+    });
+
+    // Pointer drag on splitter
+    let startX = 0;
+    let startWidth = 0;
+
+    function onPointerDown(e) {
+        if (e.button !== 0) return;
+        cryptoConsoleResizing = true;
+        const layout = readCryptoConsoleLayout();
+        startWidth = layout.width;
+        startX = e.clientX;
+        splitter.classList.add('is-dragging');
+        document.body.classList.add('crypto-console-resizing');
+        splitter.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    }
+
+    function onPointerMove(e) {
+        if (!cryptoConsoleResizing) return;
+        const dx = startX - e.clientX;
+        const newWidth = Math.max(CRYPTO_CONSOLE_MIN_WIDTH, Math.min(CRYPTO_CONSOLE_MAX_WIDTH, startWidth + dx));
+        const maxViewport = Math.floor(window.innerWidth * 0.45);
+        const clamped = Math.min(newWidth, maxViewport);
+        mainApp.style.setProperty('--crypto-console-width', clamped + 'px');
+        resizeCharts();
+    }
+
+    function onPointerUp(e) {
+        if (!cryptoConsoleResizing) return;
+        cryptoConsoleResizing = false;
+        splitter.classList.remove('is-dragging');
+        document.body.classList.remove('crypto-console-resizing');
+        // Read the current width from CSS custom property and persist
+        const computed = getComputedStyle(mainApp).getPropertyValue('--crypto-console-width').trim();
+        const parsed = parseInt(computed, 10);
+        if (Number.isFinite(parsed)) {
+            persistCryptoConsoleLayout({ width: parsed });
+        }
+        resizeCharts();
+    }
+
+    splitter.addEventListener('pointerdown', onPointerDown);
+    splitter.addEventListener('pointermove', onPointerMove);
+    splitter.addEventListener('pointerup', onPointerUp);
+    splitter.addEventListener('pointercancel', onPointerUp);
+
+    // Keyboard: ArrowLeft increases console width, ArrowRight decreases
+    splitter.addEventListener('keydown', (e) => {
+        const layout = readCryptoConsoleLayout();
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            const newWidth = Math.min(CRYPTO_CONSOLE_MAX_WIDTH, layout.width + 16);
+            persistCryptoConsoleLayout({ width: newWidth, collapsed: layout.collapsed });
+            applyCryptoConsoleLayout({ width: newWidth, collapsed: layout.collapsed });
+            resizeCharts();
+        } else if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            const newWidth = Math.max(CRYPTO_CONSOLE_MIN_WIDTH, layout.width - 16);
+            persistCryptoConsoleLayout({ width: newWidth, collapsed: layout.collapsed });
+            applyCryptoConsoleLayout({ width: newWidth, collapsed: layout.collapsed });
+            resizeCharts();
+        }
+    });
+
+    // Apply stored layout on setup
+    const storedLayout = readCryptoConsoleLayout();
+    applyCryptoConsoleLayout(storedLayout);
+}
+
 // 处理窗口大小变化
 function resizeCharts() {
     if (chart && !document.getElementById('training-interface').classList.contains('hidden')) {
@@ -1353,9 +1545,15 @@ function resizeCharts() {
         const volumeContainer = document.getElementById('volume-chart');
         const indicatorContainer = document.getElementById('indicator-canvas');
 
-        chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
-        volumeChart.resize(volumeContainer.clientWidth, volumeContainer.clientHeight);
-        indicatorChart.resize(indicatorContainer.clientWidth, indicatorContainer.clientHeight);
+        if (chartContainer.clientWidth > 0 && chartContainer.clientHeight > 0) {
+            chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
+        }
+        if (volumeContainer.clientWidth > 0 && volumeContainer.clientHeight > 0) {
+            volumeChart.resize(volumeContainer.clientWidth, volumeContainer.clientHeight);
+        }
+        if (indicatorContainer.clientWidth > 0 && indicatorContainer.clientHeight > 0) {
+            indicatorChart.resize(indicatorContainer.clientWidth, indicatorContainer.clientHeight);
+        }
         
         scheduleChipDistributionRender();
     }
@@ -1603,7 +1801,7 @@ function resetToMainAppState() {
     document.getElementById('available-cash').textContent = '¥-';
     document.getElementById('position-value').textContent = '¥-';
     document.getElementById('floating-pnl').textContent = '¥-';
-    document.getElementById('floating-pnl').style.color = '#000000';
+    document.getElementById('floating-pnl').style.color = getThemePalette().text;
     
     // reset shift toggle
     isShiftClicked = false;
@@ -2169,7 +2367,8 @@ function setTrainingMarketType(marketType) {
 
 function syncCryptoWorkspaceMode() {
     const active = isCryptoMode();
-    document.getElementById('main-app')?.classList.toggle('crypto-training-active', active);
+    const mainApp = document.getElementById('main-app');
+    mainApp?.classList.toggle('crypto-training-active', active);
     document.getElementById('training-interface')?.classList.toggle('crypto-workspace-active', active);
     document.querySelectorAll('[data-crypto-workspace-only]').forEach((element) => {
         element.classList.toggle('hidden', !active);
@@ -2177,17 +2376,33 @@ function syncCryptoWorkspaceMode() {
     document.querySelectorAll('[data-a-share-workspace-only]').forEach((element) => {
         element.classList.toggle('hidden', active);
     });
+    if (active) {
+        applyCryptoConsoleLayout(readCryptoConsoleLayout());
+    } else {
+        mainApp?.classList.remove('crypto-console-collapsed');
+        mainApp?.style.removeProperty('--crypto-console-width');
+    }
 }
 
-function selectCryptoOrderAction(action) {
+function selectCryptoOrderAction(action, updateSelect = true) {
     const select = document.getElementById('crypto-order-action');
     if (!select || !['open_long', 'open_short', 'close'].includes(action)) return;
-    select.value = action;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    if (updateSelect) select.value = action;
     document.querySelectorAll('[data-crypto-action]').forEach((button) => {
         button.classList.toggle('active', button.dataset.cryptoAction === action);
         button.setAttribute('aria-pressed', String(button.dataset.cryptoAction === action));
     });
+    // 平仓时隐藏止盈止损
+    const tpslSection = document.querySelector('.crypto-tpsl-section');
+    if (tpslSection) tpslSection.classList.toggle('hidden', action === 'close');
+    if (action === 'close') {
+        const checkbox = document.getElementById('crypto-tpsl-enabled');
+        if (checkbox) checkbox.checked = false;
+        document.getElementById('crypto-tpsl-fields')?.classList.add('hidden');
+    }
+    updateCryptoPriceShortcuts();
+    refreshCryptoOrderPreview();
+    refreshCryptoTpSlPnl();
 }
 
 function toggleChartPanel(panelId) {
@@ -2203,15 +2418,23 @@ function toggleChartPanel(panelId) {
     });
 }
 
-async function toggleChartFullscreen() {
-    const workbench = document.querySelector('.chart-workbench');
-    if (!workbench) return;
-    if (document.fullscreenElement === workbench) {
-        await document.exitFullscreen?.();
-    } else {
-        await workbench.requestFullscreen?.();
-    }
+function setChartFocusMode(enabled) {
+    const mainApp = document.getElementById('main-app');
+    if (!mainApp) return;
+    const active = Boolean(enabled);
+    mainApp.classList.toggle('chart-focus-mode', active);
+    document.body.classList.toggle('chart-focus-active', active);
+    const toggleButton = document.getElementById('chart-fullscreen-btn');
+    toggleButton?.classList.toggle('active', active);
+    toggleButton?.setAttribute('aria-pressed', String(active));
+    document.getElementById('chart-focus-exit-btn')?.classList.toggle('hidden', !active);
     requestAnimationFrame(resizeCharts);
+}
+
+function toggleChartFullscreen() {
+    const mainApp = document.getElementById('main-app');
+    if (!mainApp) return;
+    setChartFocusMode(!mainApp.classList.contains('chart-focus-mode'));
 }
 
 function renderCryptoInstrumentResults(instruments) {
@@ -2545,6 +2768,7 @@ function normalizeChartCandle(item) {
         high: Number(item.high),
         low: Number(item.low),
         close: Number(item.close),
+        volume: Number(item.volume) || 0,
     };
 }
 
@@ -3503,14 +3727,18 @@ function initializeChart() {
         // 获取K线数据
         const ohlcData = param.seriesData.get(candlestickSeries);
         let ohlcHtml = '数据加载中...';
+        const crosshairPalette = getThemePalette();
+        const neutralColor = crosshairPalette.neutral;
+        const upColor = crosshairPalette.positive;
+        const downColor = crosshairPalette.negative;
         if (ohlcData) {
             if (previousDataPoint) {
                 ohlcHtml = `
                     <div style="margin-bottom: 4px;">
-                        <strong>开:</strong> <span style="color: ${ohlcData.open > previousDataPoint.close ? '#ff4d4f' : ohlcData.open < previousDataPoint.close ? '#008000' : '#000000'};">${ohlcData.open.toFixed(2)}</span>
-                        <strong>高:</strong> <span style="color: ${ohlcData.high > previousDataPoint.close ? '#ff4d4f' : ohlcData.high < previousDataPoint.close ? '#008000' : '#000000'};">${ohlcData.high.toFixed(2)}</span>
-                        <strong>低:</strong> <span style="color: ${ohlcData.low > previousDataPoint.close ? '#ff4d4f' : ohlcData.low < previousDataPoint.close ? '#008000' : '#000000'};">${ohlcData.low.toFixed(2)}</span>
-                        <strong>收: <span style="color: ${ohlcData.close > ohlcData.open ? '#ff4d4f' : ohlcData.close > ohlcData.open ? '#008000' : '#000000'};">${ohlcData.close.toFixed(2)}</span></strong>
+                        <strong>开:</strong> <span style="color: ${ohlcData.open > previousDataPoint.close ? upColor : ohlcData.open < previousDataPoint.close ? downColor : neutralColor};">${ohlcData.open.toFixed(2)}</span>
+                        <strong>高:</strong> <span style="color: ${ohlcData.high > previousDataPoint.close ? upColor : ohlcData.high < previousDataPoint.close ? downColor : neutralColor};">${ohlcData.high.toFixed(2)}</span>
+                        <strong>低:</strong> <span style="color: ${ohlcData.low > previousDataPoint.close ? upColor : ohlcData.low < previousDataPoint.close ? downColor : neutralColor};">${ohlcData.low.toFixed(2)}</span>
+                        <strong>收: <span style="color: ${ohlcData.close > ohlcData.open ? upColor : ohlcData.close < ohlcData.open ? downColor : neutralColor};">${ohlcData.close.toFixed(2)}</span></strong>
                     </div>
                 `;
             } else {
@@ -3519,7 +3747,7 @@ function initializeChart() {
                         <strong>开:</strong> <span>${ohlcData.open.toFixed(2)}</span>
                         <strong>高:</strong> <span>${ohlcData.high.toFixed(2)}</span>
                         <strong>低:</strong> <span>${ohlcData.low.toFixed(2)}</span>
-                        <strong>收: <span style="color: ${ohlcData.close > ohlcData.open ? '#ff4d4f' : ohlcData.close < ohlcData.open ? '#008000' : '#000000'};">${ohlcData.close.toFixed(2)}</span></strong>
+                        <strong>收: <span style="color: ${ohlcData.close > ohlcData.open ? upColor : ohlcData.close < ohlcData.open ? downColor : neutralColor};">${ohlcData.close.toFixed(2)}</span></strong>
                     </div>
                 `;
             }
@@ -3782,6 +4010,34 @@ function formatMarketPrice(value) {
     return isCryptoMode() ? formatted + ' USDT' : '¥' + formatted;
 }
 
+function formatCryptoToolbarPrice(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return '--';
+    const absoluteValue = Math.abs(numericValue);
+    const maximumFractionDigits = absoluteValue >= 100 ? 2 : absoluteValue >= 1 ? 4 : 8;
+    return numericValue.toLocaleString(undefined, {maximumFractionDigits});
+}
+
+function formatCryptoToolbarVolume(value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return '--';
+    const units = [
+        {threshold: 1e9, divisor: 1e9, suffix: 'B'},
+        {threshold: 1e6, divisor: 1e6, suffix: 'M'},
+        {threshold: 1e3, divisor: 1e3, suffix: 'K'},
+    ];
+    const unit = units.find(item => Math.abs(numericValue) >= item.threshold);
+    if (!unit) return numericValue.toLocaleString();
+    return `${Number((numericValue / unit.divisor).toFixed(2))}${unit.suffix}`;
+}
+
+function updateElementText(elementId, text, color) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+    element.textContent = text;
+    if (color) element.style.color = color;
+}
+
 function updateCurrentInfo(barData, progress) {
     if (!barData) return;
     const palette = getThemePalette();
@@ -3799,6 +4055,10 @@ function updateCurrentInfo(barData, progress) {
     document.getElementById('high-price').textContent = formatMarketPrice(barData.high);
     document.getElementById('low-price').textContent = formatMarketPrice(barData.low);
     document.getElementById('close-price').textContent = formatMarketPrice(barData.close);
+    updateElementText('crypto-open-price', formatCryptoToolbarPrice(barData.open));
+    updateElementText('crypto-high-price', formatCryptoToolbarPrice(barData.high));
+    updateElementText('crypto-low-price', formatCryptoToolbarPrice(barData.low));
+    updateElementText('crypto-close-price', formatCryptoToolbarPrice(barData.close));
 
     // 更新成交量
     if (barData.volume !== undefined) {
@@ -3811,8 +4071,10 @@ function updateCurrentInfo(barData, progress) {
             volText = volText.toString();
         }
         document.getElementById('volume').textContent = volText;
+        updateElementText('crypto-volume', formatCryptoToolbarVolume(barData.volume));
     } else {
         document.getElementById('volume').textContent = `--`;
+        updateElementText('crypto-volume', '--');
     }
 
     // 计算涨跌幅（优先使用后端的lastClose，其次退化到图表的前一根的数据）
@@ -3830,19 +4092,30 @@ function updateCurrentInfo(barData, progress) {
             const changePercent = ((barData.close - prevClose) / prevClose * 100).toFixed(2);
             document.getElementById('change-percent').textContent = `${changePercent}%`;
             document.getElementById('change-percent').style.color = changePercent > 0 ? palette.positive : changePercent < 0 ? palette.negative : palette.neutral;
+            updateElementText(
+                'crypto-change-percent', `${changePercent}%`,
+                changePercent > 0 ? palette.positive : changePercent < 0 ? palette.negative : palette.neutral
+            );
         } else {
             document.getElementById('change-percent').textContent = `--%`;
             document.getElementById('change-percent').style.color = palette.neutral;
+            updateElementText('crypto-change-percent', '--%', palette.neutral);
         }
     } else {
         document.getElementById('change-percent').textContent = `--%`;
         document.getElementById('change-percent').style.color = palette.neutral;
+        updateElementText('crypto-change-percent', '--%', palette.neutral);
     }
 
     // 更新进度信息
     if (progress) {
-        document.getElementById('training-progress').textContent =
-            `进度: ${progress.training_progress.toFixed(1)}% (${progress.current_bar_id}/${progress.training_total_bars || (progress.total_bars - progress.preview_bars)})`;
+        const trainingProgress = Number(progress.training_progress);
+        const currentBarId = Number(progress.current_bar_id);
+        const totalBars = Number(progress.training_total_bars ?? (Number(progress.total_bars) - Number(progress.preview_bars)));
+        if (Number.isFinite(trainingProgress) && Number.isFinite(currentBarId) && Number.isFinite(totalBars)) {
+            document.getElementById('training-progress').textContent =
+                `进度: ${trainingProgress.toFixed(1)}% (${currentBarId}/${totalBars})`;
+        }
     }
 
     // === 涨停/跌停检测 ===
@@ -4019,7 +4292,83 @@ function updatePlaybackSpeed() {
     }
 }
 
+function applyCryptoNextDelta(delta) {
+    if (!delta) return;
+    if (delta.refresh_snapshot) {
+        applyActiveSnapshotToChartWindow(delta.refresh_snapshot);
+    } else {
+        const bars = delta.bars || [];
+        bars.forEach((bar) => {
+            const chartBar = buildIntradayKlineChartData([bar])[0];
+            const volumeBar = buildIntradayVolumeData([bar])[0];
+            if (chartBar) {
+                candlestickSeries.update(chartBar);
+                upsertRenderedBar(chartBar);
+                updateCurrentInfo({
+                    time: chartBar.time,
+                    open: Number(bar.open), high: Number(bar.high),
+                    low: Number(bar.low), close: Number(bar.close),
+                    volume: Number(bar.volume || 0),
+                }, delta.progress || null);
+            }
+            if (volumeBar) volumeSeries.update(volumeBar);
+        });
+        if (bars.length && typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => loadTechnicalIndicator(currentIndicatorType));
+        }
+    }
+    const replayProgress = delta.progress || delta;
+    updateIntradayReplayStatus(replayProgress);
+    if (currentTraining) {
+        currentTraining.latestProgress = replayProgress;
+        currentTraining.current_time = replayProgress.current_time || currentTraining.current_time;
+        currentTraining.next_boundary = replayProgress.next_boundary || currentTraining.next_boundary;
+    }
+    if (delta.trade_markers) syncActiveTradeMarkers(delta.trade_markers);
+    renderCryptoAccount(delta);
+    renderCryptoTradeHistory(delta.fills || []);
+}
+
+async function nextCryptoBar() {
+    if (!currentTraining?.id || cryptoNextInFlight) return false;
+    const button = document.getElementById('next-bar-btn');
+    const previousLogicalRange = chart?.timeScale().getVisibleLogicalRange();
+    cryptoNextInFlight = true;
+    if (button) {
+        button.disabled = true;
+        button.classList.add('loading');
+        button.setAttribute('aria-busy', 'true');
+    }
+    try {
+        const response = await fetch(API_BASE + '/training/' + encodeURIComponent(currentTraining.id) + '/next', {
+            method: 'POST',
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 409 && payload.code === 'advance_in_progress') return false;
+        if (!response.ok) throw new Error(payload.error || '获取下一根 K 线失败');
+        applyCryptoNextDelta(payload.delta);
+        if (previousLogicalRange !== null) setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+        if (payload.finished) {
+            pausePlayback();
+            if (payload.report) showReport(payload.report);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        console.error('获取币圈下一根 K 线失败:', error);
+        return false;
+    } finally {
+        cryptoNextInFlight = false;
+        if (button) {
+            button.disabled = false;
+            button.classList.remove('loading');
+            button.setAttribute('aria-busy', 'false');
+        }
+    }
+}
+
 async function nextBar() {
+    if (isCryptoMode()) return nextCryptoBar();
     try {
         const previousLogicalRange = chart?.timeScale().getVisibleLogicalRange();
 
@@ -4682,27 +5031,32 @@ function renderPendingOrders(pendingOrders) {
 async function cancelPendingOrder(orderId) {
     if (!currentTraining || !orderId) return;
 
-    if (false) {
-        alert('请填写有效触发价');
-        return;
-    }
-
     try {
         const response = await fetch(`${API_BASE}/training/${currentTraining.id}/orders/${orderId}`, {
             method: 'DELETE'
         });
         const data = await response.json();
         if (!response.ok) {
+            if (isCryptoMode()) {
+                await updateAccountInfo();
+                setCryptoOrderStatus(data.message || data.error || '撤单失败，请刷新后重试。', 'error');
+                return;
+            }
             alert(data.error || '撤单失败');
             return;
         }
         if (isCryptoMode()) {
             await updateAccountInfo();
+            setCryptoOrderStatus(data.message || '挂单已撤销。', 'success');
         } else {
             renderPendingOrders(data.pending_orders);
         }
     } catch (error) {
         console.error('撤单失败:', error);
+        if (isCryptoMode()) {
+            setCryptoOrderStatus(error.message || '撤单失败，请检查连接后重试。', 'error');
+            return;
+        }
         alert('撤单失败');
     }
 }
@@ -4819,11 +5173,86 @@ async function executeSell(priceType = 'close', reason = '') {
     }
 }
 
+function setCryptoFeeStatus(message, state = '') {
+    const status = document.getElementById('crypto-fee-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = 'crypto-fee-status' + (state ? ' ' + state : '');
+}
+
+function formatCryptoFeePercent(rate) {
+    const percent = Number(rate) * 100;
+    return Number.isFinite(percent) ? String(Number(percent.toFixed(4))) : '';
+}
+
+function syncCryptoFeeRateInputs(constraints, canEdit = true) {
+    const fields = [
+        ['crypto-maker-fee-rate', 'maker_fee_rate'],
+        ['crypto-taker-fee-rate', 'taker_fee_rate'],
+    ];
+    fields.forEach(([id, key]) => {
+        const input = document.getElementById(id);
+        if (!input) return;
+        if (document.activeElement !== input && Number.isFinite(Number(constraints?.[key]))) {
+            input.value = formatCryptoFeePercent(constraints[key]);
+        }
+        input.disabled = !canEdit || cryptoFeeSubmitting;
+    });
+    const button = document.getElementById('crypto-save-fee-rates');
+    if (button) button.disabled = !canEdit || cryptoFeeSubmitting;
+}
+
+async function submitCryptoFeeRates() {
+    if (!currentTraining?.id || !isCryptoMode() || cryptoFeeSubmitting) return;
+    const submitButton = document.getElementById('crypto-save-fee-rates');
+    const makerPercent = Number(document.getElementById('crypto-maker-fee-rate')?.value);
+    const takerPercent = Number(document.getElementById('crypto-taker-fee-rate')?.value);
+    if (![makerPercent, takerPercent].every(value => Number.isFinite(value) && value >= 0 && value <= 1)) {
+        setCryptoFeeStatus('请输入 0% 到 1% 之间的有效费率。', 'error');
+        return;
+    }
+    cryptoFeeSubmitting = true;
+    if (submitButton) submitButton.disabled = true;
+    setCryptoFeeStatus('正在应用手续费率…', 'loading');
+    try {
+        const response = await fetch(API_BASE + '/training/' + encodeURIComponent(currentTraining.id) + '/fee-rates', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ maker_fee_rate: makerPercent / 100, taker_fee_rate: takerPercent / 100 }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || '手续费率更新失败');
+        renderCryptoAccount(payload);
+        setCryptoFeeStatus(payload.message || '手续费率已更新，仅影响后续成交。', 'success');
+    } catch (error) {
+        console.error('更新合约手续费率失败:', error);
+        setCryptoFeeStatus(error.message || '手续费率更新失败', 'error');
+    } finally {
+        cryptoFeeSubmitting = false;
+        const position = currentTraining?.position || {};
+        const pendingOrders = currentTraining?.pending_orders || [];
+        const canEdit = (!position.side || position.side === 'flat') && pendingOrders.length === 0;
+        syncCryptoFeeRateInputs(cryptoOrderConstraints, canEdit);
+    }
+}
+
 // 账户信息更新
 function renderCryptoAccount(accountPayload) {
     const account = accountPayload?.account || accountPayload || {};
     const position = accountPayload?.position || account.position || {};
-    if (currentTraining) currentTraining.account = account;
+    cryptoOrderConstraints = accountPayload?.order_constraints || account.order_constraints || cryptoOrderConstraints;
+    const pendingOrders = accountPayload?.pending_orders || account.pending_orders || [];
+    if (currentTraining) {
+        currentTraining.account = account;
+        currentTraining.position = position;
+        currentTraining.pending_orders = pendingOrders;
+        currentTraining.order_constraints = cryptoOrderConstraints;
+    }
+    const canEditFees = (!position.side || position.side === 'flat') && pendingOrders.length === 0;
+    syncCryptoFeeRateInputs(cryptoOrderConstraints, canEditFees);
+    if (!canEditFees && !cryptoFeeSubmitting) {
+        setCryptoFeeStatus('请先平仓并撤销挂单，再修改手续费率。');
+    }
     const equity = Number(account.equity ?? account.total_assets ?? 0);
     const available = Number(account.available_balance ?? account.available_cash ?? 0);
     const positionValue = Number(position.notional ?? account.position_value ?? 0);
@@ -4838,41 +5267,431 @@ function renderCryptoAccount(accountPayload) {
     document.getElementById('crypto-margin-ratio').textContent = account.margin_ratio == null ? '--' : (Number(account.margin_ratio) * 100).toFixed(2) + '%';
     const fundingNet = Number(account.funding_net ?? accountPayload?.funding_net ?? 0);
     document.getElementById('crypto-funding-summary').textContent = '资金费净额：' + fundingNet.toFixed(4) + ' USDT';
-    const orders = accountPayload?.pending_orders || account.pending_orders || [];
-    const ordersEl = document.getElementById('crypto-pending-orders');
-    if (ordersEl) {
-        ordersEl.classList.toggle('hidden', orders.length === 0);
-        ordersEl.innerHTML = orders.map((order) => '<div class="pending-order-item">' +
-            '<span>' + escapeHtml(order.action || order.side || '') + ' · ' + escapeHtml(order.order_type || 'limit') + ' · ' + Number(order.margin || order.quantity || 0).toLocaleString() + '</span>' +
-            '<button type="button" class="crypto-cancel-order" data-order-id="' + escapeHtml(order.order_id || '') + '">撤单</button></div>').join('');
-        ordersEl.querySelectorAll('.crypto-cancel-order').forEach((button) => {
-            button.addEventListener('click', () => cancelPendingOrder(button.dataset.orderId));
-        });
+    renderCryptoPendingOrders(pendingOrders);
+    refreshCryptoOrderPreview();
+}
+
+function getCryptoCurrentPrice() {
+    const account = currentTraining?.account || {};
+    const position = currentTraining?.position || {};
+    const latestBar = Array.isArray(latestRenderedKlineData) ? latestRenderedKlineData[latestRenderedKlineData.length - 1] : null;
+    const price = Number(cryptoOrderConstraints?.current_price ?? account.mark_price ?? position.mark_price ?? latestBar?.close ?? 0);
+    return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
+function getCryptoPendingSide(action) {
+    if (action === 'open_long') return 'buy';
+    if (action === 'open_short') return 'sell';
+    const positionSide = String(currentTraining?.position?.side || '').toLowerCase();
+    if (positionSide === 'long') return 'sell';
+    if (positionSide === 'short') return 'buy';
+    return '';
+}
+
+function getCryptoRequiredPriceDirection(orderType, action) {
+    const side = getCryptoPendingSide(action);
+    if (!side || orderType === 'market') return '';
+    if (orderType === 'limit') return side === 'buy' ? 'below' : 'above';
+    return side === 'buy' ? 'above' : 'below';
+}
+
+function formatCryptoValue(value, maximumDigits = 8) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return '--';
+    return number.toLocaleString(undefined, { maximumFractionDigits: maximumDigits });
+}
+
+function formatCryptoInputPrice(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) return '';
+    const digits = number >= 1000 ? 2 : number >= 1 ? 4 : 8;
+    return number.toFixed(digits).replace(/\.?0+$/, '');
+}
+
+function floorCryptoQuantity(quantity, step) {
+    if (!Number.isFinite(quantity) || quantity <= 0) return 0;
+    if (!Number.isFinite(step) || step <= 0) return quantity;
+    return Math.floor((quantity + Number.EPSILON) / step) * step;
+}
+
+function validateCryptoPendingPrice(orderType, action, price, currentPrice) {
+    if (orderType === 'market') return '';
+    if (!Number.isFinite(price) || price <= 0) return orderType === 'limit' ? '请输入有效的限价。' : '请输入有效的突破触发价。';
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) return '暂时无法取得标记价格，请刷新账户后重试。';
+    const direction = getCryptoRequiredPriceDirection(orderType, action);
+    if (!direction) return '当前没有可平仓的持仓。';
+    if (direction === 'below' && price >= currentPrice) {
+        return orderType === 'limit' ? '该方向限价必须低于当前标记价格。' : '该方向突破价必须低于当前标记价格。';
+    }
+    if (direction === 'above' && price <= currentPrice) {
+        return orderType === 'limit' ? '该方向限价必须高于当前标记价格。' : '该方向突破价必须高于当前标记价格。';
+    }
+    return '';
+}
+
+function validateCryptoTpSl(action, entryPrice, tpPrice, slPrice) {
+    if (action === 'close' || !document.getElementById('crypto-tpsl-enabled')?.checked) return '';
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) return '请先填写有效的开仓价格，再设置止盈止损。';
+    const hasTp = Number.isFinite(tpPrice) && tpPrice > 0;
+    const hasSl = Number.isFinite(slPrice) && slPrice > 0;
+    if (!hasTp && !hasSl) return '已开启止盈止损，请至少填写一个价格。';
+    if (action === 'open_long') {
+        if (hasTp && tpPrice <= entryPrice) return '开多止盈价必须高于预计开仓价。';
+        if (hasSl && slPrice >= entryPrice) return '开多止损价必须低于预计开仓价。';
+    } else {
+        if (hasTp && tpPrice >= entryPrice) return '开空止盈价必须低于预计开仓价。';
+        if (hasSl && slPrice <= entryPrice) return '开空止损价必须高于预计开仓价。';
+    }
+    return '';
+}
+
+function getCryptoOrderPreview() {
+    const orderType = document.getElementById('crypto-order-type')?.value || 'market';
+    const action = document.getElementById('crypto-order-action')?.value || 'open_long';
+    const leverage = Math.max(1, Number(document.getElementById('crypto-order-leverage')?.value || currentTraining?.leverage || 1));
+    const margin = Number(document.getElementById('crypto-margin')?.value || 0);
+    const currentPrice = getCryptoCurrentPrice();
+    const pendingPrice = Number(document.getElementById('crypto-limit-price')?.value || 0);
+    const entryPrice = orderType === 'market' ? currentPrice : pendingPrice;
+    const step = Number(cryptoOrderConstraints?.quantity_step || 0);
+    const positionQuantity = Math.abs(Number(currentTraining?.position?.quantity || 0));
+    const quantity = action === 'close' ? positionQuantity : floorCryptoQuantity((margin * leverage) / entryPrice, step);
+    const feeRate = Number(orderType === 'limit' ? cryptoOrderConstraints?.maker_fee_rate : cryptoOrderConstraints?.taker_fee_rate) || 0;
+    const notional = quantity * entryPrice;
+    return { orderType, action, leverage, margin, currentPrice, entryPrice, quantity, notional, feeRate, fee: notional * feeRate };
+}
+
+function refreshCryptoOrderPreview() {
+    const preview = getCryptoOrderPreview();
+    const minimumQuantity = Number(cryptoOrderConstraints?.min_quantity || 0);
+    const minimumNotional = Number(cryptoOrderConstraints?.min_notional || 0);
+    const quantityEl = document.getElementById('crypto-estimated-quantity');
+    const feeEl = document.getElementById('crypto-estimated-fee');
+    const minQuantityEl = document.getElementById('crypto-min-quantity');
+    const minNotionalEl = document.getElementById('crypto-min-notional');
+    const entryEl = document.getElementById('crypto-estimated-entry-price');
+    if (quantityEl) quantityEl.textContent = preview.quantity > 0 ? formatCryptoValue(preview.quantity) : '--';
+    if (feeEl) feeEl.textContent = preview.fee > 0 ? formatCryptoValue(preview.fee, 4) + ' USDT' : '--';
+    if (minQuantityEl) minQuantityEl.textContent = minimumQuantity > 0 ? formatCryptoValue(minimumQuantity) : '--';
+    if (minNotionalEl) minNotionalEl.textContent = minimumNotional > 0 ? formatCryptoValue(minimumNotional) + ' USDT' : '--';
+    if (entryEl) entryEl.textContent = preview.entryPrice > 0 ? formatCryptoValue(preview.entryPrice) + ' USDT' : '--';
+    updateCryptoPriceShortcuts();
+}
+
+function updateCryptoPriceShortcuts() {
+    const orderType = document.getElementById('crypto-order-type')?.value || 'market';
+    const action = document.getElementById('crypto-order-action')?.value || 'open_long';
+    const direction = getCryptoRequiredPriceDirection(orderType, action);
+    const tools = document.getElementById('crypto-price-tools');
+    tools?.classList.toggle('hidden', orderType === 'market');
+    const rule = document.getElementById('crypto-price-rule');
+    if (rule) {
+        if (!direction) rule.textContent = '当前没有可平仓的持仓。';
+        else rule.textContent = (orderType === 'limit' ? '限价' : '突破价') + '必须' + (direction === 'above' ? '高于' : '低于') + '当前标记价。';
+    }
+    const sign = direction === 'above' ? '+' : '-';
+    document.querySelectorAll('[data-crypto-price-offset]').forEach((button) => {
+        button.textContent = sign + (Number(button.dataset.cryptoPriceOffset || 0) * 100).toFixed(1).replace('.0', '') + '%';
+        button.disabled = !direction || getCryptoCurrentPrice() <= 0;
+    });
+}
+
+function applyCryptoPriceOffset(button) {
+    const input = document.getElementById('crypto-limit-price');
+    if (!input || !button) return;
+    const orderType = document.getElementById('crypto-order-type')?.value || 'market';
+    const action = document.getElementById('crypto-order-action')?.value || 'open_long';
+    const direction = getCryptoRequiredPriceDirection(orderType, action);
+    const currentPrice = getCryptoCurrentPrice();
+    if (!direction || currentPrice <= 0) return;
+    const offset = Number(button.dataset.cryptoPriceOffset || 0);
+    input.value = formatCryptoInputPrice(currentPrice * (direction === 'above' ? 1 + offset : 1 - offset));
+    refreshCryptoOrderPreview();
+    refreshCryptoTpSlPnl();
+    input.focus();
+}
+
+function renderCryptoPendingOrders(orders) {
+    const container = document.getElementById('crypto-pending-orders');
+    if (!container) return;
+    const activeOrders = Array.isArray(orders) ? orders : [];
+    container.classList.toggle('hidden', activeOrders.length === 0);
+    if (activeOrders.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+    const typeMap = { market: '市价', limit: '限价', breakout: '突破' };
+    const actionMap = { open_long: '开多', open_short: '开空', close: '平仓' };
+    container.innerHTML = '<div class="crypto-pending-heading"><strong>当前挂单</strong><span>' + activeOrders.length + ' 笔</span></div>' + activeOrders.map((order) => {
+        const isProtective = !!order.parent_order_id;
+        const role = isProtective ? (order.protection_type === 'tp' ? '止盈' : '止损') : (actionMap[order.action] || order.action || '订单');
+        const type = typeMap[order.order_type] || order.order_type || '--';
+        const price = Number(order.limit_price ?? order.trigger_price ?? 0);
+        const tp = Number(order.tp_price || 0);
+        const sl = Number(order.sl_price || 0);
+        const status = order.status === 'active' ? '等待触发' : (order.status || '--');
+        return '<div class="pending-order-item crypto-pending-order' + (isProtective ? ' tpsl-order' : '') + '">' +
+            '<div class="crypto-pending-order-main"><div class="crypto-pending-order-title"><strong>' + escapeHtml(role) + '</strong><span>' + escapeHtml(type) + '</span><em>' + escapeHtml(status) + '</em></div>' +
+            '<div class="crypto-pending-order-grid"><span>价格 <b>' + (price > 0 ? escapeHtml(formatCryptoValue(price)) : '市价') + '</b></span><span>数量 <b>' + escapeHtml(formatCryptoValue(order.quantity || 0)) + '</b></span>' +
+            '<span>TP <b>' + (tp > 0 ? escapeHtml(formatCryptoValue(tp)) : '--') + '</b></span><span>SL <b>' + (sl > 0 ? escapeHtml(formatCryptoValue(sl)) : '--') + '</b></span></div></div>' +
+            '<div class="crypto-pending-order-actions"><button type="button" class="crypto-copy-order" data-order-id="' + escapeHtml(order.order_id || '') + '">复制参数</button>' +
+            '<button type="button" class="crypto-cancel-order" data-order-id="' + escapeHtml(order.order_id || '') + '">撤单</button></div></div>';
+    }).join('');
+    container.querySelectorAll('.crypto-copy-order').forEach((button) => {
+        button.addEventListener('click', () => copyCryptoOrderParameters(button.dataset.orderId));
+    });
+    container.querySelectorAll('.crypto-cancel-order').forEach((button) => {
+        button.addEventListener('click', () => cancelPendingOrder(button.dataset.orderId));
+    });
+}
+
+function copyCryptoOrderParameters(orderId) {
+    const order = (currentTraining?.pending_orders || []).find((candidate) => candidate.order_id === orderId);
+    if (!order) {
+        setCryptoOrderStatus('挂单已变化，请刷新后重试。', 'error');
+        return;
+    }
+    const action = order.parent_order_id ? 'close' : order.action;
+    selectCryptoOrderAction(action || 'open_long');
+    setCryptoOrderType(order.order_type || 'market', { preservePrice: true });
+    const leverage = document.getElementById('crypto-order-leverage');
+    const margin = document.getElementById('crypto-margin');
+    const price = document.getElementById('crypto-limit-price');
+    if (leverage && order.leverage) leverage.value = String(order.leverage);
+    if (margin && !order.parent_order_id && Number(order.margin) > 0) margin.value = String(order.margin);
+    if (price) price.value = formatCryptoInputPrice(order.limit_price ?? order.trigger_price ?? 0);
+    const tp = document.getElementById('crypto-tp-price');
+    const sl = document.getElementById('crypto-sl-price');
+    const hasProtection = !order.parent_order_id && (Number(order.tp_price) > 0 || Number(order.sl_price) > 0);
+    const checkbox = document.getElementById('crypto-tpsl-enabled');
+    if (checkbox) checkbox.checked = hasProtection;
+    document.getElementById('crypto-tpsl-fields')?.classList.toggle('hidden', !hasProtection);
+    if (tp) tp.value = hasProtection && order.tp_price ? formatCryptoInputPrice(order.tp_price) : '';
+    if (sl) sl.value = hasProtection && order.sl_price ? formatCryptoInputPrice(order.sl_price) : '';
+    refreshCryptoOrderPreview();
+    refreshCryptoTpSlPnl();
+    setCryptoOrderStatus('参数已复制到订单表单，确认后再提交。', 'success');
+}
+
+function getCryptoMaxOpenMargin(orderType, leverage) {
+    const constraints = cryptoOrderConstraints || currentTraining?.order_constraints || {};
+    const account = currentTraining?.account || {};
+    const normalizedType = ['market', 'limit', 'breakout'].includes(orderType) ? orderType : 'market';
+    const normalizedLeverage = Math.max(1, Number(leverage || constraints.leverage || currentTraining?.leverage || 1));
+    const configuredLeverage = Number(constraints.leverage || normalizedLeverage);
+    const configuredMaximum = Number(
+        normalizedType === 'limit' ? constraints.max_limit_margin :
+            normalizedType === 'breakout' ? constraints.max_breakout_margin : constraints.max_market_margin
+    );
+    let maximum = configuredMaximum;
+    if (!Number.isFinite(maximum) || normalizedLeverage !== configuredLeverage) {
+        const available = Math.max(0, Number(account.available_balance ?? currentTraining?.available_balance ?? 0) - Number(constraints.reserved_margin || 0));
+        const feeRate = Number(normalizedType === 'limit' ? constraints.maker_fee_rate : constraints.taker_fee_rate);
+        maximum = Number.isFinite(feeRate) ? available / (1 + normalizedLeverage * feeRate) : available;
+    }
+    return Math.max(0, Math.floor((Number(maximum) || 0) * 100) / 100);
+}
+
+function applyCryptoMarginFraction(button) {
+    const input = document.getElementById('crypto-margin');
+    if (!input || !button) return;
+    const orderType = document.getElementById('crypto-order-type')?.value || 'market';
+    const leverage = Number(document.getElementById('crypto-order-leverage')?.value || currentTraining?.leverage || 1);
+    const fraction = Number(button.dataset.cryptoMarginFraction || 0);
+    const maximum = getCryptoMaxOpenMargin(orderType, leverage);
+    input.value = (Math.floor(maximum * fraction * 100) / 100).toFixed(2);
+    input.max = maximum.toFixed(2);
+    document.querySelectorAll('[data-crypto-margin-fraction]').forEach((candidate) => {
+        const active = candidate === button;
+        candidate.classList.toggle('active', active);
+        candidate.setAttribute('aria-pressed', String(active));
+    });
+    refreshCryptoOrderPreview();
+    refreshCryptoTpSlPnl();
+}
+
+function refreshCryptoMarginFraction() {
+    const activeButton = document.querySelector('[data-crypto-margin-fraction].active');
+    if (activeButton) applyCryptoMarginFraction(activeButton);
+}
+
+function setCryptoOrderType(orderType, options) {
+    options = options || {};
+    const normalized = ['market', 'limit', 'breakout'].includes(orderType) ? orderType : 'market';
+    const value = document.getElementById('crypto-order-type');
+    const previous = value?.value || 'market';
+    if (value) value.value = normalized;
+    document.querySelectorAll('[data-crypto-order-type]').forEach((button) => {
+        const active = button.dataset.cryptoOrderType === normalized;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+    });
+    document.getElementById('crypto-limit-price-group')?.classList.toggle('hidden', normalized === 'market');
+    const priceLabel = document.getElementById('crypto-limit-price-label');
+    if (priceLabel) priceLabel.textContent = normalized === 'limit' ? '限价' : '触发价';
+    const priceInput = document.getElementById('crypto-limit-price');
+    if (priceInput && normalized !== 'market' && previous !== normalized && !options.preservePrice) priceInput.value = '';
+    if (priceInput && normalized === 'market') priceInput.value = '';
+    refreshCryptoMarginFraction();
+    updateCryptoPriceShortcuts();
+    refreshCryptoOrderPreview();
+    refreshCryptoTpSlPnl();
+}
+
+function setCryptoOrderStatus(message, state = '') {
+    const status = document.getElementById('crypto-order-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = 'crypto-order-status' + (state ? ' ' + state : '');
+}
+
+function refreshCryptoTpSlPnl() {
+    const tpPnlEl = document.getElementById('crypto-tp-pnl');
+    const slPnlEl = document.getElementById('crypto-sl-pnl');
+    if (!tpPnlEl || !slPnlEl) return;
+    const enabled = document.getElementById('crypto-tpsl-enabled')?.checked;
+    if (!enabled) { tpPnlEl.textContent = ''; slPnlEl.textContent = ''; return; }
+    const bars = latestRenderedKlineData;
+    if (!Array.isArray(bars) || bars.length === 0) { tpPnlEl.textContent = ''; slPnlEl.textContent = ''; return; }
+    const currentPrice = Number(bars[bars.length - 1].close);
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) { tpPnlEl.textContent = ''; slPnlEl.textContent = ''; return; }
+    const margin = Number(document.getElementById('crypto-margin')?.value || 0);
+    const leverage = Number(document.getElementById('crypto-order-leverage')?.value || 5);
+    const action = document.getElementById('crypto-order-action')?.value || 'open_long';
+    const isLong = action !== 'open_short';
+    const quantity = (margin * leverage) / currentPrice;
+    const tpPrice = Number(document.getElementById('crypto-tp-price')?.value || 0);
+    const slPrice = Number(document.getElementById('crypto-sl-price')?.value || 0);
+    if (Number.isFinite(tpPrice) && tpPrice > 0 && quantity > 0) {
+        const pnl = isLong ? quantity * (tpPrice - currentPrice) : quantity * (currentPrice - tpPrice);
+        tpPnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ' U';
+        tpPnlEl.classList.toggle('positive', pnl >= 0);
+        tpPnlEl.classList.toggle('negative', pnl < 0);
+    } else {
+        tpPnlEl.textContent = '';
+    }
+    if (Number.isFinite(slPrice) && slPrice > 0 && quantity > 0) {
+        const pnl = isLong ? quantity * (slPrice - currentPrice) : quantity * (currentPrice - slPrice);
+        slPnlEl.textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + ' U';
+        slPnlEl.classList.toggle('positive', pnl >= 0);
+        slPnlEl.classList.toggle('negative', pnl < 0);
+    } else {
+        slPnlEl.textContent = '';
     }
 }
 
-async function submitCryptoOrder() {
-    if (!currentTraining?.id || !isCryptoMode()) return;
-    const orderType = document.getElementById('crypto-order-type')?.value || 'market';
-    const body = {
-        action: document.getElementById('crypto-order-action')?.value || 'open_long',
-        order_type: orderType,
-        margin: Number(document.getElementById('crypto-margin')?.value || 0),
-        leverage: Number(document.getElementById('crypto-order-leverage')?.value || currentTraining.leverage || 5),
+function resetCryptoTpSl() {
+    const checkbox = document.getElementById('crypto-tpsl-enabled');
+    if (checkbox) checkbox.checked = false;
+    document.getElementById('crypto-tpsl-fields')?.classList.add('hidden');
+    const tpInput = document.getElementById('crypto-tp-price');
+    const slInput = document.getElementById('crypto-sl-price');
+    if (tpInput) tpInput.value = '';
+    if (slInput) slInput.value = '';
+    refreshCryptoTpSlPnl();
+}
+
+function getCryptoOrderErrorMessage(payload) {
+    if (payload?.message) return payload.message;
+    if (payload?.error) return payload.error;
+    const messages = {
+        invalid_action: '请选择有效的开仓或平仓方向。',
+        invalid_order_type: '订单类型必须是市价、限价或突破。',
+        invalid_limit_price: '请输入有效的限价。',
+        missing_limit_price: '限价单必须填写限价。',
+        invalid_trigger_price: '请输入有效的突破触发价。',
+        missing_trigger_price: '突破单必须填写触发价。',
+        invalid_limit_direction: '限价方向不正确，请按当前标记价重新设置。',
+        invalid_trigger_direction: '突破方向不正确，请按当前标记价重新设置。',
+        duplicate_pending_order: '该开仓方向已有挂单，请先撤单或等待成交。',
+        min_quantity: '预计数量低于合约最低数量，请增加保证金或杠杆。',
+        min_notional: '预计名义价值低于合约最低要求，请增加保证金。',
+        insufficient_margin: '可用保证金不足，请降低保证金并预留手续费。',
+        invalid_margin: '请输入有效的开仓保证金。',
+        no_position: '当前没有可平仓的持仓。',
+        leverage_locked: '存在持仓或挂单时不能修改杠杆。',
+        invalid_tp_sl: '止盈止损价格不符合当前开仓方向。',
+        invalid_order: '订单参数未通过校验，请检查价格、数量和止盈止损。',
     };
-    if (orderType === 'limit') body.limit_price = Number(document.getElementById('crypto-limit-price')?.value || 0);
+    return messages[payload?.code] || '合约订单提交失败，请检查参数后重试。';
+}
+
+async function submitCryptoOrder() {
+    if (!currentTraining?.id || !isCryptoMode() || cryptoOrderSubmitting) return;
+    const submitButton = document.getElementById('crypto-submit-order');
+    const preview = getCryptoOrderPreview();
+    const { orderType, action, leverage, margin, currentPrice, entryPrice, quantity, notional } = preview;
+    if (action !== 'close') {
+        const maximum = getCryptoMaxOpenMargin(orderType, leverage);
+        if (!Number.isFinite(margin) || margin <= 0) {
+            setCryptoOrderStatus('请输入有效的开仓保证金。', 'error');
+            return;
+        }
+        if (margin > maximum) {
+            setCryptoOrderStatus('保证金超过可用额度，请选择较小比例。', 'error');
+            return;
+        }
+        const minimumQuantity = Number(cryptoOrderConstraints?.min_quantity || 0);
+        const minimumNotional = Number(cryptoOrderConstraints?.min_notional || 0);
+        if (minimumQuantity > 0 && quantity < minimumQuantity) {
+            setCryptoOrderStatus('预计数量 ' + formatCryptoValue(quantity) + ' 低于最低数量 ' + formatCryptoValue(minimumQuantity) + '，请增加保证金或杠杆。', 'error');
+            return;
+        }
+        if (minimumNotional > 0 && notional < minimumNotional) {
+            setCryptoOrderStatus('预计名义价值低于 ' + formatCryptoValue(minimumNotional) + ' USDT，请增加保证金。', 'error');
+            return;
+        }
+    } else if (!getCryptoPendingSide(action)) {
+        setCryptoOrderStatus('当前没有可平仓的持仓。', 'error');
+        return;
+    }
+    const body = { action, order_type: orderType, margin, leverage };
+    if (orderType !== 'market') {
+        const directionError = validateCryptoPendingPrice(orderType, action, entryPrice, currentPrice);
+        if (directionError) {
+            setCryptoOrderStatus(directionError, 'error');
+            return;
+        }
+        if (orderType === 'limit') body.limit_price = entryPrice;
+        else body.trigger_price = entryPrice;
+    }
+    if (action !== 'close' && document.getElementById('crypto-tpsl-enabled')?.checked) {
+        const tpVal = Number(document.getElementById('crypto-tp-price')?.value || 0);
+        const slVal = Number(document.getElementById('crypto-sl-price')?.value || 0);
+        const protectionError = validateCryptoTpSl(action, entryPrice, tpVal, slVal);
+        if (protectionError) {
+            setCryptoOrderStatus(protectionError, 'error');
+            return;
+        }
+        if (Number.isFinite(tpVal) && tpVal > 0) body.tp_price = tpVal;
+        if (Number.isFinite(slVal) && slVal > 0) body.sl_price = slVal;
+    }
+    cryptoOrderSubmitting = true;
+    if (submitButton) submitButton.disabled = true;
+    setCryptoOrderStatus('正在提交订单…', 'loading');
     try {
         const response = await fetch(API_BASE + '/training/' + encodeURIComponent(currentTraining.id) + '/trade', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || '合约订单提交失败');
+        if (!response.ok) throw new Error(payload.message || payload.error || getCryptoOrderErrorMessage(payload));
         if (payload.trade_markers) syncActiveTradeMarkers(payload.trade_markers);
         if (payload.account || payload.position) renderCryptoAccount(payload);
         else await updateAccountInfo();
+        renderCryptoTradeHistory(payload.fills || []);
+        const submittedOrder = payload.order || {};
+        const successMessage = orderType === 'market'
+            ? (action === 'close' ? '市价平仓已提交。' : '市价开仓已提交。')
+            : '挂单已提交，将从下一根已揭示 K 线开始检查。';
+        setCryptoOrderStatus(submittedOrder.status === 'filled' ? '订单已成交。' : successMessage, 'success');
+        refreshCryptoMarginFraction();
+        resetCryptoTpSl();
     } catch (error) {
         console.error('提交合约订单失败:', error);
-        alert(error.message || '合约订单提交失败');
+        setCryptoOrderStatus(error.message || '合约订单提交失败', 'error');
+    } finally {
+        cryptoOrderSubmitting = false;
+        if (submitButton) submitButton.disabled = false;
     }
 }
 
@@ -4891,7 +5710,7 @@ async function updateAccountInfo() {
         document.getElementById('available-cash').textContent = `¥${account.available_cash.toLocaleString()}`;
         document.getElementById('position-value').textContent = `¥${account.position_value.toLocaleString()}`;
         document.getElementById('floating-pnl').textContent = `¥${account.floating_pnl.toLocaleString()}`;
-        document.getElementById('floating-pnl').style.color = account.floating_pnl > 0 ? '#ff4d4f' : account.floating_pnl < 0 ? '#008000' : '#000000';
+        document.getElementById('floating-pnl').style.color = account.floating_pnl > 0 ? getThemePalette().positive : account.floating_pnl < 0 ? getThemePalette().negative : getThemePalette().text;
 
         // 更新最大可交易数量
         document.getElementById('max-buy-quantity').textContent = account.max_buyable_quantity;

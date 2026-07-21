@@ -114,6 +114,7 @@ class CryptoFuturesPersistenceTests(unittest.TestCase):
         self.assertEqual(restarted.clock.current_time, start + timedelta(minutes=5))
         self.assertEqual(restarted.engine.simulator.account.funding_paid, Decimal("0.500000"))
         self.assertEqual(restarted.engine.order_book.active_orders[0].order_id, pending.order_id)
+        self.assertTrue(restarted.engine.order_book.cancel_order(pending.order_id, restarted.clock.current_time))
         new_order = restarted.submit_order(action="open_long", order_type="limit", margin="10", leverage=5, limit_price="80")
         self.assertEqual(new_order.order_id, "order-3")
         market_order = restarted.submit_order(action="open_long", order_type="market", margin="10", leverage=5)

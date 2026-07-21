@@ -76,7 +76,7 @@ class FuturesEngineTests(unittest.TestCase):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)
         simulator, orders, engine = self.make_engine()
         orders.submit_order(action="open_long", order_type="market", margin="99", leverage=5, timestamp=timestamp, current_price="100")
-        pending = orders.submit_order(action="close", order_type="limit", limit_price="90", timestamp=timestamp, current_price="100")
+        pending = orders.submit_order(action="close", order_type="breakout", trigger_price="90", timestamp=timestamp, current_price="100")
         result = engine.process_bar(
             timestamp=timestamp + timedelta(minutes=5),
             trade_bar={"high": "110", "low": "80", "close": "90"},

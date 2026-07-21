@@ -463,6 +463,14 @@
                         <button id="load-later-year-btn" type="button" class="hidden">往后加载一年</button>
                     </div>
                     <span id="chart-window-status" aria-live="polite"></span>
+                    <div class="crypto-market-strip" aria-label="币圈当日行情">
+                        <div class="crypto-market-metric"><span>开</span><strong id="crypto-open-price">--</strong></div>
+                        <div class="crypto-market-metric"><span>高</span><strong id="crypto-high-price">--</strong></div>
+                        <div class="crypto-market-metric"><span>低</span><strong id="crypto-low-price">--</strong></div>
+                        <div class="crypto-market-metric"><span>收</span><strong id="crypto-close-price">--</strong></div>
+                        <div class="crypto-market-metric"><span>成交量</span><strong id="crypto-volume">--</strong></div>
+                        <div class="crypto-market-metric"><span>涨跌幅</span><strong id="crypto-change-percent">--</strong></div>
+                    </div>
                 </div>
                 <div class="replay-status-bar">
                     <div class="replay-status-item">
@@ -497,6 +505,7 @@
                         <button type="button" data-drawing-action="undo" aria-label="撤销绘图操作" title="撤销">↶</button>
                         <button type="button" data-drawing-action="redo" aria-label="重做绘图操作" title="重做">↷</button>
                         <button type="button" data-drawing-action="clear" aria-label="清空全部图形" title="清空全部">×</button>
+                        <button id="chart-focus-exit-btn" type="button" class="hidden" aria-label="退出全屏图表" title="退出全屏">退出全屏</button>
                     </div>
                     <span id="drawing-status" class="drawing-status" aria-live="polite"></span>
                     <div id="drawing-fibonacci-settings" class="drawing-settings hidden" aria-label="斐波那契设置">
@@ -527,7 +536,10 @@
                 </div>
             </main>
 
+            <div id="crypto-console-splitter" class="crypto-console-splitter hidden" role="separator" aria-orientation="vertical" aria-label="调整交易台宽度" tabindex="0" data-crypto-workspace-only></div>
+
             <aside class="right-panel trade-console">
+                <button id="crypto-console-collapse-btn" type="button" class="crypto-console-collapse-btn hidden" data-crypto-workspace-only aria-label="收起交易台" title="收起交易台">›</button>
                 <div class="control-section account-console-section hidden" data-crypto-workspace-only>
                     <h3>账户</h3>
                     <div class="account-info">
@@ -563,7 +575,7 @@
                     </div>
                 </div>
 
-                <div class="info-section">
+                <div class="info-section" data-a-share-workspace-only>
                     <h3>当日详情</h3>
                     <div id="daily-info" class="daily-details">
                         <div class="detail-item"><span>开盘</span><span id="open-price">--</span></div>
@@ -647,6 +659,15 @@
                         <div><span>保证金率</span><strong id="crypto-margin-ratio">--</strong></div>
                     </div>
                     <div id="crypto-funding-summary" class="crypto-funding-summary">资金费：--</div>
+                    <div class="crypto-fee-settings">
+                        <div class="crypto-fee-settings-header"><span>手续费率</span><small>按成交额计算</small></div>
+                        <div class="crypto-fee-grid">
+                            <label>Maker (%)<input id="crypto-maker-fee-rate" type="number" min="0" max="1" step="0.001" value="0.02" inputmode="decimal"></label>
+                            <label>Taker (%)<input id="crypto-taker-fee-rate" type="number" min="0" max="1" step="0.001" value="0.05" inputmode="decimal"></label>
+                            <button id="crypto-save-fee-rates" type="button">应用费率</button>
+                        </div>
+                        <div id="crypto-fee-status" class="crypto-fee-status" aria-live="polite">仅影响后续成交；空仓且无挂单时可修改。</div>
+                    </div>
                     <div class="crypto-direction-buttons" role="group" aria-label="合约方向">
                         <button type="button" data-crypto-action="open_long" class="crypto-direction-long">开多</button>
                         <button type="button" data-crypto-action="open_short" class="crypto-direction-short">开空</button>
@@ -660,9 +681,15 @@
                                 <option value="close">平仓</option>
                             </select>
                         </label>
-                        <label>订单类型
-                            <select id="crypto-order-type"><option value="market">市价</option><option value="limit">限价</option></select>
-                        </label>
+                        <div class="crypto-order-type-field">
+                            <span class="crypto-order-type-label">订单类型</span>
+                            <input type="hidden" id="crypto-order-type" value="market">
+                            <div class="crypto-order-type-switch" role="group" aria-label="订单类型">
+                                <button type="button" class="crypto-order-type-btn active" data-crypto-order-type="market" data-order-type="market" aria-pressed="true">市价</button>
+                                <button type="button" class="crypto-order-type-btn" data-crypto-order-type="limit" data-order-type="limit" aria-pressed="false">限价</button>
+                                <button type="button" class="crypto-order-type-btn" data-crypto-order-type="breakout" data-order-type="breakout" aria-pressed="false">突破</button>
+                            </div>
+                        </div>
                         <label>杠杆
                             <select id="crypto-order-leverage">
                                 <option value="1">1x</option><option value="2">2x</option><option value="3">3x</option>
@@ -670,7 +697,42 @@
                             </select>
                         </label>
                         <label>保证金（USDT）<input type="number" id="crypto-margin" min="0" step="1" value="100"></label>
-                        <label id="crypto-limit-price-group" class="hidden">限价<input type="number" id="crypto-limit-price" min="0" step="0.01"></label>
+                        <label id="crypto-limit-price-group" class="hidden"><span id="crypto-limit-price-label">触发价</span><input type="number" id="crypto-limit-price" min="0" step="0.01" placeholder="请输入价格" inputmode="decimal"></label>
+                    </div>
+                    <div id="crypto-price-tools" class="crypto-price-tools hidden">
+                        <div class="crypto-price-tools-header">
+                            <span id="crypto-price-rule">请选择限价或突破单。</span>
+                            <small>以当前成交价计算</small>
+                        </div>
+                        <div class="crypto-price-shortcuts" aria-label="价格快捷档位">
+                            <button type="button" data-crypto-price-offset="0.001">-0.1%</button>
+                            <button type="button" data-crypto-price-offset="0.005">-0.5%</button>
+                            <button type="button" data-crypto-price-offset="0.01">-1%</button>
+                        </div>
+                    </div>
+                    <div class="crypto-order-preview" aria-live="polite">
+                        <div><span>预计数量</span><strong id="crypto-estimated-quantity">--</strong></div>
+                        <div><span>预计手续费</span><strong id="crypto-estimated-fee">--</strong></div>
+                        <div><span>最低数量</span><strong id="crypto-min-quantity">--</strong></div>
+                        <div><span>最低名义价值</span><strong id="crypto-min-notional">--</strong></div>
+                        <div class="crypto-order-preview-wide"><span>计算价格</span><strong id="crypto-estimated-entry-price">--</strong></div>
+                    </div>
+                    <div class="crypto-tpsl-section" data-crypto-workspace-only>
+                        <label class="crypto-tpsl-toggle">
+                            <input type="checkbox" id="crypto-tpsl-enabled">
+                            <span>止盈止损</span>
+                        </label>
+                        <div id="crypto-tpsl-fields" class="crypto-tpsl-fields hidden">
+                            <div class="crypto-tpsl-row">
+                                <label class="crypto-tpsl-input tp">止盈价<input type="number" id="crypto-tp-price" min="0" step="0.01" placeholder="选填"></label>
+                                <span id="crypto-tp-pnl" class="crypto-tpsl-pnl tp"></span>
+                            </div>
+                            <div class="crypto-tpsl-row">
+                                <label class="crypto-tpsl-input sl">止损价<input type="number" id="crypto-sl-price" min="0" step="0.01" placeholder="选填"></label>
+                                <span id="crypto-sl-pnl" class="crypto-tpsl-pnl sl"></span>
+                            </div>
+                            <p class="crypto-tpsl-note">按标记价触发，触发后以市价平仓；止盈止损仅随开仓单生效。</p>
+                        </div>
                     </div>
                     <div class="fraction-buttons crypto-margin-fractions">
                         <button type="button" data-crypto-margin-fraction="0.25">25%</button>
@@ -679,7 +741,8 @@
                         <button type="button" data-crypto-margin-fraction="1">全部</button>
                     </div>
                     <button id="crypto-submit-order" type="button" class="btn btn-primary">提交合约订单</button>
-                    <div id="crypto-pending-orders" class="pending-orders hidden"></div>
+                    <div id="crypto-order-status" class="crypto-order-status" aria-live="polite"></div>
+                    <div id="crypto-pending-orders" class="pending-orders crypto-pending-orders hidden" aria-live="polite"></div>
                 </div>
 
                 <div class="info-section record-console-section hidden" data-crypto-workspace-only>
@@ -708,6 +771,7 @@
                     </div>
                 </div>
                         </aside>
+                <div id="crypto-console-collapsed-tab" class="crypto-console-collapsed-tab hidden" data-crypto-workspace-only role="button" tabindex="0" aria-label="展开交易台" title="展开交易台">交易台</div>
         </div>
 
         <div id="report-interface" class="hidden">

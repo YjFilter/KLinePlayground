@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -29,8 +30,11 @@ class ChartWorkspaceStructureTests(unittest.TestCase):
         self.assertIn('data-after-panel="volume-chart"', self.html)
         self.assertIn('data-before-panel="volume-chart"', self.html)
         self.assertIn('data-after-panel="indicator-chart"', self.html)
-        self.assertEqual(self.html.count('role="separator"'), 2)
-        self.assertEqual(self.html.count('tabindex="0"'), 2)
+        splitters = re.findall(r'<div class="chart-panel-splitter"[^>]+>', self.html)
+        self.assertEqual(len(splitters), 2)
+        for splitter in splitters:
+            self.assertIn('role="separator"', splitter)
+            self.assertIn('tabindex="0"', splitter)
 
     def test_splitters_are_visibly_draggable(self):
         self.assertIn(".chart-panel-splitter", self.css)

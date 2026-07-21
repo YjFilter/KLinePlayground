@@ -54,6 +54,40 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_lists_persisted_instruments_without_network(self):
+        btc = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
+        eth = CryptoInstrument("ETHUSDT", "bybit", "ETH", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), Decimal("5"), Decimal("90"))
+        self.cache.save_instrument(btc)
+        self.cache.save_instrument(eth)
+        self.assertEqual([item.symbol for item in self.cache.list_instruments()], ["BTCUSDT", "ETHUSDT"])
+
+    def test_search_instruments_reads_only_matching_symbol_metadata(self):
+        instruments = [
+            CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100")),
+            CryptoInstrument("BTCDOMUSDT", "binance", "BTCDOM", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("80")),
+            CryptoInstrument("ETHUSDT", "binance", "ETH", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), Decimal("5"), Decimal("90")),
+        ]
+        for instrument in instruments:
+            self.cache.save_instrument(instrument)
+
+        with patch.object(self.cache, "load_instrument", wraps=self.cache.load_instrument) as load_instrument:
+            result = self.cache.search_instruments("BTC")
+
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT", "BTCDOMUSDT"])
+        self.assertEqual({call.args[1] for call in load_instrument.call_args_list}, {"BTCUSDT", "BTCDOMUSDT"})
+
+    def test_search_reuses_cached_instrument_path_index(self):
+        btc = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
+        eth = CryptoInstrument("ETHUSDT", "binance", "ETH", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), Decimal("5"), Decimal("90"))
+        self.cache.save_instrument(btc)
+        self.cache.save_instrument(eth)
+
+        with patch.object(self.cache, "_scan_instrument_paths", wraps=self.cache._scan_instrument_paths) as scan_paths:
+            self.cache.search_instruments("BTC")
+            self.cache.search_instruments("ETH")
+
+        self.assertEqual(scan_paths.call_count, 1)
+
     def test_save_segments_months_compresses_and_writes_metadata(self):
         data = frame([datetime(2024, 1, 31, 23, 55, tzinfo=UTC), datetime(2024, 2, 1, 0, 0, tzinfo=UTC)])
         self.cache.save("binance", "BTCUSDT", "trade", data)

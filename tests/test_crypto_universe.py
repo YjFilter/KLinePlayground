@@ -65,5 +65,69 @@ class CryptoUniverseTests(unittest.TestCase):
         with self.assertRaisesRegex(CryptoUniverseError, "after 2 attempts"):
             exhausted.select_random(start=NOW - timedelta(days=10), end=NOW, max_retries=2)
 
+    def test_eligible_deduplicates_same_source_symbol_pairs(self):
+        dup1 = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("200"))
+        dup2 = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
+        source = Source([dup1, dup2])
+        universe = CryptoUniverse([source], now=lambda: NOW)
+        result = universe.eligible_instruments()
+        symbols = [item.symbol for item in result]
+        self.assertEqual(symbols.count("BTCUSDT"), 1)
+        self.assertEqual(len(result), 1)
+
+    def test_search_deduplicates_same_symbol_across_sources(self):
+        binance_btc = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("500"))
+        bybit_btc = CryptoInstrument("BTCUSDT", "bybit", "BTC", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("300"))
+        eth = CryptoInstrument("ETHUSDT", "binance", "ETH", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), Decimal("5"), Decimal("100"))
+        source = Source([binance_btc, bybit_btc, eth])
+        universe = CryptoUniverse([source], now=lambda: NOW)
+        result = universe.search("BTC")
+        btc_results = [item for item in result if item.symbol == "BTCUSDT"]
+        self.assertEqual(len(btc_results), 1)
+        self.assertEqual(btc_results[0].source, "binance")
+
+    def test_duplicate_symbol_keeps_highest_turnover_record(self):
+        lower = CryptoInstrument("BTCUSDT", "bybit", "BTC", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("300"))
+        higher = CryptoInstrument("BTCUSDT", "binance", "BTC", "USDT", "PERPETUAL", "TRADING", NOW - timedelta(days=400), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("500"))
+        universe = CryptoUniverse([Source([lower, higher])], now=lambda: NOW)
+
+        result = universe.search("BTC")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].source, "binance")
+        self.assertEqual(result[0].quote_turnover_24h, Decimal("500"))
+
+    def test_search_uses_source_specific_search_without_loading_full_snapshot(self):
+        btc = make("BTCUSDT", 500)
+
+        class SearchSource:
+            name = "offline-cache"
+
+            def search_instruments(self, query):
+                self.query = query
+                return [btc]
+
+            def list_instruments(self):
+                raise AssertionError("full snapshot must not load for a targeted search")
+
+        source = SearchSource()
+        universe = CryptoUniverse([source], now=lambda: NOW)
+
+        result = universe.search("BTC")
+
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT"])
+        self.assertEqual(source.query, "BTC")
+
+    def test_search_returns_multiple_distinct_symbols(self):
+        instruments = [
+            make("BTCUSDT", 500),
+            make("ETHUSDT", 300),
+            make("SOLUSDT", 100),
+        ]
+        source = Source(instruments)
+        universe = CryptoUniverse([source], now=lambda: NOW)
+        result = universe.search("")
+        self.assertEqual([item.symbol for item in result], ["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+
 if __name__ == "__main__":
     unittest.main()

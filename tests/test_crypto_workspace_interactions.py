@@ -72,5 +72,138 @@ class CryptoWorkspaceInteractionTests(unittest.TestCase):
         self.assertIn("resetAll", self.function_source("clearSessionDrawings"))
 
 
+    def test_ohlc_neutral_color_does_not_use_black(self):
+        """OHLC crosshair display must not hardcode #000000 as the neutral/equal color."""
+        crosshair_start = self.js.index("chart.subscribeCrosshairMove")
+        crosshair_end = self.js.index("volumeChart.subscribeCrosshairMove", crosshair_start)
+        segment = self.js[crosshair_start:crosshair_end]
+        self.assertNotIn("'#000000'", segment)
+        self.assertNotIn('"#000000"', segment)
+
+    def test_direction_buttons_sync_active_and_aria_pressed(self):
+        """selectCryptoOrderAction must toggle .active and set aria-pressed on direction buttons."""
+        source = self.function_source("selectCryptoOrderAction")
+        self.assertIn("classList.toggle", source)
+        self.assertIn("active", source)
+        self.assertIn("aria-pressed", source)
+        self.assertIn("[data-crypto-action]", source)
+
+    def test_margin_fraction_buttons_sync_active_and_aria_pressed(self):
+        """Margin fraction click must toggle .active and sync aria-pressed on fraction buttons."""
+        self.assertIn("data-crypto-margin-fraction", self.js)
+        self.assertIn("aria-pressed", self.js)
+        self.assertIn("crypto-margin-fraction", self.js)
+        for token in ("classList.toggle", "active"):
+            self.assertIn(token, self.js)
+
+    def test_manual_margin_input_clears_fraction_button_state(self):
+        """Editing #crypto-margin by hand must clear .active and aria-pressed on fraction buttons."""
+        self.assertIn("crypto-margin", self.js)
+        for token in (
+            "crypto-margin-fraction",
+            "classList.remove",
+            "aria-pressed",
+        ):
+            self.assertIn(token, self.js)
+
+    def test_crypto_console_layout_functions_exist(self):
+        """Console resizer module must expose read/persist/apply/toggle/setup functions."""
+        for name in (
+            "readCryptoConsoleLayout",
+            "persistCryptoConsoleLayout",
+            "applyCryptoConsoleLayout",
+            "toggleCryptoConsoleCollapsed",
+            "setupCryptoConsoleResizer",
+        ):
+            self.assertIn(f"function {name}", self.js, name)
+
+    def test_crypto_console_resizer_uses_local_storage_keys(self):
+        """Layout persistence must use the documented localStorage keys."""
+        self.assertIn("kline-crypto-console-width-v1", self.js)
+        self.assertIn("kline-crypto-console-collapsed-v1", self.js)
+
+    def test_crypto_console_resizer_calls_resize_charts(self):
+        """Toggle and drag-end must call resizeCharts() so Lightweight Charts reflow."""
+        toggle_src = self.function_source("toggleCryptoConsoleCollapsed")
+        self.assertIn("resizeCharts", toggle_src)
+        setup_src = self.function_source("setupCryptoConsoleResizer")
+        self.assertIn("resizeCharts", setup_src)
+
+    def test_crypto_console_splitter_supports_arrow_keys(self):
+        """Keyboard ArrowLeft/ArrowRight must adjust console width by 16px."""
+        source = self.function_source("setupCryptoConsoleResizer")
+        self.assertIn("ArrowLeft", source)
+        self.assertIn("ArrowRight", source)
+        self.assertIn("16", source)
+
+    def test_crypto_console_width_uses_css_custom_property(self):
+        """Width must be driven by --crypto-console-width, not inline styles."""
+        self.assertIn("--crypto-console-width", self.js)
+
+    def test_direction_select_change_resyncs_direction_buttons(self):
+        self.assertIn("crypto-order-action", self.js)
+        self.assertIn("selectCryptoOrderAction(event.target.value, false)", self.js)
+
+    def test_chart_focus_mode_is_page_level_not_browser_fullscreen(self):
+        source = self.function_source("toggleChartFullscreen")
+        self.assertIn("chart-focus-mode", source)
+        self.assertIn("setChartFocusMode", source)
+        self.assertNotIn("requestFullscreen", source)
+        self.assertNotIn("document.fullscreenElement", source)
+
+    def test_escape_exits_chart_focus_mode(self):
+        source = self.function_source("setupKeyboardShortcuts")
+        self.assertIn("Escape", source)
+        self.assertIn("setChartFocusMode(false)", source)
+
+    def test_crypto_margin_fraction_uses_fee_aware_maximum(self):
+        self.assertIn("function getCryptoMaxOpenMargin", self.js)
+        self.assertIn("order_constraints", self.js)
+        self.assertIn("max_market_margin", self.js)
+        self.assertIn("max_limit_margin", self.js)
+        self.assertIn("Math.floor", self.function_source("getCryptoMaxOpenMargin"))
+        self.assertIn("getCryptoMaxOpenMargin", self.js[self.js.index("data-crypto-margin-fraction"):])
+
+    def test_fee_rate_editor_converts_percent_to_fraction_and_uses_inline_status(self):
+        source = self.function_source("submitCryptoFeeRates")
+        self.assertIn("/fee-rates", source)
+        self.assertIn("/ 100", source)
+        self.assertIn("crypto-fee-status", self.js)
+        self.assertIn("submitButton.disabled", source)
+        self.assertNotIn("alert(", source)
+
+    def test_crypto_submit_uses_inline_status_and_prevents_duplicates(self):
+        source = self.function_source("submitCryptoOrder")
+        self.assertIn("crypto-order-status", self.js)
+        self.assertIn("setCryptoOrderStatus", source)
+        self.assertIn("submitButton.disabled", source)
+        self.assertNotIn("alert(", source)
+        self.assertIn("payload.message", source)
+
+    def test_crypto_segmented_order_type_updates_hidden_value_and_trigger_payload(self):
+        source = self.function_source("setCryptoOrderType")
+        self.assertIn("[data-crypto-order-type]", self.js)
+        self.assertIn("crypto-order-type", source)
+        self.assertIn("aria-pressed", source)
+        self.assertIn("crypto-limit-price-group", source)
+        submit = self.function_source("submitCryptoOrder")
+        self.assertIn("trigger_price", submit)
+        self.assertIn("orderType !== 'market'", submit)
+
+    def test_crypto_next_uses_incremental_response_without_followup_requests(self):
+        source = self.function_source("nextCryptoBar")
+        self.assertIn("cryptoNextInFlight", source)
+        self.assertIn("applyCryptoNextDelta", source)
+        self.assertNotIn("updateAccountInfo", source)
+        self.assertNotIn("updateTradeHistory", source)
+        apply_source = self.function_source("applyCryptoNextDelta")
+        self.assertIn("candlestickSeries.update", apply_source)
+        self.assertIn("volumeSeries.update", apply_source)
+        self.assertIn("updateIntradayReplayStatus", apply_source)
+        self.assertIn("currentTraining.current_time", apply_source)
+        self.assertIn("renderCryptoAccount", apply_source)
+        self.assertIn("renderCryptoTradeHistory", apply_source)
+
+
 if __name__ == "__main__":
     unittest.main()

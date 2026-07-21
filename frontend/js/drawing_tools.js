@@ -37,6 +37,74 @@
     return value == null ? value : JSON.parse(JSON.stringify(value));
   }
 
+  function createTimeProjectionContext(bars) {
+    const times = (Array.isArray(bars) ? bars : [])
+      .map((bar) => Number(bar && bar.time))
+      .filter(Number.isFinite)
+      .sort((left, right) => left - right)
+      .filter((time, index, values) => index === 0 || time !== values[index - 1]);
+    if (!times.length) return null;
+    const intervals = [];
+    for (let index = 1; index < times.length; index += 1) {
+      const interval = times[index] - times[index - 1];
+      if (interval > 0) intervals.push(interval);
+    }
+    intervals.sort((left, right) => left - right);
+    const middle = Math.floor(intervals.length / 2);
+    const interval = intervals.length === 0
+      ? null
+      : intervals.length % 2
+        ? intervals[middle]
+        : (intervals[middle - 1] + intervals[middle]) / 2;
+    return {
+      firstTime: times[0],
+      lastTime: times[times.length - 1],
+      interval,
+    };
+  }
+
+  function projectionReference(timeScale, context, target, mode) {
+    if (!context || !Number.isFinite(context.interval) || context.interval <= 0
+        || typeof timeScale.coordinateToLogical !== 'function') return null;
+    const references = [];
+    for (const time of [context.firstTime, context.lastTime]) {
+      if (references.some((reference) => reference.time === time)) continue;
+      const coordinate = timeScale.timeToCoordinate(time);
+      if (!Number.isFinite(coordinate)) continue;
+      const logical = timeScale.coordinateToLogical(coordinate);
+      if (Number.isFinite(logical)) references.push({time, logical});
+    }
+    if (!references.length) return null;
+    const key = mode === 'time' ? 'time' : 'logical';
+    return references.reduce((best, reference) => (
+      !best || Math.abs(reference[key] - target) < Math.abs(best[key] - target)
+        ? reference
+        : best
+    ), null);
+  }
+
+  function coordinateToProjectedTime(timeScale, coordinate, context) {
+    const directTime = timeScale.coordinateToTime(coordinate);
+    if (Number.isFinite(directTime)) return directTime;
+    if (typeof timeScale.coordinateToLogical !== 'function') return null;
+    const logical = timeScale.coordinateToLogical(coordinate);
+    if (!Number.isFinite(logical)) return null;
+    const reference = projectionReference(timeScale, context, logical, 'logical');
+    if (!reference) return null;
+    return Math.round(reference.time + ((logical - reference.logical) * context.interval));
+  }
+
+  function projectedTimeToCoordinate(timeScale, time, context) {
+    const directCoordinate = timeScale.timeToCoordinate(time);
+    if (Number.isFinite(directCoordinate)) return directCoordinate;
+    if (typeof timeScale.logicalToCoordinate !== 'function') return null;
+    const reference = projectionReference(timeScale, context, time, 'time');
+    if (!reference) return null;
+    return timeScale.logicalToCoordinate(
+      reference.logical + ((time - reference.time) / context.interval)
+    );
+  }
+
   function normalizeAnchor(anchor) {
     if (!anchor || typeof anchor !== 'object') {
       throw new TypeError('anchor must be an object');
@@ -151,6 +219,9 @@
         && Number.isFinite(bar.close) && bar.close > bar.open).length,
       bearishCount: visibleBars.filter((bar) => Number.isFinite(bar.open)
         && Number.isFinite(bar.close) && bar.close < bar.open).length,
+      totalVolume: visibleBars.reduce((total, bar) => (
+        Number.isFinite(bar.volume) ? total + bar.volume : total
+      ), 0),
       duration: elapsedDuration,
       elapsedDuration,
       direction: priceDelta >= 0 ? 'bull' : 'bear',
@@ -398,14 +469,69 @@
     context.stroke();
   }
 
-  function drawLabel(context, text, x, y, color, ratioX, ratioY) {
-    const paddingX = 4 * ratioX;
-    const height = 18 * ratioY;
-    const width = context.measureText(text).width + (paddingX * 2);
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+  }
+
+  function trimFixed(value, precision) {
+    return Number(value.toFixed(precision)).toString();
+  }
+
+  function formatAdaptivePrice(value) {
+    if (!Number.isFinite(value)) return '--';
+    const absoluteValue = Math.abs(value);
+    if (absoluteValue >= 100) return trimFixed(value, 2);
+    if (absoluteValue >= 1) return trimFixed(value, 4);
+    if (absoluteValue >= 0.01) return trimFixed(value, 5);
+    if (absoluteValue >= 0.0001) return trimFixed(value, 6);
+    return trimFixed(value, 8);
+  }
+
+  function formatSignedPrice(value) {
+    if (!Number.isFinite(value)) return '--';
+    return `${value >= 0 ? '+' : '-'}${formatAdaptivePrice(Math.abs(value))}`;
+  }
+
+  function formatSignificant(value, digits) {
+    if (!Number.isFinite(value)) return '--';
+    if (value === 0) return '0';
+    return Number(value.toPrecision(digits)).toString();
+  }
+
+  function formatCompactNumber(value, suffixes) {
+    if (!Number.isFinite(value)) return '--';
+    const units = suffixes || [
+      {threshold: 1e9, divisor: 1e9, suffix: 'B'},
+      {threshold: 1e6, divisor: 1e6, suffix: 'M'},
+      {threshold: 1e3, divisor: 1e3, suffix: 'K'},
+    ];
+    const absoluteValue = Math.abs(value);
+    const unit = units.find((candidate) => absoluteValue >= candidate.threshold);
+    if (!unit) return formatAdaptivePrice(value);
+    return `${trimFixed(value / unit.divisor, 2)}${unit.suffix}`;
+  }
+
+  function formatAccountValue(value) {
+    return formatCompactNumber(value, [
+      {threshold: 1e6, divisor: 1e6, suffix: 'M'},
+      {threshold: 1e3, divisor: 1e3, suffix: 'K'},
+    ]);
+  }
+
+  function drawLabel(context, text, x, top, color, ratioX, ratioY, bounds) {
+    const paddingX = 6 * ratioX;
+    const labelHeight = 20 * ratioY;
+    const labelWidth = context.measureText(text).width + (paddingX * 2);
+    const marginX = 3 * ratioX;
+    const marginY = 2 * ratioY;
+    const drawX = clamp(x, marginX, bounds.width - labelWidth - marginX);
+    const drawTop = clamp(top, marginY, bounds.height - labelHeight - marginY);
     context.fillStyle = color;
-    context.fillRect(x, y - height, width, height);
+    context.fillRect(drawX, drawTop, labelWidth, labelHeight);
     context.fillStyle = '#ffffff';
-    context.fillText(text, x + paddingX, y - (4 * ratioY));
+    context.textBaseline = 'middle';
+    context.fillText(text, drawX + paddingX, drawTop + (labelHeight / 2));
+    return {x: drawX, y: drawTop, width: labelWidth, height: labelHeight};
   }
 
   function applyLineStyle(context, lineStyle, ratio) {
@@ -415,11 +541,39 @@
   }
 
   function formatDuration(seconds) {
-    const totalSeconds = Math.abs(seconds);
-    if (totalSeconds < 60) return `${totalSeconds}s`;
-    if (totalSeconds < 3600) return `${Math.round(totalSeconds / 60)}m`;
-    if (totalSeconds < 86400) return `${Math.round(totalSeconds / 3600)}h`;
-    return `${Math.round(totalSeconds / 86400)}d`;
+    const totalMinutes = Math.floor(Math.abs(seconds) / 60);
+    if (totalMinutes < 1) return `${Math.floor(Math.abs(seconds))}秒`;
+    const days = Math.floor(totalMinutes / 1440);
+    const hours = Math.floor((totalMinutes % 1440) / 60);
+    const minutes = totalMinutes % 60;
+    const parts = [];
+    if (days) parts.push(`${days}天`);
+    if (hours) parts.push(`${hours}小时`);
+    if (minutes || parts.length === 0) parts.push(`${minutes}分钟`);
+    return parts.join('');
+  }
+
+  function layoutRiskLabelTops(labels, height, ratioY) {
+    const labelHeight = 20 * ratioY;
+    const gap = 2 * ratioY;
+    const margin = 2 * ratioY;
+    const sorted = labels
+      .map((label) => ({...label, top: label.y - (labelHeight / 2)}))
+      .sort((left, right) => left.top - right.top);
+    sorted.forEach((label, index) => {
+      const minimumTop = index === 0 ? margin : sorted[index - 1].top + labelHeight + gap;
+      label.top = Math.max(label.top, minimumTop);
+    });
+    const overflow = sorted.length
+      ? sorted[sorted.length - 1].top + labelHeight + margin - height
+      : 0;
+    if (overflow > 0) sorted.forEach((label) => { label.top -= overflow; });
+    for (let index = sorted.length - 2; index >= 0; index -= 1) {
+      sorted[index].top = Math.min(sorted[index].top, sorted[index + 1].top - labelHeight - gap);
+    }
+    const underflow = sorted.length ? margin - sorted[0].top : 0;
+    if (underflow > 0) sorted.forEach((label) => { label.top += underflow; });
+    return new Map(sorted.map((label) => [label.key, label.top]));
   }
 
   class DrawingPaneRenderer {
@@ -507,41 +661,90 @@
           const top = Math.min(first.y, second.y);
           const rectWidth = Math.abs(second.x - first.x);
           const rectHeight = Math.abs(second.y - first.y);
+          const centerX = left + (rectWidth / 2);
           const metrics = primitive.rulerMetrics();
-          const directionColor = metrics.direction === 'bull'
-            ? 'rgba(38, 166, 154, 0.20)'
-            : 'rgba(239, 83, 80, 0.20)';
-          context.fillStyle = directionColor;
-          context.strokeStyle = metrics.direction === 'bull' ? '#26a69a' : '#ef5350';
+          context.fillStyle = 'rgba(38, 166, 154, 0.18)';
+          context.strokeStyle = '#26a69a';
           context.fillRect(left, top, rectWidth, rectHeight);
           context.strokeRect(left, top, rectWidth, rectHeight);
           context.save();
           context.setLineDash([5 * ratioX, 4 * ratioX]);
           drawLine(context, {x: first.x, y: first.y}, {x: second.x, y: first.y});
-          drawLine(context, {x: second.x, y: first.y}, {x: second.x, y: second.y});
+          drawLine(context, {x: centerX, y: first.y}, {x: centerX, y: second.y});
           context.restore();
-          drawLine(context, first, second);
-          const angle = Math.atan2(second.y - first.y, second.x - first.x);
-          const arrowSize = 8 * Math.max(ratioX, ratioY);
+          const horizontalDirection = second.x >= first.x ? 1 : -1;
+          const horizontalArrowX = 8 * ratioX;
+          const horizontalArrowY = 4 * ratioY;
           context.beginPath();
-          context.moveTo(second.x, second.y);
-          context.lineTo(
-            second.x - arrowSize * Math.cos(angle - Math.PI / 6),
-            second.y - arrowSize * Math.sin(angle - Math.PI / 6)
-          );
-          context.moveTo(second.x, second.y);
-          context.lineTo(
-            second.x - arrowSize * Math.cos(angle + Math.PI / 6),
-            second.y - arrowSize * Math.sin(angle + Math.PI / 6)
-          );
+          context.moveTo(second.x, first.y);
+          context.lineTo(second.x - (horizontalDirection * horizontalArrowX), first.y - horizontalArrowY);
+          context.moveTo(second.x, first.y);
+          context.lineTo(second.x - (horizontalDirection * horizontalArrowX), first.y + horizontalArrowY);
           context.stroke();
-          context.fillText(
-            `${metrics.absolutePriceChange.toFixed(2)} (${metrics.percentChange.toFixed(2)}%) `
-              + `${metrics.barCount} bars ${metrics.bullishCount} bull ${metrics.bearishCount} bear `
-              + `${formatDuration(metrics.elapsedDuration)}`,
-            left,
-            top
-          );
+          const verticalDirection = second.y >= first.y ? 1 : -1;
+          const verticalArrowX = 4 * ratioX;
+          const verticalArrowY = 8 * ratioY;
+          context.beginPath();
+          context.moveTo(centerX, second.y);
+          context.lineTo(centerX - verticalArrowX, second.y - (verticalDirection * verticalArrowY));
+          context.moveTo(centerX, second.y);
+          context.lineTo(centerX + verticalArrowX, second.y - (verticalDirection * verticalArrowY));
+          context.stroke();
+          context.fillStyle = '#78909c';
+          context.strokeStyle = '#c7d5df';
+          for (const anchor of [first, second]) {
+            context.beginPath();
+            context.arc(anchor.x, anchor.y, 4.5 * Math.max(ratioX, ratioY), 0, Math.PI * 2);
+            context.fill();
+            context.stroke();
+          }
+          const rulerLines = [
+            `${formatAdaptivePrice(metrics.priceDelta)} (${metrics.percentChange.toFixed(2)}%)`,
+            `${metrics.barCount}柱 (${metrics.bullishCount}阳${metrics.bearishCount}阴)`,
+            formatDuration(metrics.elapsedDuration),
+          ];
+          let cardPaddingX = 8 * ratioX;
+          let cardPaddingY = 5 * ratioY;
+          let lineHeight = 18 * ratioY;
+          let cardWidth = Math.max(...rulerLines.map((line) => context.measureText(line).width))
+            + (cardPaddingX * 2);
+          let cardHeight = (rulerLines.length * lineHeight) + (cardPaddingY * 2);
+          const availableWidth = Math.max(ratioX, width - (8 * ratioX));
+          const availableHeight = Math.max(ratioY, height - (8 * ratioY));
+          const cardScale = Math.min(1, availableWidth / cardWidth, availableHeight / cardHeight);
+          if (cardScale < 1) {
+            context.font = `${12 * ratioY * cardScale}px sans-serif`;
+            cardPaddingX *= cardScale;
+            cardPaddingY *= cardScale;
+            lineHeight *= cardScale;
+            cardWidth = Math.max(...rulerLines.map((line) => context.measureText(line).width))
+              + (cardPaddingX * 2);
+            cardHeight = (rulerLines.length * lineHeight) + (cardPaddingY * 2);
+          }
+          const marginX = 4 * ratioX;
+          const marginY = 4 * ratioY;
+          const cardGap = 8 * ratioY;
+          const preferredX = centerX - (cardWidth / 2);
+          const aboveY = top - cardHeight - cardGap;
+          const belowY = top + rectHeight + cardGap;
+          const preferredY = aboveY >= marginY
+            ? aboveY
+            : belowY + cardHeight <= height - marginY
+              ? belowY
+              : top + ((rectHeight - cardHeight) / 2);
+          const cardX = clamp(preferredX, marginX, width - cardWidth - marginX);
+          const cardY = clamp(preferredY, marginY, height - cardHeight - marginY);
+          context.fillStyle = 'rgba(10, 63, 66, 0.94)';
+          context.fillRect(cardX, cardY, cardWidth, cardHeight);
+          context.fillStyle = '#f4fbfb';
+          context.textBaseline = 'middle';
+          rulerLines.forEach((line, index) => {
+            context.fillText(
+              line,
+              cardX + cardPaddingX,
+              cardY + cardPaddingY + (lineHeight * index) + (lineHeight / 2)
+            );
+          });
         } else if (model.type === 'long' || model.type === 'short' || model.type === 'risk-reward') {
           const entry = first;
           const stop = second;
@@ -556,64 +759,44 @@
           context.fillRect(entry.x, Math.min(entry.y, stop.y), rectWidth, Math.abs(stop.y - entry.y));
           context.fillStyle = 'rgba(38, 166, 154, 0.20)';
           context.fillRect(entry.x, Math.min(entry.y, target.y), rectWidth, Math.abs(target.y - entry.y));
+          context.strokeStyle = '#087f78';
           drawLine(context, {x: entry.x, y: entry.y}, {x: right, y: entry.y});
+          context.strokeStyle = '#ef5350';
           drawLine(context, {x: entry.x, y: stop.y}, {x: right, y: stop.y});
+          context.strokeStyle = '#26a69a';
           drawLine(context, {x: entry.x, y: target.y}, {x: right, y: target.y});
-          const side = model.type === 'risk-reward' ? model.side : model.type;
-          const metrics = calculateRiskReward(
-            side,
-            model.anchors[0].price,
-            model.anchors[1].price,
-            model.anchors[2].price,
-            model.options
-          );
-          const labelX = entry.x + (4 * ratioX);
-          drawLabel(context, `入场 ${metrics.entry.toFixed(2)}`, labelX, entry.y, '#2962ff', ratioX, ratioY);
-          drawLabel(
-            context,
-            `止损 ${metrics.stop.toFixed(2)} (${metrics.riskPercent.toFixed(2)}%)`,
-            labelX,
-            stop.y,
-            '#ef5350',
-            ratioX,
-            ratioY
-          );
-          drawLabel(
-            context,
-            `止盈 ${metrics.target.toFixed(2)} (${metrics.rewardPercent.toFixed(2)}%)`,
-            labelX,
-            target.y,
-            '#26a69a',
-            ratioX,
-            ratioY
-          );
-          const centerY = (stop.y + target.y) / 2;
-          drawLabel(
-            context,
-            `盈亏比 ${metrics.rewardRiskRatio.toFixed(2)}`,
-            labelX,
-            centerY,
-            '#7c4dff',
-            ratioX,
-            ratioY
-          );
-          if (Number.isFinite(metrics.accountSize)) {
-            drawLabel(
-              context, `账户 ${metrics.accountSize.toFixed(2)}`, labelX, centerY + (20 * ratioY),
-              '#ff9800', ratioX, ratioY
+          context.strokeStyle = strokeColor;
+          if (model.hovered) {
+            const side = model.type === 'risk-reward' ? model.side : model.type;
+            const metrics = calculateRiskReward(
+              side,
+              model.anchors[0].price,
+              model.anchors[1].price,
+              model.anchors[2].price,
+              model.options
             );
-          }
-          if (Number.isFinite(metrics.positionSize)) {
-            drawLabel(
-              context, `仓量 ${metrics.positionSize}`, labelX, centerY + (40 * ratioY),
-              '#00897b', ratioX, ratioY
-            );
-          }
-          if (Number.isFinite(metrics.accountRiskAmount)) {
-            drawLabel(
-              context, `风险 ${metrics.accountRiskAmount.toFixed(2)}`, labelX, centerY + (60 * ratioY),
-              '#f4511e', ratioX, ratioY
-            );
+            const labelX = entry.x + (4 * ratioX);
+            const labels = [
+              {
+                key: 'stop', y: stop.y, color: '#ef5350',
+                text: `止损 ${formatAdaptivePrice(metrics.stop)} · -${metrics.riskPercent.toFixed(2)}%`,
+              },
+              {
+                key: 'entry', y: entry.y, color: '#087f78',
+                text: `入场 ${formatAdaptivePrice(metrics.entry)} · RR ${metrics.rewardRiskRatio.toFixed(2)}`,
+              },
+              {
+                key: 'target', y: target.y, color: '#26a69a',
+                text: `止盈 ${formatAdaptivePrice(metrics.target)} · +${metrics.rewardPercent.toFixed(2)}%`,
+              },
+            ];
+            const labelTops = layoutRiskLabelTops(labels, height, ratioY);
+            labels.forEach((label) => {
+              drawLabel(
+                context, label.text, labelX, labelTops.get(label.key), label.color,
+                ratioX, ratioY, {width, height}
+              );
+            });
           }
         } else {
           drawLine(context, first, second);
@@ -651,6 +834,7 @@
     constructor(model) {
       this._model = serializeDrawing(model);
       this._bars = [];
+      this._timeProjection = null;
       this._chart = null;
       this._series = null;
       this._requestUpdate = null;
@@ -683,6 +867,7 @@
       const nextBars = Array.isArray(bars) ? bars : [];
       if (this._bars === nextBars) return false;
       this._bars = nextBars;
+      this._timeProjection = createTimeProjectionContext(nextBars);
       if (this._requestUpdate) this._requestUpdate();
       return true;
     }
@@ -723,7 +908,7 @@
       const timeScale = this._chart.timeScale();
       return this._model.anchors.map((anchor) => {
         let projectedTime = anchor.time;
-        let x = timeScale.timeToCoordinate(projectedTime);
+        let x = projectedTimeToCoordinate(timeScale, projectedTime, this._timeProjection);
         if (!Number.isFinite(x) && this._bars.length) {
           const nearest = this._bars.reduce((best, bar) => (
             !best || Math.abs(bar.time - anchor.time) < Math.abs(best.time - anchor.time) ? bar : best
@@ -893,6 +1078,7 @@
           : () => {});
       this.activeTool = null;
       this.selectedId = null;
+      this._hoveredId = null;
       this._draftAnchors = [];
       this._draftPrimitive = null;
       this._gesture = null;
@@ -901,16 +1087,19 @@
       this._pendingPointerMove = null;
       this._pointerMoveFrame = null;
       this._bars = clone(Array.isArray(parameters.bars) ? parameters.bars : []);
+      this._timeProjection = createTimeProjectionContext(this._bars);
       this._primitives = new Map();
       this._boundPointerDown = (event) => this._onPointerDown(event);
       this._boundPointerMove = (event) => this._onPointerMove(event);
       this._boundPointerUp = (event) => this._onPointerUp(event);
       this._boundPointerCancel = (event) => this._onPointerCancel(event);
+      this._boundPointerLeave = () => this._onPointerLeave();
       this._boundKeyDown = (event) => this._onKeyDown(event);
       this.element.addEventListener('pointerdown', this._boundPointerDown);
       this.element.addEventListener('pointermove', this._boundPointerMove);
       this.element.addEventListener('pointerup', this._boundPointerUp);
       this.element.addEventListener('pointercancel', this._boundPointerCancel);
+      this.element.addEventListener('pointerleave', this._boundPointerLeave);
       this.keyTarget.addEventListener('keydown', this._boundKeyDown);
       this.refresh();
     }
@@ -942,7 +1131,11 @@
         }
       }
       for (const model of drawings) {
-        const viewModel = {...model, selected: model.id === this.selectedId};
+        const viewModel = {
+          ...model,
+          selected: model.id === this.selectedId,
+          hovered: model.id === this._hoveredId,
+        };
         let primitive = this._primitives.get(model.id);
         if (!primitive) {
           primitive = new DrawingPrimitive(viewModel);
@@ -958,6 +1151,7 @@
 
     setBars(bars) {
       this._bars = clone(Array.isArray(bars) ? bars : []);
+      this._timeProjection = createTimeProjectionContext(this._bars);
       for (const primitive of this._primitives.values()) {
         if (primitive.usesBars()) primitive.setBars(this._bars);
       }
@@ -1147,12 +1341,14 @@
       this.element.removeEventListener('pointermove', this._boundPointerMove);
       this.element.removeEventListener('pointerup', this._boundPointerUp);
       this.element.removeEventListener('pointercancel', this._boundPointerCancel);
+      this.element.removeEventListener('pointerleave', this._boundPointerLeave);
       this.keyTarget.removeEventListener('keydown', this._boundKeyDown);
       for (const primitive of this._primitives.values()) {
         this._detachPrimitive(primitive);
       }
       this._primitives.clear();
       this.selectedId = null;
+      this._hoveredId = null;
       this.activeTool = null;
     }
 
@@ -1181,6 +1377,18 @@
       } catch (error) {
         return null;
       }
+    }
+
+    _setHoveredId(id) {
+      const nextId = id && this.store.get(id) ? id : null;
+      if (nextId === this._hoveredId) return false;
+      this._hoveredId = nextId;
+      this.refresh();
+      return true;
+    }
+
+    _onPointerLeave() {
+      if (!this._gesture) this._setHoveredId(null);
     }
 
     _setInteractionState(active, type) {
@@ -1245,7 +1453,9 @@
           config.positionSize = accountRiskAmount / riskPerUnit;
         }
       }
-      return createDrawingModel(tool, anchors, config);
+      const model = createDrawingModel(tool, anchors, config);
+      if (id === DRAFT_DRAWING_ID) model.hovered = true;
+      return model;
     }
 
     _riskAnchors(tool, start, end) {
@@ -1306,7 +1516,7 @@
 
     _anchorFromPoint(point, altKey) {
       const timeScale = this.chart.timeScale();
-      let time = timeScale.coordinateToTime(point.x);
+      let time = coordinateToProjectedTime(timeScale, point.x, this._timeProjection);
       let price = this.series.coordinateToPrice(point.y);
       if (!altKey && Array.isArray(this._bars) && this._bars.length) {
         let snapBar = null;
@@ -1391,10 +1601,12 @@
       }
       const hit = this._hitTest(point.x, point.y);
       if (!hit) {
+        this._hoveredId = null;
         this.select(null);
         this._gesture = null;
         return;
       }
+      this._hoveredId = hit.drawingId;
       this.select(hit.drawingId);
       if (hit.locked) {
         this._gesture = null;
@@ -1450,7 +1662,9 @@
         const deltaX = point.x - gesture.startPoint.x;
         const deltaY = point.y - gesture.startPoint.y;
         anchors = gesture.original.anchors.map((anchor) => {
-          const originalX = this.chart.timeScale().timeToCoordinate(anchor.time);
+          const originalX = projectedTimeToCoordinate(
+            this.chart.timeScale(), anchor.time, this._timeProjection
+          );
           const originalY = this.series.priceToCoordinate(anchor.price);
           if (!Number.isFinite(originalX) || !Number.isFinite(originalY)) return clone(anchor);
           return this._anchorFromPoint(
@@ -1473,9 +1687,13 @@
     }
 
     _onPointerMove(event) {
-      if (!this._gesture) return;
       const point = this._safePointerEvent(event);
       if (!point) return;
+      if (!this._gesture) {
+        const hit = this._hitTest(point.x, point.y);
+        this._setHoveredId(hit ? hit.drawingId : null);
+        return;
+      }
       this._pendingPointerMove = point;
       if (this._pointerMoveFrame == null) {
         let completedSynchronously = false;
@@ -1503,6 +1721,7 @@
             const model = this._createModelForTool(gesture.tool, gesture.preview.anchors);
             this.store.add(model);
             this.selectedId = model.id;
+            this._hoveredId = model.id;
           } catch (error) {
             if (this.onError) this.onError(error);
           }

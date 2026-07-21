@@ -51,7 +51,7 @@ class DrawingMathRuntimeTests(unittest.TestCase):
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_ruler_metrics_cover_delta_percent_bars_direction_and_duration(self):
+    def test_ruler_metrics_cover_delta_percent_bars_duration_and_volume(self):
         script = f"""
         const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
         const assert = require('node:assert/strict');
@@ -62,10 +62,10 @@ class DrawingMathRuntimeTests(unittest.TestCase):
             startIndex: 4,
             endIndex: 9,
             bars: [
-              {{time: 1000, open: 10, close: 11}},
-              {{time: 1060, open: 11, close: 10}},
-              {{time: 1120, open: 10, close: 10}},
-              {{time: 1180, open: 10, close: 12}},
+              {{time: 1000, open: 10, close: 11, volume: 1000}},
+              {{time: 1060, open: 11, close: 10, volume: 2000}},
+              {{time: 1120, open: 10, close: 10, volume: 3000}},
+              {{time: 1180, open: 10, close: 12, volume: 4000}},
             ],
           }}
         );
@@ -76,6 +76,7 @@ class DrawingMathRuntimeTests(unittest.TestCase):
           barCount: 4,
           bullishCount: 2,
           bearishCount: 1,
+          totalVolume: 10000,
           duration: 180,
           elapsedDuration: 180,
           direction: 'bull',
@@ -93,6 +94,7 @@ class DrawingMathRuntimeTests(unittest.TestCase):
         assert.equal(bear.absolutePriceChange, 2.5);
         assert.equal(bear.bullishCount, 0);
         assert.equal(bear.bearishCount, 0);
+        assert.equal(bear.totalVolume, 0);
         assert.equal(bear.direction, 'bear');
         """
         completed = run_node(script)
@@ -302,7 +304,6 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
         assert.ok(operations.some(operation => operation[0] === 'lineTo'));
         assert.ok(operations.some(operation => operation[0] === 'setLineDash'));
         assert.ok(operations.some(operation => operation[0] === 'fillText' && String(operation[1]).includes('23.6% (')));
-        assert.ok(operations.some(operation => operation[0] === 'fillText' && String(operation[1]).includes('盈亏比')));
         assert.ok(operations.some(operation => operation[0] === 'set' && operation[1] === 'lineWidth' && operation[2] >= 2));
         """
         completed = run_node(script)
@@ -365,7 +366,7 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
-    def test_ruler_renderer_uses_bars_duration_direction_color_and_arrow(self):
+    def test_ruler_renderer_uses_tradingview_card_guides_arrow_and_fixed_teal_style(self):
         script = f"""
         const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
         const assert = require('node:assert/strict');
@@ -383,9 +384,9 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
           ]);
           const primitive = new drawing.DrawingPrimitive(model);
           primitive.setBars([
-            {{time: 1000, open: 10, close: 11}},
-            {{time: 1060, open: 11, close: 10}},
-            {{time: 1180, open: 10, close: endPrice}},
+            {{time: 1000, open: 10, close: 11, volume: 1_000_000_000}},
+            {{time: 1060, open: 11, close: 10, volume: 2_000_000_000}},
+            {{time: 1180, open: 10, close: endPrice, volume: 3_000_000_000}},
           ]);
           primitive.attached({{
             chart: {{timeScale: () => ({{timeToCoordinate: time => time - 990}})}},
@@ -400,49 +401,150 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
         }}
         const bull = render(12.5);
         const bear = render(8);
-        assert.ok(bull.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2].includes('38, 166, 154')));
-        assert.ok(bear.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2].includes('239, 83, 80')));
-        assert.ok(bull.some(op => op[0] === 'fillText' && String(op[1]).includes('3m')));
-        assert.ok(bull.some(op => op[0] === 'setLineDash'));
-        assert.ok(bull.filter(op => op[0] === 'lineTo').length >= 5);
+        for (const operations of [bull, bear]) {{
+          assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === 'rgba(38, 166, 154, 0.18)'));
+          assert.ok(operations.some(op => op[0] === 'setLineDash'));
+          assert.ok(operations.filter(op => op[0] === 'arc').length >= 2);
+          const labels = operations.filter(op => op[0] === 'fillText').map(op => String(op[1]));
+          assert.equal(labels.length, 3);
+          assert.ok(labels.some(text => text.includes('3分钟')));
+          assert.equal(labels.some(text => text.includes('成交量')), false);
+        }}
+        assert.ok(bull.some(op => op[0] === 'fillText' && String(op[1]).includes('3柱 (2阳1阴)')));
+        assert.ok(bear.some(op => op[0] === 'fillText' && String(op[1]).includes('3柱 (1阳2阴)')));
+        assert.ok(bull.some(op => op[0] === 'fillText' && String(op[1]).startsWith('2.5 (25.00%)')));
+        assert.ok(bear.some(op => op[0] === 'fillText' && String(op[1]).startsWith('-2 (-20.00%)')));
+        const hasCenterGuide = bull.some((op, index) => op[0] === 'moveTo' && op[1] === 100 && op[2] === 190
+          && bull[index + 1]?.[0] === 'lineTo' && bull[index + 1][1] === 100 && bull[index + 1][2] === 187.5);
+        assert.equal(hasCenterGuide, true);
+        const cardColorIndex = bull.findIndex(op => op[0] === 'set' && op[1] === 'fillStyle'
+          && op[2] === 'rgba(10, 63, 66, 0.94)');
+        const card = bull.slice(cardColorIndex + 1).find(op => op[0] === 'fillRect');
+        assert.ok(card[2] + card[4] <= 187.5);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_ruler_information_card_is_clamped_inside_the_canvas(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const operations = [];
+        const context = new Proxy({{
+          font: '12px sans-serif',
+          measureText(text) {{
+            const size = Number.parseFloat(this.font) || 12;
+            return {{width: text.length * size * 0.5}};
+          }}
+        }}, {{
+          get(target, key) {{ if (key in target) return target[key]; return (...args) => operations.push([key, ...args]); }},
+          set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
+        }});
+        const primitive = new drawing.DrawingPrimitive(drawing.createRulerModel([
+          {{time: 1150, price: 82}}, {{time: 1190, price: 78}}
+        ]));
+        primitive.setBars([{{time: 1150, open: 82, close: 80, volume: 1000}}]);
+        primitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: time => time - 1000}})}},
+          series: {{priceToCoordinate: price => 210 - price}}, requestUpdate() {{}},
+        }});
+        primitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
+          callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
+            bitmapSize: {{width: 90, height: 70}}, mediaSize: {{width: 90, height: 70}}}});
+        }}}});
+        const cardColorIndex = operations.findIndex(op => op[0] === 'set' && op[1] === 'fillStyle'
+          && op[2] === 'rgba(10, 63, 66, 0.94)');
+        const card = operations.slice(cardColorIndex + 1).find(op => op[0] === 'fillRect');
+        assert.ok(card);
+        assert.ok(card[1] >= 0 && card[2] >= 0);
+        assert.ok(card[1] + card[3] <= 90);
+        assert.ok(card[2] + card[4] <= 70);
         """
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
-    def test_risk_renderer_uses_chinese_colored_account_position_and_ratio_labels(self):
+    def test_risk_renderer_only_shows_compact_price_labels_while_hovered(self):
         script = f"""
         const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
         const assert = require('node:assert/strict');
-        const operations = [];
-        const context = new Proxy({{measureText: text => ({{width: text.length * 7}})}}, {{
-          get(target, key) {{ if (key in target) return target[key]; return (...args) => operations.push([key, ...args]); }},
-          set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
-        }});
-        const model = drawing.createDrawingModel('long-position', [
-          {{time: 10, price: 100}}, {{time: 20, price: 90}}, {{time: 20, price: 115}}
-        ], {{accountSize: 10000, accountRiskAmount: 200, positionSize: 2}});
-        const primitive = new drawing.DrawingPrimitive(model);
-        primitive.attached({{
-          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
-          series: {{priceToCoordinate: value => 200 - value}}, requestUpdate() {{}},
-        }});
-        primitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
-          callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
-            bitmapSize: {{width: 400, height: 300}}, mediaSize: {{width: 400, height: 300}}}});
-        }}}});
-        const labels = operations.filter(op => op[0] === 'fillText').map(op => op[1]);
-        for (const text of ['入场', '止损', '止盈', '账户 10000.00', '仓量 2', '盈亏比 1.50']) {{
-          assert.ok(labels.some(label => String(label).includes(text)), text);
+        function render(hovered) {{
+          const operations = [];
+          const context = new Proxy({{measureText: text => ({{width: text.length * 7}})}}, {{
+            get(target, key) {{ if (key in target) return target[key]; return (...args) => operations.push([key, ...args]); }},
+            set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
+          }});
+          const model = drawing.createDrawingModel('short-position', [
+            {{time: 10, price: 117500}}, {{time: 200, price: 117932.72}}, {{time: 200, price: 116850.92}}
+          ], {{accountSize: 10000, accountRiskAmount: 200, positionSize: 0.158234}});
+          const primitive = new drawing.DrawingPrimitive({{...model, hovered}});
+          primitive.attached({{
+            chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+            series: {{priceToCoordinate: value => 220 - ((value - 116000) / 10)}}, requestUpdate() {{}},
+          }});
+          primitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
+            callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
+              bitmapSize: {{width: 400, height: 300}}, mediaSize: {{width: 400, height: 300}}}});
+          }}}});
+          return operations;
         }}
-        assert.ok(operations.filter(op => op[0] === 'fillRect').length >= 6);
-        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === '#ef5350'));
-        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle' && op[2] === '#26a69a'));
+        const hidden = render(false);
+        assert.equal(hidden.filter(op => op[0] === 'fillText').length, 0);
+        assert.ok(hidden.some(op => op[0] === 'set' && op[1] === 'strokeStyle' && op[2] === '#ef5350'));
+        assert.ok(hidden.some(op => op[0] === 'set' && op[1] === 'strokeStyle' && op[2] === '#26a69a'));
+
+        const visible = render(true);
+        const labels = visible.filter(op => op[0] === 'fillText').map(op => String(op[1]));
+        assert.equal(labels.length, 3);
+        assert.ok(labels.some(label => label.includes('止损 117932.72 · -0.37%')));
+        assert.ok(labels.some(label => label.includes('入场 117500 · RR 1.50')));
+        assert.ok(labels.some(label => label.includes('止盈 116850.92 · +0.55%')));
+        assert.equal(labels.some(label => label.includes('账户') || label.includes('仓量')
+          || label.includes('未开仓')), false);
         """
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 class DrawingControllerRuntimeTests(unittest.TestCase):
+    def test_risk_labels_follow_pointer_hover_and_leave(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event = {{}}) {{ this.listeners.get(type)?.({{pointerId: 21, preventDefault() {{}}, ...event}}); }}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: value => value, coordinateToTime: value => value}})}};
+        const series = {{
+          priceToCoordinate: value => value,
+          coordinateToPrice: value => value,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }},
+          detachPrimitive() {{}},
+        }};
+        const store = new drawing.DrawingStore([
+          drawing.createDrawingModel('long', [
+            {{time: 10, price: 100}}, {{time: 100, price: 90}}, {{time: 100, price: 115}}
+          ], {{id: 'risk'}})
+        ]);
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget: new Target(), store,
+        }});
+        assert.equal(controller._primitives.get('risk').model().hovered, false);
+        element.dispatch('pointermove', {{clientX: 50, clientY: 100}});
+        assert.equal(controller._primitives.get('risk').model().hovered, true);
+        element.dispatch('pointermove', {{clientX: 200, clientY: 200}});
+        assert.equal(controller._primitives.get('risk').model().hovered, false);
+        element.dispatch('pointermove', {{clientX: 50, clientY: 100}});
+        element.dispatch('pointerleave');
+        assert.equal(controller._primitives.get('risk').model().hovered, false);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_main_callback_aliases_and_account_provider_populate_risk_model(self):
         script = f"""
         const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
@@ -629,6 +731,111 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         assert.deepEqual(controller._draftPrimitive.model().anchors[1], {{time: 100, price: 55}});
         element.dispatch('pointerup', {{clientX: 106, clientY: 56, altKey: true}});
         assert.deepEqual(controller.store.snapshot()[0].anchors[1], {{time: 106, price: 56}});
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_drawings_can_be_created_and_projected_in_future_whitespace(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 12, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const bars = [
+          {{time: 1000, open: 10, high: 12, low: 9, close: 11}},
+          {{time: 1060, open: 11, high: 13, low: 10, close: 12}},
+        ];
+        const knownCoordinates = new Map([[1000, 0], [1060, 10]]);
+        const timeScale = {{
+          timeToCoordinate: time => knownCoordinates.get(time) ?? null,
+          coordinateToTime: coordinate => coordinate <= 10 ? 1000 + (coordinate * 6) : null,
+          coordinateToLogical: coordinate => coordinate / 10,
+          logicalToCoordinate: logical => logical * 10,
+        }};
+        const chart = {{timeScale: () => timeScale}};
+        const series = {{
+          priceToCoordinate: price => price,
+          coordinateToPrice: coordinate => coordinate,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }},
+          detachPrimitive() {{}},
+        }};
+        const element = new Target();
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget: new Target(), bars,
+        }});
+        controller.activateTool('trend');
+        element.dispatch('pointerdown', {{clientX: 30, clientY: 40}});
+        element.dispatch('pointermove', {{clientX: 50, clientY: 60}});
+        element.dispatch('pointerup', {{clientX: 50, clientY: 60}});
+
+        assert.equal(controller.store.size, 1);
+        assert.deepEqual(controller.store.snapshot()[0].anchors, [
+          {{time: 1180, price: 40}}, {{time: 1300, price: 60}}
+        ]);
+        assert.deepEqual(controller._primitives.values().next().value.projectAnchors(), [
+          {{x: 30, y: 40}}, {{x: 50, y: 60}}
+        ]);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+    def test_future_whitespace_drawing_supports_anchor_and_body_drag(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{pointerId: 13, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const bars = [{{time: 1000}}, {{time: 1060}}];
+        const knownCoordinates = new Map([[1000, 0], [1060, 10]]);
+        const timeScale = {{
+          timeToCoordinate: time => knownCoordinates.get(time) ?? null,
+          coordinateToTime: coordinate => coordinate <= 10 ? 1000 + (coordinate * 6) : null,
+          coordinateToLogical: coordinate => coordinate / 10,
+          logicalToCoordinate: logical => logical * 10,
+        }};
+        const chart = {{timeScale: () => timeScale}};
+        const series = {{
+          priceToCoordinate: price => price,
+          coordinateToPrice: coordinate => coordinate,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }},
+          detachPrimitive() {{}},
+        }};
+        const store = new drawing.DrawingStore([
+          drawing.createTrendModel([{{time: 1180, price: 40}}, {{time: 1300, price: 60}}], {{id: 'future'}})
+        ]);
+        const element = new Target();
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget: new Target(), bars, store,
+        }});
+        controller.activateTool('select');
+        controller.select('future');
+
+        element.dispatch('pointerdown', {{clientX: 30, clientY: 40}});
+        element.dispatch('pointermove', {{clientX: 40, clientY: 45}});
+        element.dispatch('pointerup', {{clientX: 40, clientY: 45}});
+        assert.deepEqual(controller.store.get('future').anchors, [
+          {{time: 1240, price: 45}}, {{time: 1300, price: 60}}
+        ]);
+
+        element.dispatch('pointerdown', {{clientX: 45, clientY: 52.5}});
+        element.dispatch('pointermove', {{clientX: 55, clientY: 62.5}});
+        element.dispatch('pointerup', {{clientX: 55, clientY: 62.5}});
+        assert.deepEqual(controller.store.get('future').anchors, [
+          {{time: 1300, price: 55}}, {{time: 1360, price: 70}}
+        ]);
         """
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -986,6 +1193,7 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         assert.deepEqual(controller.getRulerMetrics('r'), {{
           priceDelta: 2, absolutePriceChange: 2, percentChange: 20,
           barCount: 3, bullishCount: 2, bearishCount: 1,
+          totalVolume: 0,
           duration: 180, elapsedDuration: 180, direction: 'bull',
         }});
         let secondAttached = 0;

@@ -30,7 +30,11 @@ class FuturesReplayExecutor:
         self.source = source
         self._trade_bars = self._index_bars(trade_bars, "trade")
         self._mark_bars = self._index_bars(mark_bars, "mark")
-        self._funding_events = tuple(sorted(funding_events, key=lambda event: timestamp_value(event.timestamp)))
+        replay_start = timestamp_value(self.clock.current_time)
+        self._funding_events = tuple(
+            event for event in sorted(funding_events, key=lambda item: timestamp_value(item.timestamp))
+            if timestamp_value(event.timestamp) > replay_start
+        )
         if self.clock.current_time not in self._trade_bars:
             raise ValueError("current replay time is missing a trade bar")
         if self.clock.current_time not in self._mark_bars:

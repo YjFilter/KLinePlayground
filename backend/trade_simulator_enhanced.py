@@ -104,7 +104,8 @@ class TradeSimulatorEnhanced:
         self.trade_history = []
         
         # 数据库连接
-        self.db_path = f'../users/{user}/trade_records.db'
+        users_dir = os.environ.get('KLINE_USERS_DIR', '../users')
+        self.db_path = os.path.join(users_dir, user, 'trade_records.db')
         self._init_database()
     
     def _init_database(self):
@@ -721,4 +722,3 @@ class TradeSimulatorEnhanced:
                     WHERE stock_code = ? AND buy_bar_id = ? AND status = 'active'
                 ''', (lot['quantity'], lot['status'], lot['stock_code'], lot['buy_bar_id']))
             conn.commit()
-

@@ -67,6 +67,66 @@ class FuturesOrderBookTests(unittest.TestCase):
         self.assertEqual(order.status, "filled")
         self.assertEqual(simulator.position.entry_price, Decimal("99"))
 
+    def test_breakout_buy_waits_for_a_later_bar_and_fills_at_trigger_with_taker_fee(self):
+        submitted_at = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+        later = submitted_at + timedelta(minutes=5)
+        simulator, book = self.make_book()
+        order = book.submit_order(
+            action="open_long", order_type="breakout", margin="100", leverage=5,
+            trigger_price="105", timestamp=submitted_at, current_price="100",
+        )
+
+        self.assertEqual(
+            book.process_bar(timestamp=submitted_at, open="106", high="108", low="104", close="107"),
+            [],
+        )
+        fills = book.process_bar(timestamp=later, open="106", high="108", low="104", close="107")
+
+        self.assertEqual(len(fills), 1)
+        self.assertEqual(fills[0].price, Decimal("105"))
+        self.assertEqual(fills[0].fee_type, "taker")
+        self.assertEqual(order.status, "filled")
+        self.assertEqual(simulator.position.entry_price, Decimal("105"))
+
+    def test_breakout_sell_and_reduce_only_close_use_mirrored_trigger_rules(self):
+        submitted_at = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
+        later = submitted_at + timedelta(minutes=5)
+        simulator, book = self.make_book()
+        short = book.submit_order(
+            action="open_short", order_type="breakout", margin="100", leverage=5,
+            trigger_price="95", timestamp=submitted_at, current_price="100",
+        )
+        fills = book.process_bar(timestamp=later, open="94", high="97", low="92", close="93")
+        self.assertEqual(fills[0].price, Decimal("95"))
+        self.assertEqual(short.status, "filled")
+        self.assertEqual(simulator.position.side, "short")
+
+        close = book.submit_order(
+            action="close", order_type="breakout", trigger_price="100",
+            timestamp=later, current_price="94",
+        )
+        fills = book.process_bar(
+            timestamp=later + timedelta(minutes=5), open="101", high="103", low="98", close="102",
+            reduce_only=True,
+        )
+        self.assertEqual(fills[0].price, Decimal("100"))
+        self.assertTrue(close.reduce_only)
+        self.assertTrue(simulator.position.is_flat)
+
+    def test_breakout_trigger_price_survives_order_book_state_round_trip(self):
+        timestamp = datetime(2024, 1, 1, tzinfo=UTC)
+        simulator, book = self.make_book()
+        order = book.submit_order(
+            action="open_long", order_type="breakout", margin="100", leverage=5,
+            trigger_price="105", timestamp=timestamp, current_price="100",
+        )
+
+        restored = FuturesOrderBook.from_state(simulator, book.to_state())
+
+        self.assertEqual(restored.orders[0].order_type, "breakout")
+        self.assertEqual(restored.orders[0].trigger_price, Decimal("105"))
+        self.assertEqual(restored.orders[0].order_id, order.order_id)
+
     def test_limit_crossing_is_side_specific_and_close_is_reduce_only(self):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)
         simulator, book = self.make_book()
@@ -176,6 +236,18 @@ class FuturesOrderBookTests(unittest.TestCase):
             action="open_long", order_type="market", margin="99", leverage=5,
             timestamp=timestamp, current_price="100",
         )
+        self.assertLessEqual(simulator.account.used_margin, simulator.account.balance)
+
+    def test_max_open_margin_rounds_down_and_can_be_submitted(self):
+        timestamp = datetime(2024, 1, 1, tzinfo=UTC)
+        simulator, book = self.make_book(balance="100")
+        maximum = book.max_open_margin(order_type="market", leverage=5)
+        self.assertEqual(maximum, Decimal("99.75"))
+        order = book.submit_order(
+            action="open_long", order_type="market", margin=maximum, leverage=5,
+            timestamp=timestamp, current_price="100",
+        )
+        self.assertEqual(order.margin, Decimal("99.75"))
         self.assertLessEqual(simulator.account.used_margin, simulator.account.balance)
 
     def test_multiple_stale_reduce_only_orders_cancel_silently_with_reason(self):
