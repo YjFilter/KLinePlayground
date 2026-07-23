@@ -295,3 +295,58 @@ Open the deployment with the saved credentials. If direct access fails, attach a
 
 ## Next Action
 Use GitHub as the private backup and collaboration source; keep local runtime and credential files untracked.
+## Crypto Extended Window And Independent Theme Complete (2026-07-22)
+- Root cause is resolved at the data boundary: active replay state keeps the fast 300-bar session snapshot, while an explicitly expanded chart window is re-aggregated from offline cache for every selected crypto period.
+- The backend remembers the earliest loaded boundary and current replay end, reuses a per-period runtime cache, invalidates it on next/reset/end, and never exposes bars after the replay clock.
+- Frontend marks an earlier load as extended runtime state, sends range bounds only for expanded windows, ignores stale period responses, and trusts the response window boundaries.
+- BTCUSDT regression coverage now switches the same expanded 2024 window through `4h`, `1h`, and `15m` without advancing replay time or losing the 2024 start.
+- Crypto has an independent `crypto_theme` setting and `cryptoUiTheme` local preference. It defaults to dark, uses a compact sun/moon button, and does not change the A-share `theme` or `body[data-theme]`.
+- The crypto shell, toolbar, controls, chart/volume/indicator palettes, information overlays, and trade console now switch together between dark and light variables.
+- Browser acceptance: loaded one earlier year on BTCUSDT, switched daily to 4-hour, and visibly retained 2024 candles; light and dark modes both rendered without black/white shell mixing; A-share theme stayed unchanged.
+- Verification: crypto suite `230 passed, 48 subtests passed`; full suite `683 passed, 66 subtests passed`; JavaScript syntax, Python compileall, and diff checks passed.
+- Local Flask service is running on `0.0.0.0:8000`, PID 12792. No commit was created.
+- Existing unrelated `.gitignore` and `启动项目.bat` changes remain preserved; `.runtime/`, local users, offline market data, and credentials were not edited directly.
+- Handoff: `.agent/handoffs/2026-07-22-crypto-period-loaded-window-fix.md`.
+
+## Next Action
+Hard-refresh `http://127.0.0.1:8000/` and continue normal BTC/ETH replay. Review the full working-tree scope before any commit and keep runtime/offline data excluded.
+
+## Crypto Period Switch Performance Complete (2026-07-22)
+- Expanded crypto windows now load trade candles only; chart reads skip mark prices, funding, instrument discovery, and duplicate cache scans.
+- The normalized one-year 5-minute frame is retained in active training memory and reused across periods; `/next` appends the newly revealed base candle before clearing derived period payloads.
+- Period serialization is vectorized and fine-period frontend responses use a compact OHLCV shape. The browser keeps an 8-entry runtime period snapshot cache and invalidates it on replay/window/training boundaries.
+- Real BTCUSDT one-year Flask route timings: `4h 0.17s`, `1h 0.30s`, `15m 0.82s`, `5m 1.70s`, `daily 0.09s`; repeated `4h` was `0.01s`. The 5m response fell from about `31.9MB` to `11.0MB`.
+- Verification: crypto suite `236 passed, 48 subtests passed`; full suite `690 passed, 66 subtests passed`; JavaScript syntax, Python compileall, and diff checks passed.
+- Local Flask service is running on `0.0.0.0:8000`, PID `9268`. No commit was created; `.runtime/`, offline data, local users, credentials, `.gitignore`, and the launcher were not modified by this task.
+- Handoff: `.agent/handoffs/2026-07-22-crypto-period-switch-performance.md`.
+
+## Next Action
+Hard-refresh `http://127.0.0.1:8000/`, load one year once, then switch periods normally. Repeated switches at the same replay time should render from browser memory without another period request.
+
+## Crypto Two-Year History And Continuity Complete (2026-07-22)
+- Crypto setup now exposes `训练前历史（年）`, defaults/minimums to `2`, accepts `2–5`, and remains independent from forward training duration.
+- Added private one-time history preparation jobs with progress, cancellation, 30-minute expiry, monthly cache reuse, source pinning, and per-contract download locking.
+- Training start consumes the prepared bundle and full historical 5-minute frame without rereading it; old clients use the same preparation synchronously.
+- Fixed 1h/4h replay continuity by appending every newly revealed underlying 5-minute bar and repairing legacy sparse tails before aggregation.
+- 5m/15m responses are capped at 12,000 bars, carry full-history/render metadata, align segment boundaries, and load earlier segments from runtime memory without network access.
+- Runtime checkpoints persist the selected history window and rebuild it from offline cache after service restart.
+- Forward replay append now uses a sorted fast path instead of renormalizing the full two-year frame; real browser 4h next-bar latency improved from about 2.1s to about 0.3s.
+- Browser acceptance passed for BTCUSDT: two-year preparation completed from 25 cached months, daily history started in 2023-12 UTC, 5m/15m rendered 12,000 bars, rapid switches ended on the requested 1h period with strictly increasing timestamps, and 4h advance completed 48 underlying bars without fragments.
+- Verification: crypto suite `262 passed, 53 subtests passed`; final full suite `717 passed, 71 subtests passed`; JavaScript syntax, Python compileall, and diff checks passed.
+- Existing uncommitted work remains intact. `.runtime/`, offline market data, users, credentials, `.gitignore`, and the launcher were not modified by this task.
+- Handoff: `.agent/handoffs/2026-07-22-crypto-two-year-history-continuity.md`.
+
+## Next Action
+Hard-refresh `http://127.0.0.1:8000/`, start BTCUSDT or ETHUSDT with the default two-year history, and continue normal replay. Review the complete working-tree scope before any commit and keep runtime/offline data excluded.
+
+## External AI Takeover Package (2026-07-22)
+- Added root `AI_TAKEOVER.md` as the low-token entry point for a new main AI.
+- Added `.agent/prompts/MAIN_AGENT_PROMPT.md` as a complete copy-paste primary-agent prompt.
+- Added `.agent/prompts/WORKBUDDY_TASK_PROMPT.md` as a bounded worker prompt with exclusive write scope, TDD, verification, and fixed result contract.
+- The takeover package points new agents to repository source-of-truth files instead of requiring chat history or full-repository ingestion.
+- UTF-8 content and `git diff --check` passed.
+- Control-plane unit tests pass, but the existing `.agent/tasks/done/TASK-023-result.md` causes `scripts/agent_status.py` to fail because it is a result report without task front matter. This pre-existing file was not modified.
+- Handoff: `.agent/handoffs/2026-07-22-external-ai-takeover-package.md`.
+
+## Next Action
+Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use `.agent/prompts/WORKBUDDY_TASK_PROMPT.md` for bounded implementation work.

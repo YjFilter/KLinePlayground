@@ -92,6 +92,11 @@ MARKET_TYPE_A_SHARE = "a_share"
 MARKET_TYPE_CRYPTO_PERPETUAL = "crypto_perpetual"
 DATA_MODE_CRYPTO_5M = "crypto_5m"
 VALID_CRYPTO_PERIODS = ("5m", "15m", "30m", "1h", "4h", "daily", "weekly")
+CRYPTO_HISTORY_DEFAULT_YEARS = 2
+CRYPTO_HISTORY_MIN_YEARS = 2
+CRYPTO_HISTORY_MAX_YEARS = 5
+CRYPTO_FINE_RENDER_LIMIT = 12000
+CRYPTO_FINE_PERIOD_SECONDS = {"5m": 300, "15m": 900}
 DEFAULT_CRYPTO_MAKER_FEE_RATE = "0.0002"
 DEFAULT_CRYPTO_TAKER_FEE_RATE = "0.0005"
 MAX_CRYPTO_FEE_RATE = "0.01"
@@ -103,6 +108,10 @@ _crypto_sources_instance = None
 _crypto_instrument_cache_instance = None
 _crypto_data_service_instance = None
 _crypto_universe_instance = None
+_crypto_history_prepare_manager_instance = None
+_crypto_history_prepare_users = {}
+_crypto_history_download_locks = {}
+_crypto_history_download_locks_guard = Lock()
 
 cloud_user_store = CloudUserArchiveStore(users_dir_path)
 cloud_state_ready = not cloud_user_store.enabled
@@ -256,6 +265,23 @@ def _get_crypto_data_service():
             cache=_get_crypto_instrument_cache(),
         )
     return _crypto_data_service_instance
+
+
+def _get_crypto_history_prepare_manager():
+    global _crypto_history_prepare_manager_instance
+    if _crypto_history_prepare_manager_instance is None:
+        from backend.crypto.history_prepare import CryptoHistoryPrepareManager
+
+        _crypto_history_prepare_manager_instance = CryptoHistoryPrepareManager(
+            _prepare_crypto_history_job,
+        )
+    return _crypto_history_prepare_manager_instance
+
+
+def _get_crypto_history_download_lock(source, symbol):
+    key = (str(source), str(symbol).upper())
+    with _crypto_history_download_locks_guard:
+        return _crypto_history_download_locks.setdefault(key, Lock())
 
 
 def _get_crypto_universe():
@@ -565,12 +591,99 @@ def _crypto_get_data(training):
     return jsonify(_crypto_snapshot(training))
 
 
+def _append_crypto_chart_base_range(training, start_exclusive, end_inclusive):
+    frame = training.get('_crypto_chart_base_frame')
+    session = training.get('crypto_session')
+    if frame is None or frame.empty or session is None or end_inclusive is None:
+        return
+    start_timestamp = pd.Timestamp(start_exclusive) if start_exclusive is not None else None
+    end_timestamp = pd.Timestamp(end_inclusive)
+    if start_timestamp is not None and start_timestamp.tzinfo is None:
+        start_timestamp = start_timestamp.tz_localize('UTC')
+    if end_timestamp.tzinfo is None:
+        end_timestamp = end_timestamp.tz_localize('UTC')
+    source_bars = session.base_bars
+    mask = source_bars['timestamp'] <= end_timestamp
+    if start_timestamp is not None:
+        mask &= source_bars['timestamp'] > start_timestamp
+    incoming = source_bars.loc[mask].copy()
+    if incoming.empty:
+        return
+    if 'source' in frame.columns:
+        incoming['source'] = training.get('source', '')
+    if 'symbol' in frame.columns:
+        incoming['symbol'] = training.get('symbol', '')
+    if 'kind' in frame.columns:
+        incoming['kind'] = 'trade'
+    incoming['timestamp'] = pd.to_datetime(incoming['timestamp'], utc=True)
+    frame_last = pd.Timestamp(frame.iloc[-1]['timestamp'])
+    if frame_last.tzinfo is None:
+        frame_last = frame_last.tz_localize('UTC')
+    if (
+        incoming['timestamp'].is_monotonic_increasing
+        and bool((incoming['timestamp'] > frame_last).all())
+    ):
+        training['_crypto_chart_base_frame'] = pd.concat(
+            [frame, incoming.reindex(columns=frame.columns)],
+            ignore_index=True,
+        )
+        return
+    from backend.crypto.aggregator import normalize_base_bars
+
+    combined = pd.concat([frame, incoming], ignore_index=True)
+    training['_crypto_chart_base_frame'] = normalize_base_bars(combined)
+
+
+def _repair_crypto_chart_session_tail(training, current_time):
+    frame = training.get('_crypto_chart_base_frame')
+    session = training.get('crypto_session')
+    if frame is None or frame.empty or session is None or current_time is None:
+        return False
+    from backend.crypto.aggregator import normalize_base_bars
+
+    cached = normalize_base_bars(frame)
+    session_bars = session.base_bars
+    current_timestamp = pd.Timestamp(current_time)
+    if current_timestamp.tzinfo is None:
+        current_timestamp = current_timestamp.tz_localize('UTC')
+    revealed = session_bars.loc[session_bars['timestamp'] <= current_timestamp].copy()
+    if revealed.empty:
+        return False
+    session_start = revealed.iloc[0]['timestamp']
+    cached_tail = cached.loc[
+        (cached['timestamp'] >= session_start)
+        & (cached['timestamp'] <= current_timestamp)
+    ]
+    if pd.DatetimeIndex(cached_tail['timestamp']).equals(pd.DatetimeIndex(revealed['timestamp'])):
+        return False
+    historical = cached.loc[cached['timestamp'] < session_start]
+    if 'source' in cached.columns:
+        revealed['source'] = training.get('source', '')
+    if 'symbol' in cached.columns:
+        revealed['symbol'] = training.get('symbol', '')
+    if 'kind' in cached.columns:
+        revealed['kind'] = 'trade'
+    training['_crypto_chart_base_frame'] = normalize_base_bars(
+        pd.concat([historical, revealed], ignore_index=True)
+    )
+    return True
+
+
 def _crypto_next(training):
     lock = training.setdefault('_crypto_next_lock', Lock())
     if not lock.acquire(blocking=False):
         return jsonify({'error': '下一根 K 线正在推进，请稍候。', 'code': 'advance_in_progress'}), 409
     try:
         delta = training['crypto_session'].advance_delta(max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT)
+        if training.get('_crypto_chart_window_start') is not None and delta.get('current_time'):
+            previous_window_end = training.get('_crypto_chart_window_end')
+            current_window_end = datetime.fromisoformat(delta['current_time']).replace(tzinfo=timezone.utc)
+            _append_crypto_chart_base_range(training, previous_window_end, current_window_end)
+            training['_crypto_chart_window_end'] = datetime.fromisoformat(
+                delta['current_time']
+            ).replace(tzinfo=timezone.utc)
+            training['_crypto_history_end'] = training['_crypto_chart_window_end']
+            training.pop('_crypto_period_window_cache', None)
         _schedule_crypto_checkpoint(training)
         payload = _crypto_futures_payload(training, compact=True)
         position = payload['position']
@@ -606,27 +719,185 @@ def _crypto_next(training):
 CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT = 300
 
 
-def _crypto_set_period(training, period, request_id=None, range_start=None, range_end=None):
+def _clear_crypto_chart_window(training):
+    for key in (
+        '_crypto_chart_window_start',
+        '_crypto_chart_window_end',
+        '_crypto_chart_window_has_earlier',
+        '_crypto_period_window_cache',
+        '_crypto_chart_base_frame',
+    ):
+        training.pop(key, None)
+
+def _crypto_render_bounds(training, period, current_time, visible_start=None, visible_end=None):
+    history_start = training.get('_crypto_history_start') or training.get('_crypto_chart_window_start')
+    history_end = training.get('_crypto_history_end') or training.get('_crypto_chart_window_end') or current_time
+    if history_start is None:
+        return None, None, None, None
+    history_start = pd.Timestamp(history_start).to_pydatetime()
+    history_end = min(pd.Timestamp(history_end).to_pydatetime(), current_time)
+    if period not in CRYPTO_FINE_PERIOD_SECONDS:
+        return history_start, history_end, history_start, history_end
+    requested_end = min(
+        pd.Timestamp(visible_end).to_pydatetime() if visible_end is not None else history_end,
+        history_end,
+    )
+    interval_seconds = CRYPTO_FINE_PERIOD_SECONDS[period]
+    requested_end = pd.Timestamp(requested_end).floor(
+        f'{interval_seconds}s'
+    ).to_pydatetime()
+    render_start = requested_end - timedelta(
+        seconds=interval_seconds * (CRYPTO_FINE_RENDER_LIMIT - 1)
+    )
+    render_start = max(history_start, render_start)
+    if visible_start is not None:
+        requested_start = pd.Timestamp(visible_start).to_pydatetime()
+        if requested_start > requested_end:
+            requested_start = requested_end
+        if requested_start < render_start:
+            render_start = max(
+                history_start,
+                requested_end - timedelta(
+                    seconds=interval_seconds * (CRYPTO_FINE_RENDER_LIMIT - 1)
+                ),
+            )
+    return history_start, history_end, render_start, requested_end
+
+
+def _crypto_extended_period_snapshot(
+    training, period, snapshot, visible_start=None, visible_end=None,
+):
+    if not training.get('symbol') or not training.get('source'):
+        return snapshot
+    from backend.crypto.chart_window import CryptoChartWindowService
+
+    current_time = datetime.fromisoformat(snapshot['current_time']).replace(tzinfo=timezone.utc)
+    if _repair_crypto_chart_session_tail(training, current_time):
+        training.pop('_crypto_period_window_cache', None)
+    history_start, history_end, render_start, render_end = _crypto_render_bounds(
+        training, period, current_time, visible_start, visible_end,
+    )
+    if history_start is None:
+        return snapshot
+    cache_key = (
+        period,
+        current_time.isoformat(),
+        history_start.isoformat(),
+        history_end.isoformat(),
+        render_start.isoformat(),
+        render_end.isoformat(),
+    )
+    cache = training.setdefault('_crypto_period_window_cache', {})
+    window_payload = cache.get(cache_key)
+    if window_payload is None:
+        result = CryptoChartWindowService(_get_crypto_data_service()).load(
+            symbol=training['symbol'],
+            source=training['source'],
+            period=period,
+            range_start=render_start,
+            range_end=render_end,
+            current_time=current_time,
+            read_only=False,
+            trade_bars=training.get('_crypto_chart_base_frame'),
+        )
+        window_payload = result.to_dict()
+        window_payload.update({
+            'history_start': history_start.strftime('%Y-%m-%d %H:%M:%S'),
+            'history_end': history_end.strftime('%Y-%m-%d %H:%M:%S'),
+            'render_start': render_start.strftime('%Y-%m-%d %H:%M:%S'),
+            'render_end': render_end.strftime('%Y-%m-%d %H:%M:%S'),
+            'window_start': history_start.strftime('%Y-%m-%d %H:%M:%S'),
+            'window_end': history_end.strftime('%Y-%m-%d %H:%M:%S'),
+            'has_earlier_render': render_start > history_start,
+            'has_earlier': False,
+            'has_later': False,
+            'extended_history': True,
+        })
+        cache[cache_key] = window_payload
+
+    merged = dict(snapshot)
+    merged.update(window_payload)
+    merged.update({
+        'active_period': period,
+        'period': period,
+        'current_time': snapshot['current_time'],
+        'current_bar_complete': snapshot.get('current_bar_complete', False),
+        'next_boundary': snapshot.get('next_boundary'),
+        'current_base_bar': snapshot.get('current_base_bar'),
+        'finished': snapshot.get('finished', False),
+        'available_periods': snapshot.get('available_periods', list(VALID_CRYPTO_PERIODS)),
+        'base_interval': snapshot.get('base_interval', '5m'),
+        'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+        'data_mode': DATA_MODE_CRYPTO_5M,
+    })
+    return merged
+
+
+def _compact_crypto_period_snapshot(snapshot):
+    compact = dict(snapshot)
+    compact['kline_data'] = [
+        {
+            'time': bar.get('time') or bar.get('end_time') or bar.get('datetime'),
+            'open': bar.get('open'), 'high': bar.get('high'),
+            'low': bar.get('low'), 'close': bar.get('close'),
+            'volume': bar.get('volume', 0),
+        }
+        for bar in snapshot.get('kline_data', [])
+    ]
+    compact['volume_data'] = []
+    return compact
+
+
+def _crypto_set_period(
+    training, period, request_id=None, range_start=None, range_end=None,
+    visible_start=None, visible_end=None, compact_chart=False,
+):
     if period not in VALID_CRYPTO_PERIODS:
         return jsonify({'error': f'unsupported crypto period: {period}'}), 400
+    effective_range_start = training.get('_crypto_history_start') or range_start or training.get('_crypto_chart_window_start')
+    effective_range_end = training.get('_crypto_history_end') or range_end or training.get('_crypto_chart_window_end')
+    use_window_service = bool(
+        effective_range_start is not None
+        and training.get('symbol')
+        and training.get('source')
+    )
     lock = training.setdefault('_period_switch_lock', Lock())
     with lock:
         latest_request_id = training.get('_period_request_id', -1)
         if request_id is not None and request_id < latest_request_id:
-            return jsonify(training['crypto_session'].snapshot(
-                max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT,
-                range_start=range_start, range_end=range_end,
-            ))
+            active_period = training.get('period', period)
+            snapshot = training['crypto_session'].snapshot(
+                max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT if use_window_service else (
+                    None if effective_range_start is not None or effective_range_end is not None
+                    else CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT
+                ),
+                range_start=None if use_window_service else effective_range_start,
+                range_end=None if use_window_service else effective_range_end,
+            )
+            stale_snapshot = _crypto_extended_period_snapshot(
+                training, active_period, snapshot,
+                visible_start, visible_end,
+            ) if use_window_service else snapshot
+            return jsonify(_compact_crypto_period_snapshot(stale_snapshot) if compact_chart else stale_snapshot)
         if request_id is not None:
             training['_period_request_id'] = request_id
         training['period'] = period
         snapshot = training['crypto_session'].set_period(
-            period, max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT,
-            range_start=range_start, range_end=range_end,
+            period,
+            max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT if use_window_service else (
+                None if effective_range_start is not None or effective_range_end is not None
+                else CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT
+            ),
+            range_start=None if use_window_service else effective_range_start,
+            range_end=None if use_window_service else effective_range_end,
         )
+        if use_window_service:
+            snapshot = _crypto_extended_period_snapshot(
+                training, period, snapshot,
+                visible_start, visible_end,
+            )
         _persist_crypto_period(training, period)
-        return jsonify(snapshot)
-
+        return jsonify(_compact_crypto_period_snapshot(snapshot) if compact_chart else snapshot)
 
 def _persist_crypto_period(training, period):
     from backend.crypto.persistence import CryptoFuturesRepository
@@ -641,6 +912,7 @@ def _persist_crypto_period(training, period):
 
 
 def _crypto_reset(training):
+    _clear_crypto_chart_window(training)
     training['crypto_session'].reset()
     _initialize_crypto_futures(training)
     _checkpoint_crypto_futures(training)
@@ -889,6 +1161,7 @@ def _crypto_end(training, training_id):
     }
     _persist_crypto_futures_state(training, training_id, payload)
     user_manager.save_training_session(training['user'], session_data)
+    _clear_crypto_chart_window(training)
     training['status'] = 'ended'
     _update_api_info(user=training['user'])
     return jsonify(report)
@@ -939,6 +1212,11 @@ def _crypto_runtime_state(training, *, status=None):
         'training_start': training['training_start'],
         'training_end': training['training_end'],
         'max_training_days': training.get('max_training_days'),
+        'history_years': training.get('history_years'),
+        'history_start': (
+            training.get('_crypto_history_start').isoformat()
+            if training.get('_crypto_history_start') is not None else None
+        ),
         'initial_capital': training['initial_capital'],
         'leverage': training.get('leverage', 5),
         'maker_fee_rate': format(training['futures_executor'].engine.order_book.maker_fee_rate, 'f'),
@@ -1059,6 +1337,17 @@ def _restore_crypto_training(training_id):
         if runtime_time and runtime_time > session.clock.current_time:
             session.clock.advance(runtime_time)
         session.clock.set_period(state.get('clock', {}).get('active_period') or metadata.get('period') or initial_period)
+        history_years = int(metadata.get('history_years') or 0)
+        history_start = _parse_crypto_runtime_time(metadata.get('history_start'))
+        history_end = runtime_time or training_start
+        history_frame = None
+        if history_years >= CRYPTO_HISTORY_MIN_YEARS and history_start is not None:
+            _, history_frame = _get_crypto_data_service().get_chart_bars(
+                symbol,
+                history_start,
+                history_end,
+                source=bundle.source,
+            )
         executor = repository.rehydrate_executor(
             training_id,
             trade_bars=bundle.trade_bars,
@@ -1083,6 +1372,7 @@ def _restore_crypto_training(training_id):
             'training_start': training_start.strftime('%Y-%m-%d %H:%M:%S'),
             'training_end': training_end.strftime('%Y-%m-%d %H:%M:%S'),
             'max_training_days': int(metadata.get('max_training_days') or 1),
+            'history_years': history_years or None,
             'initial_capital': float(metadata.get('initial_capital') or 0),
             'leverage': int(metadata.get('leverage') or 5),
             'maker_fee_rate': format(executor.engine.order_book.maker_fee_rate, 'f'),
@@ -1094,6 +1384,15 @@ def _restore_crypto_training(training_id):
             'status': 'active',
             'created_at': datetime.now(timezone.utc),
         }
+        if history_frame is not None:
+            training.update({
+                '_crypto_history_start': history_start,
+                '_crypto_history_end': history_end,
+                '_crypto_chart_window_start': history_start,
+                '_crypto_chart_window_end': history_end,
+                '_crypto_chart_window_has_earlier': False,
+                '_crypto_chart_base_frame': history_frame,
+            })
         active_trainings[training_id] = training
         return training
     return None
@@ -1536,6 +1835,68 @@ def get_crypto_source_status():
         return jsonify({'sources': _crypto_source_status_payload()})
     except Exception as exc:
         return jsonify({'error': str(exc)}), 503
+
+
+def _crypto_history_prepare_payload(payload):
+    normalized = dict(payload or {})
+    current_start = normalized.get('current_start')
+    current_end = normalized.get('current_end')
+    if isinstance(current_start, datetime):
+        normalized['current_start'] = current_start.strftime('%Y-%m-%d %H:%M:%S')
+        normalized['current_month'] = current_start.strftime('%Y-%m')
+    if isinstance(current_end, datetime):
+        normalized['current_end'] = current_end.strftime('%Y-%m-%d %H:%M:%S')
+    normalized['completed_months'] = normalized.get('completed_chunks', 0)
+    normalized['total_months'] = normalized.get('total_chunks', 0)
+    return normalized
+
+
+def _crypto_history_prepare_owner(job_id):
+    requested_user = request.args.get('user')
+    owner = _crypto_history_prepare_users.get(str(job_id))
+    if requested_user and owner and requested_user != owner:
+        raise ValueError('history prepare job not found')
+    if not owner:
+        raise ValueError('history prepare job not found')
+    return owner
+
+
+@app.route('/api/crypto/history/prepare', methods=['POST'])
+def prepare_crypto_history():
+    try:
+        payload = request.get_json() or {}
+        user = str(payload.get('user') or '').strip()
+        if not user:
+            return jsonify({'error': 'user is required'}), 400
+        payload = dict(payload)
+        payload['history_years'] = _parse_crypto_history_years(payload)
+        job = _get_crypto_history_prepare_manager().create(user, payload)
+        _crypto_history_prepare_users[job['job_id']] = user
+        return jsonify(_crypto_history_prepare_payload(job)), 202
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    except Exception as error:
+        return jsonify({'error': str(error)}), 503
+
+
+@app.route('/api/crypto/history/prepare/<job_id>', methods=['GET'])
+def get_crypto_history_prepare(job_id):
+    try:
+        owner = _crypto_history_prepare_owner(job_id)
+        job = _get_crypto_history_prepare_manager().get(job_id, owner)
+        return jsonify(_crypto_history_prepare_payload(job))
+    except Exception as error:
+        return jsonify({'error': str(error)}), 404
+
+
+@app.route('/api/crypto/history/prepare/<job_id>', methods=['DELETE'])
+def cancel_crypto_history_prepare(job_id):
+    try:
+        owner = _crypto_history_prepare_owner(job_id)
+        job = _get_crypto_history_prepare_manager().cancel(job_id, owner)
+        return jsonify(_crypto_history_prepare_payload(job))
+    except Exception as error:
+        return jsonify({'error': str(error)}), 404
 
 
 @app.route('/api/system/api_info', methods=['POST', 'DELETE'])
@@ -2012,6 +2373,179 @@ def _normalize_crypto_symbol(value):
     return symbol
 
 
+def _parse_crypto_history_years(payload):
+    raw_value = (payload or {}).get('history_years', CRYPTO_HISTORY_DEFAULT_YEARS)
+    if isinstance(raw_value, bool):
+        raise ValueError(
+            f'history_years must be an integer from {CRYPTO_HISTORY_MIN_YEARS} to '
+            f'{CRYPTO_HISTORY_MAX_YEARS}'
+        )
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        value = None
+    if value is None or str(raw_value).strip() not in {str(value), f'+{value}'}:
+        raise ValueError(
+            f'history_years must be an integer from {CRYPTO_HISTORY_MIN_YEARS} to '
+            f'{CRYPTO_HISTORY_MAX_YEARS}'
+        )
+    if not CRYPTO_HISTORY_MIN_YEARS <= value <= CRYPTO_HISTORY_MAX_YEARS:
+        raise ValueError(
+            f'history_years must be between {CRYPTO_HISTORY_MIN_YEARS} and '
+            f'{CRYPTO_HISTORY_MAX_YEARS}'
+        )
+    return value
+
+
+def _subtract_calendar_years(value, years):
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, month=2, day=28)
+
+
+def _crypto_training_days(payload, explicit_days=None):
+    if explicit_days is None:
+        max_bars = (payload or {}).get('max_bars', 0) or 0
+        explicit_days = (payload or {}).get('max_training_days', max_bars) or 0
+    training_days = int(explicit_days or 30)
+    if training_days < 1:
+        training_days = 30
+    if training_days > 365:
+        raise ValueError('crypto training is limited to 365 calendar days per session')
+    return training_days
+
+
+def _crypto_prepare_candidate(
+    *, symbol, training_start, training_days, history_years,
+    preferred_source=None, progress_callback=None, cancel_check=None,
+):
+    service = _get_crypto_data_service()
+    context_start = training_start - timedelta(days=30)
+    range_end = training_start + timedelta(days=training_days, minutes=-5)
+    history_start = _subtract_calendar_years(training_start, history_years)
+    candidate_sources = []
+    if preferred_source:
+        candidate_sources.append(str(preferred_source))
+    else:
+        candidate_sources.append(None)
+        candidate_sources.extend(
+            source.name for source in _get_crypto_sources()
+            if source.name not in candidate_sources
+        )
+    failures = []
+    attempted_sources = set()
+    for requested_source in candidate_sources:
+        if cancel_check is not None and cancel_check():
+            raise ValueError('crypto history preparation cancelled')
+        try:
+            bundle = service.get_bundle(
+                symbol, context_start, range_end, source=requested_source,
+            )
+            resolved_source = bundle.source
+            if resolved_source in attempted_sources:
+                continue
+            attempted_sources.add(resolved_source)
+            with _get_crypto_history_download_lock(resolved_source, symbol):
+                prepared_source, history_frame = service.prepare_chart_bars(
+                    symbol,
+                    history_start,
+                    training_start,
+                    source=resolved_source,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
+            if prepared_source != resolved_source:
+                raise ValueError(
+                    f'crypto history source mismatch: {resolved_source} != {prepared_source}'
+                )
+            history_frame = history_frame.loc[
+                pd.to_datetime(history_frame['timestamp'], utc=True)
+                <= pd.Timestamp(training_start)
+            ].reset_index(drop=True)
+            return {
+                'symbol': symbol,
+                'source': resolved_source,
+                'instrument': bundle.instrument,
+                'bundle': bundle,
+                'training_start': training_start,
+                'context_start': context_start,
+                'range_end': range_end,
+                'history_start': history_start,
+                'history_end': training_start,
+                'history_years': history_years,
+                'history_frame': history_frame,
+                'training_days': training_days,
+                'summary': {
+                    'symbol': symbol,
+                    'source': resolved_source,
+                    'start_time': training_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    'history_start': history_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    'history_end': training_start.strftime('%Y-%m-%d %H:%M:%S'),
+                    'history_years': history_years,
+                },
+            }
+        except Exception as error:
+            failures.append(f'{requested_source or "auto"}: {error}')
+    raise ValueError(
+        f'no single crypto source has complete history and training data for {symbol}: '
+        + '; '.join(failures)
+    )
+
+
+def _prepare_crypto_history_job(user, payload, progress_callback, cancel_check):
+    del user
+    history_years = _parse_crypto_history_years(payload)
+    training_days = _crypto_training_days(payload)
+    mode = (payload or {}).get('mode') or 'specified'
+    if mode != 'random':
+        symbol = _normalize_crypto_symbol((payload or {}).get('symbol'))
+        if not symbol:
+            raise ValueError('crypto symbol is required')
+        training_start = _parse_crypto_timestamp((payload or {}).get('start_time'))
+        return _crypto_prepare_candidate(
+            symbol=symbol,
+            training_start=training_start,
+            training_days=training_days,
+            history_years=history_years,
+            preferred_source=(payload or {}).get('source'),
+            progress_callback=progress_callback,
+            cancel_check=cancel_check,
+        )
+
+    last_error = None
+    for _ in range(10):
+        if cancel_check is not None and cancel_check():
+            raise ValueError('crypto history preparation cancelled')
+        training_start = _random_crypto_timestamp(
+            (payload or {}).get('date_start', '2024-01-01'),
+            (payload or {}).get('date_end', datetime.now(timezone.utc).date().isoformat()),
+            training_days,
+        )
+        context_start = training_start - timedelta(days=30)
+        range_end = training_start + timedelta(days=training_days, minutes=-5)
+        try:
+            instrument = _get_crypto_universe().select_random(
+                start=context_start,
+                end=range_end,
+                max_retries=10,
+            )
+            return _crypto_prepare_candidate(
+                symbol=instrument.symbol,
+                training_start=training_start,
+                training_days=training_days,
+                history_years=history_years,
+                preferred_source=getattr(instrument, 'source', None),
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
+        except Exception as error:
+            last_error = error
+    raise ValueError(
+        f'no crypto instrument has complete data for the requested range: {last_error}'
+    )
+
+
 def _random_crypto_timestamp(date_start, date_end, training_days):
     start = datetime.fromisoformat(str(date_start)).replace(tzinfo=timezone.utc)
     end = datetime.fromisoformat(str(date_end)).replace(tzinfo=timezone.utc, hour=23, minute=55)
@@ -2025,47 +2559,37 @@ def _random_crypto_timestamp(date_start, date_end, training_days):
 def _start_crypto_training(*, user, mode, period, initial_capital, training_id, payload, max_training_days):
     from backend.crypto.session import CryptoReplaySession
 
-    training_days = max_training_days or 30
-    if training_days > 365:
-        raise ValueError('crypto training is limited to 365 calendar days per session')
-    if mode != 'random':
-        symbol = _normalize_crypto_symbol(payload.get('symbol'))
-        if not symbol:
-            raise ValueError('crypto symbol is required')
-        training_start = _parse_crypto_timestamp(payload.get('start_time'))
-        context_start = training_start - timedelta(days=30)
-        range_end = training_start + timedelta(days=training_days, minutes=-5)
-        bundle = _get_crypto_data_service().get_bundle(
-            symbol, context_start, range_end, source=None,
-        )
-        instrument = bundle.instrument
+    history_years = _parse_crypto_history_years(payload)
+    training_days = _crypto_training_days(payload, max_training_days)
+    prepare_id = str(payload.get('history_prepare_id') or '').strip()
+    if prepare_id:
+        prepared = _get_crypto_history_prepare_manager().consume(prepare_id, user)
+        _crypto_history_prepare_users.pop(prepare_id, None)
     else:
-        last_error = None
-        for _ in range(10):
-            training_start = _random_crypto_timestamp(
-                payload.get('date_start', '2024-01-01'),
-                payload.get('date_end', datetime.now(timezone.utc).date().isoformat()),
-                training_days,
-            )
-            context_start = training_start - timedelta(days=30)
-            range_end = training_start + timedelta(days=training_days, minutes=-5)
-            try:
-                instrument = _get_crypto_universe().select_random(
-                    start=context_start,
-                    end=range_end,
-                    max_retries=10,
-                )
-                symbol = instrument.symbol
-                bundle = _get_crypto_data_service().get_bundle(
-                    symbol, context_start, range_end, source=None,
-                )
-                break
-            except Exception as error:
-                last_error = error
-        else:
-            raise ValueError(
-                f'no crypto instrument has complete data for the requested range: {last_error}'
-            )
+        synchronous_payload = dict(payload)
+        synchronous_payload['mode'] = mode
+        synchronous_payload['history_years'] = history_years
+        synchronous_payload['max_training_days'] = training_days
+        prepared = _prepare_crypto_history_job(
+            user,
+            synchronous_payload,
+            progress_callback=lambda progress: None,
+            cancel_check=lambda: False,
+        )
+
+    symbol = prepared['symbol']
+    bundle = prepared['bundle']
+    instrument = prepared['instrument']
+    training_start = prepared['training_start']
+    context_start = prepared['context_start']
+    range_end = prepared['range_end']
+    history_start = prepared['history_start']
+    history_end = min(prepared['history_end'], training_start)
+    history_frame = prepared['history_frame'].copy()
+    history_frame['timestamp'] = pd.to_datetime(history_frame['timestamp'], utc=True)
+    history_frame = history_frame.loc[
+        history_frame['timestamp'] <= pd.Timestamp(training_start)
+    ].drop_duplicates('timestamp', keep='last').sort_values('timestamp').reset_index(drop=True)
     session = CryptoReplaySession(
         bundle.trade_bars,
         initial_time=training_start,
@@ -2074,8 +2598,8 @@ def _start_crypto_training(*, user, mode, period, initial_capital, training_id, 
         active_period=period,
         max_training_days=training_days,
     )
-    snapshot = session.snapshot()
-    active_trainings[training_id] = {
+    snapshot = session.snapshot(max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT)
+    training = {
         'id': training_id,
         'user': user,
         'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
@@ -2091,6 +2615,7 @@ def _start_crypto_training(*, user, mode, period, initial_capital, training_id, 
         'training_start': training_start.strftime('%Y-%m-%d %H:%M:%S'),
         'training_end': range_end.strftime('%Y-%m-%d %H:%M:%S'),
         'max_training_days': training_days,
+        'history_years': history_years,
         'initial_capital': float(initial_capital),
         'leverage': int(payload.get('leverage', 5) or 5),
         'crypto_session': session,
@@ -2098,8 +2623,15 @@ def _start_crypto_training(*, user, mode, period, initial_capital, training_id, 
         'instrument': instrument,
         'status': 'active',
         'created_at': datetime.now(timezone.utc),
+        '_crypto_history_start': history_start,
+        '_crypto_history_end': history_end,
+        '_crypto_chart_window_start': history_start,
+        '_crypto_chart_window_end': history_end,
+        '_crypto_chart_window_has_earlier': False,
+        '_crypto_chart_base_frame': history_frame,
     }
-    _initialize_crypto_futures(active_trainings[training_id])
+    active_trainings[training_id] = training
+    _initialize_crypto_futures(training)
     user_manager.start_training_session(user, {
         'session_id': training_id,
         'stock_code': symbol,
@@ -2113,7 +2645,14 @@ def _start_crypto_training(*, user, mode, period, initial_capital, training_id, 
             'quote_currency': 'USDT',
         },
     })
-    _checkpoint_crypto_futures(active_trainings[training_id])
+    _checkpoint_crypto_futures(training)
+    chart_snapshot = _crypto_extended_period_snapshot(
+        training,
+        period,
+        snapshot,
+        history_start,
+        history_end,
+    )
     return jsonify({
         'id': training_id,
         'training_id': training_id,
@@ -2121,18 +2660,21 @@ def _start_crypto_training(*, user, mode, period, initial_capital, training_id, 
         'data_mode': DATA_MODE_CRYPTO_5M,
         'symbol': symbol,
         'source': bundle.source,
-        'leverage': active_trainings[training_id]['leverage'],
+        'leverage': training['leverage'],
         'period': period,
-        'training_start': active_trainings[training_id]['training_start'],
-        'training_end': active_trainings[training_id]['training_end'],
-        'window_start': context_start.strftime('%Y-%m-%d %H:%M:%S'),
-        'window_end': snapshot['current_time'],
-        'has_earlier': True,
+        'training_start': training['training_start'],
+        'training_end': training['training_end'],
+        'history_years': history_years,
+        'history_start': history_start.strftime('%Y-%m-%d %H:%M:%S'),
+        'history_end': history_end.strftime('%Y-%m-%d %H:%M:%S'),
+        'window_start': history_start.strftime('%Y-%m-%d %H:%M:%S'),
+        'window_end': history_end.strftime('%Y-%m-%d %H:%M:%S'),
+        'has_earlier': False,
         'has_later': False,
-        'context_kline_data': snapshot['kline_data'],
-        'context_volume_data': snapshot['volume_data'],
+        'context_kline_data': chart_snapshot['kline_data'],
+        'context_volume_data': chart_snapshot['volume_data'],
         'trade_markers': [],
-        **snapshot,
+        **chart_snapshot,
     })
 
 
@@ -2160,16 +2702,23 @@ def start_training():
         if market_type == MARKET_TYPE_CRYPTO_PERPETUAL or data_mode == DATA_MODE_CRYPTO_5M:
             if period not in VALID_CRYPTO_PERIODS:
                 return jsonify({'error': f'unsupported crypto period: {period}'}), 400
+            try:
+                data['history_years'] = _parse_crypto_history_years(data)
+            except ValueError as error:
+                return jsonify({'error': str(error)}), 400
             training_id = f"{user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            return _start_crypto_training(
-                user=user,
-                mode=mode,
-                period=period,
-                initial_capital=initial_capital,
-                training_id=training_id,
-                payload=data,
-                max_training_days=max_training_days,
-            )
+            try:
+                return _start_crypto_training(
+                    user=user,
+                    mode=mode,
+                    period=period,
+                    initial_capital=initial_capital,
+                    training_id=training_id,
+                    payload=data,
+                    max_training_days=max_training_days,
+                )
+            except ValueError as error:
+                return jsonify({'error': str(error)}), 400
 
         # 新增: 可选 data_mode 参数 ('legacy_daily' | 'intraday_30m')
         # 未传时保持 legacy_daily；intraday 必须显式声明。
@@ -2446,13 +2995,21 @@ def switch_period(training_id):
                 request_id = int(request_id)
             range_start = data.get('range_start')
             range_end = data.get('range_end')
+            visible_start = data.get('visible_start')
+            visible_end = data.get('visible_end')
             if range_start is not None:
                 range_start = datetime.fromtimestamp(float(range_start), tz=timezone.utc)
             if range_end is not None:
                 range_end = datetime.fromtimestamp(float(range_end), tz=timezone.utc)
+            if visible_start is not None:
+                visible_start = datetime.fromtimestamp(float(visible_start), tz=timezone.utc)
+            if visible_end is not None:
+                visible_end = datetime.fromtimestamp(float(visible_end), tz=timezone.utc)
             return _crypto_set_period(
                 training, period, request_id=request_id,
                 range_start=range_start, range_end=range_end,
+                visible_start=visible_start, visible_end=visible_end,
+                compact_chart=bool(data.get('compact_chart')),
             )
         if not _is_intraday_session(training):
             return jsonify({'error': '该会话不支持周期切换 (仅 intraday_30m 模式)'}), 400
@@ -2473,15 +3030,68 @@ def get_training_chart_window(training_id):
 
             snapshot = training['crypto_session'].snapshot()
             current_time = datetime.fromisoformat(snapshot['current_time']).replace(tzinfo=timezone.utc)
+            requested_period = request.args.get('period', snapshot['active_period'])
+            requested_start = _parse_datetime_arg('range_start').replace(tzinfo=timezone.utc)
+            requested_end = _parse_datetime_arg('range_end').replace(tzinfo=timezone.utc)
+            runtime_start = training.get('_crypto_history_start')
+            runtime_end = training.get('_crypto_history_end') or current_time
+            runtime_frame = training.get('_crypto_chart_base_frame')
+            if (
+                runtime_frame is not None
+                and not runtime_frame.empty
+                and runtime_start is not None
+                and requested_start >= runtime_start
+                and requested_end <= runtime_end
+            ):
+                payload = _crypto_extended_period_snapshot(
+                    training,
+                    requested_period,
+                    snapshot,
+                    requested_start,
+                    requested_end,
+                )
+                payload.update({
+                    'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
+                    'data_mode': DATA_MODE_CRYPTO_5M,
+                    'training_start': training['training_start'],
+                    'training_end': training['training_end'],
+                    'trade_markers': training.get('trade_markers', []),
+                })
+                return jsonify(payload)
             result = CryptoChartWindowService(_get_crypto_data_service()).load(
                 symbol=training['symbol'],
                 source=training['source'],
-                period=request.args.get('period', snapshot['active_period']),
-                range_start=_parse_datetime_arg('range_start').replace(tzinfo=timezone.utc),
-                range_end=_parse_datetime_arg('range_end').replace(tzinfo=timezone.utc),
+                period=requested_period,
+                range_start=requested_start,
+                range_end=requested_end,
                 current_time=current_time,
                 read_only=False,
             )
+            previous_start = training.get('_crypto_chart_window_start')
+            previous_end = training.get('_crypto_chart_window_end')
+            training['_crypto_chart_window_start'] = (
+                result.window_start if previous_start is None
+                else min(previous_start, result.window_start)
+            )
+            training['_crypto_chart_window_end'] = max(
+                value for value in (previous_end, result.window_end, current_time)
+                if value is not None
+            )
+            training['_crypto_chart_window_has_earlier'] = result.has_earlier
+            training.pop('_crypto_period_window_cache', None)
+            existing_base = training.get('_crypto_chart_base_frame')
+            result_base = getattr(result, 'base_bars', None)
+            if result_base is not None:
+                if existing_base is None or existing_base.empty:
+                    training['_crypto_chart_base_frame'] = result_base
+                else:
+                    combined = pd.concat([existing_base, result_base], ignore_index=True)
+                    combined['timestamp'] = pd.to_datetime(combined['timestamp'], utc=True)
+                    training['_crypto_chart_base_frame'] = (
+                        combined.drop_duplicates('timestamp', keep='last')
+                        .sort_values('timestamp')
+                        .reset_index(drop=True)
+                    )
             payload = result.to_dict()
             payload.update({
                 'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,

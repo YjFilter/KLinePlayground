@@ -147,6 +147,20 @@ class CryptoReplaySessionTests(unittest.TestCase):
         self.assertIn(visible_start.strftime("%Y-%m-%d %H:%M:%S"), times)
         self.assertIn(visible_end.strftime("%Y-%m-%d %H:%M:%S"), times)
 
+    def test_explicit_unbounded_range_returns_exact_loaded_window(self):
+        frame = make_frame(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 1000)
+        session = CryptoReplaySession(frame, initial_time=frame.iloc[-1]["timestamp"])
+        range_start = frame.iloc[100]["timestamp"].to_pydatetime()
+        range_end = frame.iloc[800]["timestamp"].to_pydatetime()
+
+        snapshot = session.snapshot(
+            max_bars=None, range_start=range_start, range_end=range_end
+        )
+
+        times = [item["time"] for item in snapshot["kline_data"]]
+        self.assertEqual(len(times), 701)
+        self.assertEqual(times[0], range_start.strftime("%Y-%m-%d %H:%M:%S"))
+        self.assertEqual(times[-1], range_end.strftime("%Y-%m-%d %H:%M:%S"))
     def test_reset_invalidates_snapshot_cache_even_at_initial_key(self):
         frame = make_frame(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), 4)
         session = CryptoReplaySession(frame)

@@ -13,6 +13,8 @@ from backend.crypto.service import CryptoDataService, CryptoDataUnavailable
 UTC = timezone.utc
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 0, 10, tzinfo=UTC)
+MONTH_START = datetime(2024, 1, 31, 23, 55, tzinfo=UTC)
+MONTH_END = datetime(2024, 2, 1, 0, 10, tzinfo=UTC)
 
 def instrument(source):
     return CryptoInstrument("BTCUSDT", source, "BTC", "USDT", "PERPETUAL", "TRADING", datetime(2020, 1, 1, tzinfo=UTC), Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("5"), Decimal("100"))
@@ -93,6 +95,205 @@ class CryptoDataServiceTests(unittest.TestCase):
         bundle = service.get_bundle("BTCUSDT", START, END)
         self.assertEqual(bundle.source, "binance")
         self.assertFalse(any(isinstance(call, tuple) and call[0] in {"trade", "mark"} for call in source.calls))
+
+    def test_chart_bars_load_trade_only_and_reuse_offline_cache(self):
+        source = FakeSource("binance")
+        service = CryptoDataService([source], self.cache)
+
+        source_name, first = service.get_chart_bars("BTCUSDT", START, END, source="binance")
+
+        self.assertEqual(source_name, "binance")
+        self.assertEqual(len(first), 3)
+        self.assertEqual(source.calls, [("trade", START, END)])
+
+        source.calls.clear()
+        source.fail = True
+        cached_source, cached = service.get_chart_bars("BTCUSDT", START, END, source="binance")
+
+        self.assertEqual(cached_source, "binance")
+        self.assertEqual(len(cached), 3)
+        self.assertEqual(source.calls, [])
+
+    def test_prepare_chart_bars_splits_requests_at_natural_month_boundaries(self):
+        source = FakeSource(
+            "binance",
+            trade=bars("binance", "trade", MONTH_START, MONTH_END),
+        )
+
+        source_name, frame = CryptoDataService([source], self.cache).prepare_chart_bars(
+            "btcusdt",
+            MONTH_START,
+            MONTH_END,
+            source="binance",
+        )
+
+        self.assertEqual(source_name, "binance")
+        self.assertEqual(
+            source.calls,
+            [
+                ("trade", MONTH_START, MONTH_START),
+                ("trade", datetime(2024, 2, 1, tzinfo=UTC), MONTH_END),
+            ],
+        )
+        self.assertEqual(list(frame["timestamp"]), [bar.timestamp for bar in source.trade])
+        self.assertEqual(frame["timestamp"].is_unique, True)
+
+    def test_prepare_chart_bars_reuses_cached_month_chunks_without_network(self):
+        source = FakeSource(
+            "binance",
+            trade=bars("binance", "trade", MONTH_START, MONTH_END),
+        )
+        service = CryptoDataService([source], self.cache)
+        service.get_chart_bars("BTCUSDT", MONTH_START, MONTH_START, source="binance")
+        service.get_chart_bars(
+            "BTCUSDT",
+            datetime(2024, 2, 1, tzinfo=UTC),
+            MONTH_END,
+            source="binance",
+        )
+        source.calls.clear()
+        source.fail = True
+
+        source_name, frame = service.prepare_chart_bars(
+            "BTCUSDT",
+            MONTH_START,
+            MONTH_END,
+            source="binance",
+        )
+
+        self.assertEqual(source_name, "binance")
+        self.assertEqual(len(frame), 4)
+        self.assertEqual(source.calls, [])
+
+    def test_prepare_chart_bars_reports_stable_progress_after_each_chunk(self):
+        source = FakeSource(
+            "binance",
+            trade=bars("binance", "trade", MONTH_START, MONTH_END),
+        )
+        updates = []
+
+        CryptoDataService([source], self.cache).prepare_chart_bars(
+            "btcusdt",
+            MONTH_START,
+            MONTH_END,
+            source="binance",
+            progress_callback=updates.append,
+        )
+
+        self.assertEqual(
+            updates,
+            [
+                {
+                    "completed_chunks": 0,
+                    "total_chunks": 2,
+                    "current_start": MONTH_START,
+                    "current_end": MONTH_START,
+                    "source": "binance",
+                    "symbol": "BTCUSDT",
+                },
+                {
+                    "completed_chunks": 1,
+                    "total_chunks": 2,
+                    "current_start": MONTH_START,
+                    "current_end": MONTH_START,
+                    "source": "binance",
+                    "symbol": "BTCUSDT",
+                },
+                {
+                    "completed_chunks": 1,
+                    "total_chunks": 2,
+                    "current_start": datetime(2024, 2, 1, tzinfo=UTC),
+                    "current_end": MONTH_END,
+                    "source": "binance",
+                    "symbol": "BTCUSDT",
+                },
+                {
+                    "completed_chunks": 2,
+                    "total_chunks": 2,
+                    "current_start": datetime(2024, 2, 1, tzinfo=UTC),
+                    "current_end": MONTH_END,
+                    "source": "binance",
+                    "symbol": "BTCUSDT",
+                },
+            ],
+        )
+
+    def test_prepare_chart_bars_cancels_before_starting_the_next_chunk(self):
+        source = FakeSource(
+            "binance",
+            trade=bars("binance", "trade", MONTH_START, MONTH_END),
+        )
+        checks = []
+
+        def cancel_check():
+            checks.append(True)
+            return len(checks) > 1
+
+        with self.assertRaisesRegex(RuntimeError, "cancelled.*BTCUSDT.*2 of 2") as context:
+            CryptoDataService([source], self.cache).prepare_chart_bars(
+                "BTCUSDT",
+                MONTH_START,
+                MONTH_END,
+                source="binance",
+                cancel_check=cancel_check,
+            )
+
+        self.assertEqual(type(context.exception).__name__, "CryptoChartPreparationCancelled")
+        self.assertEqual(source.calls, [("trade", MONTH_START, MONTH_START)])
+
+    def test_prepare_chart_bars_pins_the_requested_source(self):
+        primary = FakeSource(
+            "binance",
+            trade=bars("binance", "trade", MONTH_START, MONTH_END),
+        )
+        requested = FakeSource(
+            "bybit",
+            trade=bars("bybit", "trade", MONTH_START, MONTH_END),
+        )
+
+        source_name, frame = CryptoDataService([primary, requested], self.cache).prepare_chart_bars(
+            "BTCUSDT",
+            MONTH_START,
+            MONTH_END,
+            source="bybit",
+        )
+
+        self.assertEqual(source_name, "bybit")
+        self.assertEqual(primary.calls, [])
+        self.assertEqual(
+            requested.calls,
+            [
+                ("trade", MONTH_START, MONTH_START),
+                ("trade", datetime(2024, 2, 1, tzinfo=UTC), MONTH_END),
+            ],
+        )
+        self.assertEqual(set(frame["source"]), {"bybit"})
+
+    def test_prepare_chart_bars_rejects_an_inverted_range_before_fetching(self):
+        source = FakeSource("binance")
+
+        with self.assertRaisesRegex(ValueError, "start must not be after end"):
+            CryptoDataService([source], self.cache).prepare_chart_bars(
+                "BTCUSDT",
+                END,
+                START,
+                source="binance",
+            )
+
+        self.assertEqual(source.calls, [])
+
+    def test_prepare_chart_bars_rejects_unaligned_five_minute_boundaries(self):
+        source = FakeSource("binance")
+
+        with self.assertRaisesRegex(ValueError, "5-minute boundaries"):
+            CryptoDataService([source], self.cache).prepare_chart_bars(
+                "BTCUSDT",
+                START + timedelta(minutes=1),
+                END,
+                source="binance",
+            )
+
+        self.assertEqual(source.calls, [])
 
     def test_complete_fallback_cache_is_used_before_primary_network(self):
         unavailable_primary = FakeSource("binance", fail=True)

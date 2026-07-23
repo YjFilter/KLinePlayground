@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 import pandas as pd
+import numpy as np
 
-from .aggregator import aggregate_bars
+from .aggregator import aggregate_bars, normalize_base_bars
 from .models import CryptoPeriod, CryptoRange, utc_datetime
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -24,6 +25,7 @@ class CryptoChartWindowResult:
     has_earlier: bool
     has_later: bool
     read_only: bool
+    base_bars: pd.DataFrame | None = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,7 +39,7 @@ class CryptoChartWindowService:
     def __init__(self, data_service):
         self.data_service = data_service
 
-    def load(self, *, symbol: str, source: str, period: CryptoPeriod | str, range_start: datetime, range_end: datetime, current_time: datetime, read_only: bool) -> CryptoChartWindowResult:
+    def load(self, *, symbol: str, source: str, period: CryptoPeriod | str, range_start: datetime, range_end: datetime, current_time: datetime, read_only: bool, trade_bars: pd.DataFrame | None = None) -> CryptoChartWindowResult:
         replay_period = CryptoPeriod.parse(period)
         range_start = utc_datetime(range_start)
         range_end = utc_datetime(range_end)
@@ -46,17 +48,31 @@ class CryptoChartWindowService:
         if range_start > effective_end:
             raise ValueError("range_start must not exceed the visible end")
         fetch_start = self._bucket_start(range_start, replay_period)
-        bundle = self.data_service.get_bundle(symbol, fetch_start, effective_end, source=source)
-        aggregated = aggregate_bars(bundle.trade_bars, replay_period, effective_end)
+        resolved_source = source
+        if trade_bars is None:
+            chart_loader = getattr(self.data_service, "get_chart_bars", None)
+            if callable(chart_loader):
+                resolved_source, trade_bars = chart_loader(symbol, fetch_start, effective_end, source=source)
+            else:
+                bundle = self.data_service.get_bundle(symbol, fetch_start, effective_end, source=source)
+                resolved_source, trade_bars = bundle.source, bundle.trade_bars
+        normalized = normalize_base_bars(trade_bars)
+        base_bars = normalized.loc[
+            (normalized["timestamp"] >= pd.Timestamp(fetch_start))
+            & (normalized["timestamp"] <= pd.Timestamp(effective_end))
+        ].reset_index(drop=True)
+        base_bars = normalize_base_bars(base_bars)
+        aggregated = aggregate_bars(base_bars, replay_period, effective_end)
         visible = aggregated.loc[(pd.to_datetime(aggregated["end_time"], utc=True) >= pd.Timestamp(range_start)) & (pd.to_datetime(aggregated["end_time"], utc=True) <= pd.Timestamp(effective_end))]
-        serialized = [self._serialize(row) for _, row in visible.iterrows()]
-        coverage = self._coverage(bundle.source, symbol)
+        serialized = self._serialize_many(visible)
+        coverage = self._coverage(resolved_source, symbol)
         return CryptoChartWindowResult(
-            source=bundle.source, symbol=symbol.upper(), period=replay_period.value,
+            source=resolved_source, symbol=symbol.upper(), period=replay_period.value,
             window_start=range_start, window_end=effective_end,
             kline_data=serialized, volume_data=[self._volume(item) for item in serialized],
             has_earlier=bool(coverage and coverage.start < range_start),
             has_later=bool(read_only and coverage and coverage.end > effective_end), read_only=read_only,
+            base_bars=base_bars,
         )
 
     @staticmethod
@@ -81,12 +97,40 @@ class CryptoChartWindowService:
         if not callable(coverage):
             return None
         trade = coverage(source, symbol, "trade")
-        mark = coverage(source, symbol, "mark")
-        if trade is None:
-            return mark
-        if mark is None:
-            return trade
-        return CryptoRange(max(trade.start, mark.start), min(trade.end, mark.end))
+        return trade
+
+    @classmethod
+    def _serialize_many(cls, frame):
+        if frame.empty:
+            return []
+        start_times = cls._time_strings(frame["start_time"])
+        end_times = cls._time_strings(frame["end_time"])
+        periods = frame["period"].astype(str).to_numpy()
+        numeric = [
+            pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+            for column in ("open", "high", "low", "close", "volume", "turnover")
+        ]
+        counts = frame["source_bar_count"].to_numpy(dtype=int)
+        complete = frame["complete"].to_numpy(dtype=bool)
+        return [
+            {
+                "period": str(period), "time": str(end_time),
+                "start_time": str(start_time), "end_time": str(end_time),
+                "open": float(open_value), "high": float(high_value),
+                "low": float(low_value), "close": float(close_value),
+                "volume": float(volume), "turnover": float(turnover),
+                "source_bar_count": int(source_bar_count), "complete": bool(is_complete),
+            }
+            for period, start_time, end_time, open_value, high_value, low_value,
+            close_value, volume, turnover, source_bar_count, is_complete in zip(
+                periods, start_times, end_times, *numeric, counts, complete
+            )
+        ]
+
+    @staticmethod
+    def _time_strings(values):
+        timestamps = pd.to_datetime(values, utc=True).dt.tz_localize(None).to_numpy(dtype="datetime64[s]")
+        return np.char.replace(np.datetime_as_string(timestamps, unit="s"), "T", " ")
 
     @classmethod
     def _serialize(cls, row):

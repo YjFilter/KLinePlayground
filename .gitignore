@@ -6544,3 +6544,5 @@ dist/
 .env*
 
 /.runtime/
+
+/.venv/

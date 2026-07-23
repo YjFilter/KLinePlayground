@@ -22,7 +22,7 @@ UTC = timezone.utc
 START = datetime(2025, 1, 1, tzinfo=UTC)
 
 
-def _bars():
+def _bars(count=4):
     return pd.DataFrame([
         {
             "timestamp": START + timedelta(minutes=5 * index),
@@ -33,18 +33,18 @@ def _bars():
             "volume": 10,
             "turnover": 1000,
         }
-        for index in range(4)
+        for index in range(count)
     ])
 
 
-def _training(training_id="crypto-api"):
-    bars = _bars()
+def _training(training_id="crypto-api", *, period="5m", bar_count=4):
+    bars = _bars(bar_count)
     session = CryptoReplaySession(
         bars,
         initial_time=START,
         symbol="BTCUSDT",
         source="binance",
-        active_period="5m",
+        active_period=period,
     )
     simulator = FuturesSimulator(
         10000,
@@ -72,13 +72,13 @@ def _training(training_id="crypto-api"):
         "stock_code": "BTCUSDT",
         "source": "binance",
         "data_source": "binance",
-        "period": "5m",
+        "period": period,
         "mode": "specified",
         "start_date": "2025-01-01",
         "training_start": "2025-01-01 00:00:00",
         "training_end": "2025-01-01 00:15:00",
         "max_training_days": 1,
-        "initial_period": "5m",
+        "initial_period": period,
         "initial_capital": 10000,
         "leverage": 5,
         "crypto_session": session,
@@ -187,6 +187,10 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertEqual(response.get_json()["pending_orders"][0]["order_id"], order["order_id"])
 
     def test_crypto_next_returns_delta_and_compact_account_payload(self):
+        training = app_module.active_trainings[self.training_id]
+        training["_crypto_chart_window_start"] = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        training["_crypto_period_window_cache"] = {"cached": {}}
+        training["_crypto_chart_base_frame"] = _bars().iloc[:1].copy()
         response = self.client.post(f"/api/training/{self.training_id}/next")
 
         self.assertEqual(response.status_code, 200, response.get_json())
@@ -199,6 +203,55 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertIn("position", payload)
         self.assertIn("pending_orders", payload)
         self.assertNotIn("equity_snapshots", payload)
+        self.assertNotIn("_crypto_period_window_cache", training)
+        self.assertIn("_crypto_chart_window_end", training)
+        self.assertEqual(len(training["_crypto_chart_base_frame"]), 2)
+        self.assertEqual(
+            training["_crypto_chart_base_frame"].iloc[-1]["timestamp"].to_pydatetime(),
+            START + timedelta(minutes=5),
+        )
+
+    def test_hourly_next_appends_every_completed_five_minute_bar(self):
+        training_id = "crypto-hourly-continuity"
+        training = _training(training_id, period="1h", bar_count=13)
+        training["_crypto_chart_window_start"] = START - timedelta(days=730)
+        training["_crypto_chart_window_end"] = START
+        training["_crypto_chart_base_frame"] = _bars(1)
+        app_module.active_trainings[training_id] = training
+        try:
+            response = self.client.post(f"/api/training/{training_id}/next")
+
+            self.assertEqual(response.status_code, 200, response.get_json())
+            payload = response.get_json()
+            self.assertEqual(len(payload["completed_times"]), 11)
+            cached = training["_crypto_chart_base_frame"]
+            self.assertEqual(len(cached), 12)
+            self.assertEqual(
+                list(cached["timestamp"]),
+                list(pd.date_range(START, START + timedelta(minutes=55), freq="5min", tz="UTC")),
+            )
+        finally:
+            app_module.active_trainings.pop(training_id, None)
+
+    def test_forward_chart_append_avoids_renormalizing_the_full_history(self):
+        training = _training("crypto-fast-append", period="1h", bar_count=13)
+        training["_crypto_chart_base_frame"] = _bars(1)
+
+        with patch(
+            "backend.crypto.aggregator.normalize_base_bars",
+            side_effect=AssertionError("forward append must use the sorted fast path"),
+        ):
+            app_module._append_crypto_chart_base_range(
+                training,
+                START,
+                START + timedelta(minutes=55),
+            )
+
+        self.assertEqual(len(training["_crypto_chart_base_frame"]), 12)
+        self.assertEqual(
+            training["_crypto_chart_base_frame"].iloc[-1]["timestamp"].to_pydatetime(),
+            START + timedelta(minutes=55),
+        )
 
     def test_crypto_next_restores_active_runtime_before_route(self):
         training_id = "restore-route"
@@ -374,6 +427,10 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertEqual(cancelled.get_json()["pending_orders"], [])
 
     def test_end_saves_crypto_report_instead_of_resetting(self):
+        training = app_module.active_trainings[self.training_id]
+        training["_crypto_chart_window_start"] = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        training["_crypto_chart_window_end"] = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        training["_crypto_period_window_cache"] = {"cached": {}}
         self.client.post(
             f"/api/training/{self.training_id}/trade",
             json={"action": "open_short", "order_type": "market", "margin": 100, "leverage": 5},
@@ -388,6 +445,9 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertEqual(saved["report_data"]["symbol"], "BTCUSDT")
         self.assertEqual(saved["report_data"]["simulator_type"], "isolated_futures")
         persist.assert_called_once()
+        self.assertNotIn("_crypto_chart_window_start", training)
+        self.assertNotIn("_crypto_chart_window_end", training)
+        self.assertNotIn("_crypto_period_window_cache", training)
 
     def test_reset_preserves_custom_fee_rates(self):
         updated = self.client.post(
@@ -396,9 +456,16 @@ class CryptoFuturesAPITests(unittest.TestCase):
         )
         self.assertEqual(updated.status_code, 200, updated.get_json())
 
+        training = app_module.active_trainings[self.training_id]
+        training["_crypto_chart_window_start"] = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        training["_crypto_chart_window_end"] = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        training["_crypto_period_window_cache"] = {"cached": {}}
         response = self.client.post(f"/api/training/{self.training_id}/reset")
 
         self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertNotIn("_crypto_chart_window_start", training)
+        self.assertNotIn("_crypto_chart_window_end", training)
+        self.assertNotIn("_crypto_period_window_cache", training)
         constraints = response.get_json()["snapshot"]["order_constraints"]
         self.assertEqual(constraints["maker_fee_rate"], 0.0001)
         self.assertEqual(constraints["taker_fee_rate"], 0.0003)
@@ -427,7 +494,23 @@ class CryptoFuturesRuntimeRestoreTests(unittest.TestCase):
         )
         training["crypto_session"].advance()
         bundle = training["crypto_bundle"]
-        service = SimpleNamespace(get_bundle=lambda *args, **kwargs: bundle)
+        history_start = START - timedelta(minutes=10)
+        history_frame = _bars(3)
+        history_frame["timestamp"] = pd.date_range(
+            history_start, periods=3, freq="5min", tz="UTC",
+        )
+        training.update({
+            "history_years": 2,
+            "_crypto_history_start": history_start,
+            "_crypto_history_end": START + timedelta(minutes=5),
+            "_crypto_chart_window_start": history_start,
+            "_crypto_chart_window_end": START + timedelta(minutes=5),
+            "_crypto_chart_base_frame": history_frame,
+        })
+        service = SimpleNamespace(
+            get_bundle=lambda *args, **kwargs: bundle,
+            get_chart_bars=lambda *args, **kwargs: ("binance", history_frame),
+        )
 
         with tempfile.TemporaryDirectory() as temp:
             database = Path(temp) / "training_history.db"
@@ -455,6 +538,9 @@ class CryptoFuturesRuntimeRestoreTests(unittest.TestCase):
         self.assertIsNotNone(restored)
         self.assertEqual(restored["id"], training_id)
         self.assertEqual(restored["crypto_session"].clock.current_time, START + timedelta(minutes=5))
+        self.assertEqual(restored["history_years"], 2)
+        self.assertEqual(restored["_crypto_history_start"], history_start)
+        self.assertEqual(len(restored["_crypto_chart_base_frame"]), 3)
         snapshot = restored["futures_executor"].snapshot()
         self.assertEqual(snapshot["position"]["side"], "long")
         self.assertEqual(len(restored["futures_executor"].engine.order_book.active_orders), 1)

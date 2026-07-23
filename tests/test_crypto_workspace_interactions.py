@@ -33,15 +33,159 @@ class CryptoWorkspaceInteractionTests(unittest.TestCase):
         self.assertIn("request_id", source)
         self.assertIn("range_start", source)
         self.assertIn("range_end", source)
-        self.assertIn("applyIntradaySnapshot", source)
+        self.assertIn("chartWindowState.extended_history", source)
+        self.assertIn("requestBody.range_start", source)
+        self.assertIn("requestBody.range_end", source)
+        self.assertIn("chartWindowState.window_start", source)
+        self.assertIn("chartWindowState.window_end", source)
+        self.assertNotIn("range_start: visibleRange?.from", source)
+        self.assertNotIn("range_end: visibleRange?.to", source)
+        self.assertIn("applyCryptoPeriodSnapshot", source)
+        self.assertIn("applyIntradaySnapshot", self.function_source("applyCryptoPeriodSnapshot"))
         self.assertNotIn("reloadChartWindowForPeriod", source)
         self.assertNotIn("updateAccountInfo", source)
+
+    def test_chart_window_timestamp_parser_accepts_numeric_chart_times(self):
+        source = self.function_source("parseChartWindowTimestamp")
+        self.assertIn("typeof value === 'number'", source)
+        self.assertIn("Number.isFinite", source)
+
+    def test_earlier_chart_window_marks_runtime_as_extended(self):
+        start = self.js.index("function applyChartWindow")
+        end = self.js.index("\nfunction enqueueChartWindowRequest", start)
+        source = self.js[start:end]
+        self.assertIn("extended_history", source)
+        self.assertIn("options.direction === 'earlier'", source)
 
     def test_period_loading_indicator_is_delayed_and_rapid_switches_are_versioned(self):
         self.assertIn("const PERIOD_LOADING_DELAY_MS = 150", self.js)
         self.assertIn("let periodSwitchGeneration = 0", self.js)
         self.assertIn("function beginPeriodSwitchFeedback", self.js)
         self.assertIn("function endPeriodSwitchFeedback", self.js)
+
+    def test_crypto_period_snapshot_cache_key_covers_runtime_identity(self):
+        source = self.function_source("buildCryptoPeriodSnapshotCacheKey")
+        for token in (
+            "trainingId",
+            "period",
+            "window_start",
+            "window_end",
+            "extended_history",
+            "replayTime",
+        ):
+            self.assertIn(token, source)
+
+    def test_crypto_period_switch_reuses_cached_snapshot_before_fetch(self):
+        source = self.function_source("switchCryptoViewPeriod")
+        cache_read = source.index("getCryptoPeriodSnapshotCache")
+        network_fetch = source.index("fetch(")
+        self.assertLess(cache_read, network_fetch)
+        self.assertIn("setCryptoPeriodSnapshotCache", source)
+        self.assertIn("applyCryptoPeriodSnapshot", source)
+        self.assertIn("compact_chart", source)
+
+    def test_crypto_start_prepares_history_before_existing_start_flow(self):
+        payload_source = self.function_source("buildCryptoStartPayload")
+        self.assertIn("history_years", payload_source)
+        self.assertIn("getCryptoHistoryYears", payload_source)
+
+        start_source = self.function_source("startTraining")
+        self.assertIn("startCryptoTrainingWithHistoryPreparation", start_source)
+        self.assertIn("startTrainingWithConfig", start_source)
+
+        prepare_source = self.function_source("startCryptoTrainingWithHistoryPreparation")
+        self.assertIn("prepareCryptoHistory", prepare_source)
+        self.assertIn("history_prepare_id", prepare_source)
+        self.assertIn("startTrainingWithConfig", prepare_source)
+
+    def test_crypto_history_year_validation_is_integer_between_two_and_five(self):
+        source = self.function_source("getCryptoHistoryYears")
+        self.assertIn("Number.isInteger", source)
+        self.assertIn("historyYears < 2", source)
+        self.assertIn("historyYears > 5", source)
+        self.assertIn("crypto-history-years", source)
+
+    def test_crypto_history_prepare_supports_poll_cancel_retry_and_actionable_errors(self):
+        prepare_source = self.function_source("prepareCryptoHistory")
+        self.assertIn("/crypto/history/prepare", prepare_source)
+        self.assertIn("pollCryptoHistoryPreparation", prepare_source)
+        self.assertIn("showCryptoHistoryPrepareModal", prepare_source)
+
+        poll_source = self.function_source("pollCryptoHistoryPreparation")
+        self.assertIn("/crypto/history/prepare/", poll_source)
+        self.assertIn("completed_months", poll_source)
+        self.assertIn("total_months", poll_source)
+        self.assertIn("current_month", poll_source)
+        self.assertIn("cancelled", poll_source)
+        self.assertIn("failed", poll_source)
+
+        cancel_source = self.function_source("cancelCryptoHistoryPreparation")
+        self.assertIn("method: 'DELETE'", cancel_source)
+        self.assertIn("/crypto/history/prepare/", cancel_source)
+        self.assertIn("AbortController", self.js)
+        self.assertIn("retryCryptoHistoryPreparation", self.js)
+
+    def test_fine_period_switch_sends_visible_window_and_consumes_render_metadata(self):
+        source = self.function_source("switchCryptoViewPeriod")
+        self.assertIn("isFineCryptoPeriod", source)
+        self.assertIn("visible_start", source)
+        self.assertIn("visible_end", source)
+
+        apply_source = self.function_source("applyCryptoPeriodSnapshot")
+        for field in (
+            "history_start",
+            "history_end",
+            "render_start",
+            "render_end",
+            "has_earlier_render",
+        ):
+            self.assertIn(field, apply_source)
+
+        cache_source = self.function_source("buildCryptoPeriodSnapshotCacheKey")
+        for field in ("history_start", "history_end", "render_start", "render_end"):
+            self.assertIn(field, cache_source)
+
+    def test_fine_period_auto_loads_earlier_segment_near_left_edge(self):
+        source = self.function_source("maybeLoadEarlierCryptoSegment")
+        self.assertIn("300", source)
+        self.assertIn("has_earlier_render", source)
+        self.assertIn("loadEarlierCryptoSegment", source)
+
+        load_source = self.function_source("loadEarlierCryptoSegment")
+        self.assertIn("visible_start", load_source)
+        self.assertIn("visible_end", load_source)
+        self.assertIn("preserveRange: true", load_source)
+        self.assertIn("direction: 'earlier'", load_source)
+        self.assertIn("clearCryptoPeriodSnapshotCache", load_source)
+
+        initialize_source = self.function_source("initializeChart")
+        self.assertIn("maybeLoadEarlierCryptoSegment", initialize_source)
+
+    def test_compact_period_snapshot_rebuilds_volume_state_from_bars(self):
+        source = self.function_source("applyCryptoPeriodSnapshot")
+        self.assertIn("snapshot.volume_data.length", source)
+        self.assertIn("buildIntradayVolumeData(periodBars)", source)
+
+    def test_crypto_period_snapshot_cache_invalidates_at_runtime_boundaries(self):
+        apply_window_start = self.js.index("function applyChartWindow")
+        apply_window_end = self.js.index("\nfunction enqueueChartWindowRequest", apply_window_start)
+        self.assertIn(
+            "clearCryptoPeriodSnapshotCache",
+            self.js[apply_window_start:apply_window_end],
+            "applyChartWindow",
+        )
+        for name in (
+            "resetChartWindowState",
+            "applyCryptoNextDelta",
+            "startTrainingWithConfig",
+            "endTraining",
+            "resetTraining",
+        ):
+            self.assertIn("clearCryptoPeriodSnapshotCache", self.function_source(name), name)
+        self.assertIn(
+            "syncCryptoPeriodSnapshotCacheTraining",
+            self.function_source("switchCryptoViewPeriod"),
+        )
 
     def test_crypto_workspace_controls_have_event_handlers(self):
         for function in (

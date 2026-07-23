@@ -115,6 +115,15 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
         gaps = self.cache.missing_ranges("binance", "BTCUSDT", "trade", datetime(2023, 12, 31, 23, 55, tzinfo=UTC), datetime(2024, 1, 1, 0, 15, tzinfo=UTC))
         self.assertEqual(gaps, [(datetime(2023, 12, 31, 23, 55, tzinfo=UTC), datetime(2023, 12, 31, 23, 55, tzinfo=UTC)), (datetime(2024, 1, 1, 0, 15, tzinfo=UTC), datetime(2024, 1, 1, 0, 15, tzinfo=UTC))])
 
+    def test_chart_load_can_use_float_numeric_columns(self):
+        data = frame([datetime(2024, 1, 1, 0, 0, tzinfo=UTC)])
+        self.cache.save("binance", "BTCUSDT", "trade", data)
+
+        loaded = self.cache.load("binance", "BTCUSDT", "trade", numeric="float")
+
+        self.assertIsInstance(loaded.iloc[0]["close"], float)
+        self.assertEqual(loaded.iloc[0]["close"], 11.0)
+
     def test_coverage_uses_month_metadata_without_loading_candles(self):
         data = frame([datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 2, 1, 0, 0, tzinfo=UTC)])
         self.cache.save("binance", "BTCUSDT", "trade", data)

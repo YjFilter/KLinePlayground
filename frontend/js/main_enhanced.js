@@ -21,6 +21,7 @@ let maPeriods = [5, 10, 20]; // 默认MA周期
 let isShiftClicked = false;
 let isShiftKeyPressed = false;
 let currentTheme = localStorage.getItem('uiTheme') || 'light';
+let currentCryptoTheme = localStorage.getItem('cryptoUiTheme') || 'dark';
 let currentPeriod = 'daily';
 let currentOrderType = 'market';
 let availableDataSources = [];
@@ -48,11 +49,19 @@ let cryptoInstrumentSearchTimer = null;
 let periodSwitchAbortController = null;
 let periodSwitchGeneration = 0;
 let periodSwitchFeedbackTimer = null;
+let cryptoPeriodSnapshotCacheTrainingId = null;
 let cryptoOrderConstraints = null;
 let cryptoOrderSubmitting = false;
 let cryptoNextInFlight = false;
 let cryptoFeeSubmitting = false;
+let cryptoHistoryPrepareJobId = null;
+let cryptoHistoryPrepareAbortController = null;
+let cryptoHistoryPrepareRetryConfig = null;
+let cryptoEarlierSegmentLoading = false;
+let cryptoEarlierSegmentGeneration = 0;
 const PERIOD_LOADING_DELAY_MS = 150;
+const CRYPTO_PERIOD_SNAPSHOT_CACHE_LIMIT = 8;
+const cryptoPeriodSnapshotCache = new Map();
 const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
 const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
 const CHART_PANEL_MIN_HEIGHTS = { chart: 160, 'volume-chart': 32, 'indicator-chart': 52 };
@@ -63,21 +72,95 @@ function createEmptyChartWindowState() {
         trade_markers: [],
         window_start: null,
         window_end: null,
+        history_start: null,
+        history_end: null,
+        render_start: null,
+        render_end: null,
+        has_earlier_render: false,
         training_start: null,
         training_end: null,
         has_earlier: false,
         has_later: false,
+        extended_history: false,
         read_only: false,
         period: 'daily',
     };
 }
 
 function resetChartWindowState() {
+    clearCryptoPeriodSnapshotCache();
+    cryptoEarlierSegmentGeneration += 1;
+    cryptoEarlierSegmentLoading = false;
     chartWindowRequestGeneration += 1;
     chartWindowRequestChain = Promise.resolve();
     chartWindowLoadingDirection = null;
     chartWindowState = createEmptyChartWindowState();
     updateChartWindowControls();
+}
+
+function clearCryptoPeriodSnapshotCache() {
+    cryptoPeriodSnapshotCache.clear();
+    cryptoPeriodSnapshotCacheTrainingId = currentTraining?.id === undefined || currentTraining?.id === null
+        ? null
+        : String(currentTraining.id);
+}
+
+function syncCryptoPeriodSnapshotCacheTraining(trainingId) {
+    const normalizedTrainingId = trainingId === undefined || trainingId === null
+        ? null
+        : String(trainingId);
+    if (cryptoPeriodSnapshotCacheTrainingId === normalizedTrainingId) return;
+    cryptoPeriodSnapshotCache.clear();
+    cryptoPeriodSnapshotCacheTrainingId = normalizedTrainingId;
+}
+
+function cryptoPeriodSnapshotCacheTimestamp(value) {
+    const parsed = parseChartWindowTimestamp(value);
+    return parsed ? String(Math.floor(parsed.getTime() / 1000)) : String(value || '');
+}
+
+function buildCryptoPeriodSnapshotCacheKey(trainingId, period, replayTime, windowState = chartWindowState) {
+    const expandedWindow = Boolean(windowState?.extended_history);
+    const windowStart = expandedWindow ? cryptoPeriodSnapshotCacheTimestamp(windowState.window_start) : '';
+    const windowEnd = expandedWindow ? cryptoPeriodSnapshotCacheTimestamp(windowState.window_end) : '';
+    const historyStart = cryptoPeriodSnapshotCacheTimestamp(windowState?.history_start);
+    const historyEnd = cryptoPeriodSnapshotCacheTimestamp(windowState?.history_end);
+    const renderStart = cryptoPeriodSnapshotCacheTimestamp(windowState?.render_start);
+    const renderEnd = cryptoPeriodSnapshotCacheTimestamp(windowState?.render_end);
+    return [
+        String(trainingId || ''),
+        String(period || ''),
+        expandedWindow ? 'extended_history' : 'default_window',
+        windowStart,
+        windowEnd,
+        historyStart,
+        historyEnd,
+        renderStart,
+        renderEnd,
+        cryptoPeriodSnapshotCacheTimestamp(replayTime),
+    ].join('|');
+}
+
+function getCryptoReplayCacheTime() {
+    return currentTraining?.current_time || currentTraining?.latestProgress?.current_time || null;
+}
+
+function getCryptoPeriodSnapshotCache(cacheKey) {
+    if (!cryptoPeriodSnapshotCache.has(cacheKey)) return null;
+    const snapshot = cryptoPeriodSnapshotCache.get(cacheKey);
+    cryptoPeriodSnapshotCache.delete(cacheKey);
+    cryptoPeriodSnapshotCache.set(cacheKey, snapshot);
+    return snapshot;
+}
+
+function setCryptoPeriodSnapshotCache(cacheKey, snapshot) {
+    if (!cacheKey || !snapshot) return;
+    cryptoPeriodSnapshotCache.delete(cacheKey);
+    cryptoPeriodSnapshotCache.set(cacheKey, snapshot);
+    while (cryptoPeriodSnapshotCache.size > CRYPTO_PERIOD_SNAPSHOT_CACHE_LIMIT) {
+        const oldestKey = cryptoPeriodSnapshotCache.keys().next().value;
+        cryptoPeriodSnapshotCache.delete(oldestKey);
+    }
 }
 
 // === Intraday 多周期回放 (TASK-013) ===
@@ -235,6 +318,8 @@ function applyIntradaySnapshot(snapshot, options) {
 
     if (currentTraining) {
         currentTraining.latestProgress = null;
+        currentTraining.current_time = snapshot.current_time || currentTraining.current_time;
+        currentTraining.next_boundary = snapshot.next_boundary || currentTraining.next_boundary;
     }
 
     candlestickSeries.setData(chartData);
@@ -298,7 +383,8 @@ const THEME_PALETTES = {
 };
 
 function getThemePalette() {
-    return THEME_PALETTES[currentTheme] || THEME_PALETTES.light;
+    const activeTheme = isCryptoMode() ? currentCryptoTheme : currentTheme;
+    return THEME_PALETTES[activeTheme] || THEME_PALETTES.light;
 }
 
 function updateThemeButton() {
@@ -310,6 +396,36 @@ function updateThemeButton() {
     if (themeSelect) {
         themeSelect.value = currentTheme;
     }
+    const cryptoThemeBtn = document.getElementById('crypto-theme-toggle-btn');
+    if (cryptoThemeBtn) {
+        const isDark = currentCryptoTheme === 'dark';
+        const actionLabel = isDark ? '切换为浅色主题' : '切换为暗色主题';
+        cryptoThemeBtn.textContent = isDark ? '☀' : '☾';
+        cryptoThemeBtn.title = actionLabel;
+        cryptoThemeBtn.setAttribute('aria-label', actionLabel);
+        cryptoThemeBtn.setAttribute('aria-pressed', String(!isDark));
+    }
+}
+
+function applyCryptoTheme(theme, persist = true, syncUser = false) {
+    currentCryptoTheme = theme === 'light' ? 'light' : 'dark';
+    const mainApp = document.getElementById('main-app');
+    if (mainApp) {
+        mainApp.dataset.cryptoTheme = currentCryptoTheme;
+    }
+    if (persist) {
+        localStorage.setItem('cryptoUiTheme', currentCryptoTheme);
+    }
+    if (syncUser) {
+        persistUserSettings({ crypto_theme: currentCryptoTheme });
+    }
+    updateThemeButton();
+    updatePriceMode();
+    applyChartTheme();
+}
+
+function toggleCryptoTheme() {
+    applyCryptoTheme(currentCryptoTheme === 'dark' ? 'light' : 'dark', true, true);
 }
 
 function updatePeriodBadge(period) {
@@ -798,6 +914,7 @@ document.addEventListener('DOMContentLoaded', function () {
 async function initializeApp() {
     try {
         applyTheme(currentTheme, false, false);
+        applyCryptoTheme(currentCryptoTheme, false, false);
         updatePeriodBadge('daily');
         await loadDataSources();
         // 检查是否有保存的用户
@@ -822,6 +939,7 @@ async function initializeApp() {
                     if (settings.theme) {
                         applyTheme(settings.theme, true, false);
                     }
+                    applyCryptoTheme(settings.crypto_theme || currentCryptoTheme, true, false);
                 }).catch(e => console.error(e));
         }
     } catch (error) {
@@ -959,6 +1077,8 @@ function setupEventListeners() {
     document.getElementById('new-training-btn').addEventListener('click', showTrainingSetup);
     document.getElementById('cancel-setup-btn').addEventListener('click', hideTrainingSetup);
     document.getElementById('start-training-btn').addEventListener('click', startTraining);
+    document.getElementById('cancel-crypto-history-prepare-btn')?.addEventListener('click', cancelCryptoHistoryPreparation);
+    document.getElementById('retry-crypto-history-prepare-btn')?.addEventListener('click', retryCryptoHistoryPreparation);
     document.getElementById('load-earlier-year-btn')?.addEventListener('click', loadEarlierYear);
     document.getElementById('load-later-year-btn')?.addEventListener('click', loadLaterYear);
 
@@ -969,6 +1089,7 @@ function setupEventListeners() {
     document.getElementById('theme-toggle-btn')?.addEventListener('click', () => {
         applyTheme(currentTheme === 'dark' ? 'light' : 'dark', true, true);
     });
+    document.getElementById('crypto-theme-toggle-btn')?.addEventListener('click', toggleCryptoTheme);
     document.getElementById('data-sync-btn')?.addEventListener('click', showDataSyncModal);
     document.getElementById('confirm-sync-btn')?.addEventListener('click', syncOfflineData);
     document.getElementById('cancel-sync-btn')?.addEventListener('click', hideDataSyncModal);
@@ -1690,6 +1811,7 @@ function selectUser(username) {
             if (settings.theme) {
                 applyTheme(settings.theme, true, false);
             }
+            applyCryptoTheme(settings.crypto_theme || currentCryptoTheme, true, false);
         }).catch(e => console.error(e));
 }
 
@@ -2208,6 +2330,7 @@ async function loadUserSettings() {
         document.getElementById('min-commission').value = settings.min_commission;
         document.getElementById('stamp-tax-rate').value = (settings.stamp_tax_rate * 1000).toFixed(1);
         document.getElementById('theme-select').value = settings.theme || currentTheme;
+        applyCryptoTheme(settings.crypto_theme || currentCryptoTheme, true, false);
         document.getElementById('adjustment-mode').value = 'forward';
         const adjustmentRadio = document.querySelector('input[name="adjustment"][value="forward"]');
         if (adjustmentRadio) {
@@ -2377,10 +2500,12 @@ function syncCryptoWorkspaceMode() {
         element.classList.toggle('hidden', active);
     });
     if (active) {
+        applyCryptoTheme(currentCryptoTheme, false, false);
         applyCryptoConsoleLayout(readCryptoConsoleLayout());
     } else {
         mainApp?.classList.remove('crypto-console-collapsed');
         mainApp?.style.removeProperty('--crypto-console-width');
+        applyChartTheme();
     }
 }
 
@@ -2478,6 +2603,171 @@ function normalizeCryptoSymbol(value) {
     return symbol && !symbol.endsWith('USDT') && !symbol.endsWith('USDC') ? symbol + 'USDT' : symbol;
 }
 
+function getCryptoHistoryYears() {
+    const input = document.getElementById('crypto-history-years');
+    const historyYears = Number(input?.value ?? 2);
+    if (!Number.isInteger(historyYears) || historyYears < 2 || historyYears > 5) {
+        throw new Error('训练前历史年数必须是 2 到 5 之间的整数');
+    }
+    return historyYears;
+}
+
+function setCryptoHistoryPrepareProgress(payload = {}) {
+    const completedMonths = Number(payload.completed_months ?? payload.completed ?? payload.progress?.completed ?? 0) || 0;
+    const totalMonths = Number(payload.total_months ?? payload.total ?? payload.progress?.total ?? 0) || 0;
+    const explicitPercent = Number(payload.percent ?? payload.progress?.percent);
+    const percent = Number.isFinite(explicitPercent)
+        ? Math.max(0, Math.min(100, explicitPercent))
+        : (totalMonths > 0 ? Math.max(0, Math.min(100, completedMonths / totalMonths * 100)) : 0);
+    const currentMonth = payload.current_month || payload.month || '--';
+    const statusText = payload.message || payload.status_text || '正在检查离线缓存并补齐缺失月份...';
+    const status = document.getElementById('crypto-history-prepare-status');
+    const month = document.getElementById('crypto-history-prepare-month');
+    const count = document.getElementById('crypto-history-prepare-count');
+    const percentText = document.getElementById('crypto-history-prepare-percent');
+    const progress = document.getElementById('crypto-history-prepare-progress');
+    if (status) status.textContent = statusText;
+    if (month) month.textContent = String(currentMonth);
+    if (count) count.textContent = `${completedMonths} / ${totalMonths}`;
+    if (percentText) percentText.textContent = `${Math.round(percent)}%`;
+    if (progress) progress.style.width = `${percent}%`;
+}
+
+function showCryptoHistoryPrepareModal(trainingConfig) {
+    cryptoHistoryPrepareRetryConfig = { ...trainingConfig };
+    document.getElementById('crypto-history-prepare-modal')?.classList.remove('hidden');
+    document.getElementById('retry-crypto-history-prepare-btn')?.classList.add('hidden');
+    const cancelButton = document.getElementById('cancel-crypto-history-prepare-btn');
+    if (cancelButton) cancelButton.textContent = '取消';
+    const errorBox = document.getElementById('crypto-history-prepare-error');
+    if (errorBox) {
+        errorBox.textContent = '';
+        errorBox.classList.add('hidden');
+    }
+    setCryptoHistoryPrepareProgress();
+}
+
+function hideCryptoHistoryPrepareModal() {
+    document.getElementById('crypto-history-prepare-modal')?.classList.add('hidden');
+}
+
+function showCryptoHistoryPrepareFailure(message, status = 'failed') {
+    const actionableMessage = status === 'cancelled'
+        ? '历史数据准备已取消。你可以修改参数后重试。'
+        : `${message || '历史数据准备失败'}。请检查网络或数据源后重试。`;
+    const statusElement = document.getElementById('crypto-history-prepare-status');
+    const errorBox = document.getElementById('crypto-history-prepare-error');
+    if (statusElement) statusElement.textContent = status === 'cancelled' ? '准备任务已取消' : '准备历史数据失败';
+    if (errorBox) {
+        errorBox.textContent = actionableMessage;
+        errorBox.classList.remove('hidden');
+    }
+    document.getElementById('retry-crypto-history-prepare-btn')?.classList.remove('hidden');
+    const cancelButton = document.getElementById('cancel-crypto-history-prepare-btn');
+    if (cancelButton) cancelButton.textContent = '关闭';
+}
+
+async function pollCryptoHistoryPreparation(jobId, signal) {
+    while (true) {
+        const response = await fetch(`${API_BASE}/crypto/history/prepare/${encodeURIComponent(jobId)}`, { signal });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || payload.message || `查询历史准备进度失败: ${response.status}`);
+        setCryptoHistoryPrepareProgress({
+            ...payload,
+            current_month: payload.current_month,
+            completed_months: payload.completed_months,
+            total_months: payload.total_months,
+        });
+        const status = String(payload.status || '').toLowerCase();
+        if (status === 'ready' || status === 'completed') return { ...payload, job_id: payload.job_id || jobId };
+        if (status === 'failed') throw new Error(payload.error || payload.message || '历史数据准备失败');
+        if (status === 'cancelled') {
+            const error = new Error(payload.message || '历史数据准备已取消');
+            error.name = 'AbortError';
+            throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+}
+
+async function prepareCryptoHistory(trainingConfig) {
+    showCryptoHistoryPrepareModal(trainingConfig);
+    cryptoHistoryPrepareAbortController?.abort();
+    cryptoHistoryPrepareAbortController = new AbortController();
+    cryptoHistoryPrepareJobId = null;
+    try {
+        const prepareConfig = { ...trainingConfig };
+        delete prepareConfig.history_prepare_id;
+        const response = await fetch(`${API_BASE}/crypto/history/prepare`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(prepareConfig),
+            signal: cryptoHistoryPrepareAbortController.signal,
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || payload.message || `创建历史准备任务失败: ${response.status}`);
+        cryptoHistoryPrepareJobId = payload.job_id;
+        if (!cryptoHistoryPrepareJobId) throw new Error('历史准备任务未返回 job_id');
+        setCryptoHistoryPrepareProgress(payload);
+        return await pollCryptoHistoryPreparation(cryptoHistoryPrepareJobId, cryptoHistoryPrepareAbortController.signal);
+    } catch (error) {
+        if (error?.name !== 'AbortError') {
+            showCryptoHistoryPrepareFailure(error.message, 'failed');
+            error.cryptoHistoryHandled = true;
+        }
+        throw error;
+    } finally {
+        cryptoHistoryPrepareAbortController = null;
+    }
+}
+
+async function cancelCryptoHistoryPreparation() {
+    const jobId = cryptoHistoryPrepareJobId;
+    const retryButton = document.getElementById('retry-crypto-history-prepare-btn');
+    if (!cryptoHistoryPrepareAbortController && retryButton && !retryButton.classList.contains('hidden')) {
+        cryptoHistoryPrepareJobId = null;
+        hideCryptoHistoryPrepareModal();
+        return;
+    }
+    if (!jobId && !cryptoHistoryPrepareAbortController) {
+        hideCryptoHistoryPrepareModal();
+        return;
+    }
+    cryptoHistoryPrepareAbortController?.abort();
+    cryptoHistoryPrepareAbortController = null;
+    cryptoHistoryPrepareJobId = null;
+    if (jobId) {
+        try {
+            await fetch(`${API_BASE}/crypto/history/prepare/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+        } catch (error) {
+            console.error('取消币圈历史准备任务失败:', error);
+        }
+    }
+    showCryptoHistoryPrepareFailure('', 'cancelled');
+}
+
+async function retryCryptoHistoryPreparation() {
+    if (!cryptoHistoryPrepareRetryConfig) return;
+    try {
+        await startCryptoTrainingWithHistoryPreparation({ ...cryptoHistoryPrepareRetryConfig });
+    } catch (error) {
+        if (error?.name !== 'AbortError' && !error?.cryptoHistoryHandled) {
+            showCryptoHistoryPrepareFailure(error.message, 'failed');
+        }
+    }
+}
+
+async function startCryptoTrainingWithHistoryPreparation(trainingConfig) {
+    const prepared = await prepareCryptoHistory(trainingConfig);
+    const historyPrepareId = prepared.job_id || cryptoHistoryPrepareJobId;
+    if (!historyPrepareId) throw new Error('币圈历史数据准备结果无效，请重试');
+    hideCryptoHistoryPrepareModal();
+    return startTrainingWithConfig({
+        ...trainingConfig,
+        history_prepare_id: historyPrepareId,
+    });
+}
+
 function buildCryptoStartPayload(isRandomMode) {
     const symbolInput = document.getElementById('crypto-symbol-search');
     const startTimeInput = document.getElementById('crypto-start-time');
@@ -2491,6 +2781,7 @@ function buildCryptoStartPayload(isRandomMode) {
         max_training_days: parseInt(document.getElementById('max-training-bars')?.value) || 0,
         initial_capital: parseFloat(document.getElementById('crypto-initial-capital')?.value) || 10000,
         leverage: parseInt(document.getElementById('crypto-leverage')?.value) || 5,
+        history_years: getCryptoHistoryYears(),
     };
     if (isRandomMode) {
         payload.date_start = document.getElementById('random-start-date').value.trim();
@@ -2848,7 +3139,17 @@ function mergeChartWindow(existing, incoming) {
 }
 
 function parseChartWindowTimestamp(value) {
+    if (value instanceof Date) {
+        return Number.isFinite(value.getTime()) ? new Date(value.getTime()) : null;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return new Date(value < 1e12 ? value * 1000 : value);
+    }
     if (!value) return null;
+    const numericValue = Number(value);
+    if (/^\d+(?:\.\d+)?$/.test(String(value)) && Number.isFinite(numericValue)) {
+        return new Date(numericValue < 1e12 ? numericValue * 1000 : numericValue);
+    }
     const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
     if (!match) return null;
     return new Date(Date.UTC(
@@ -2909,6 +3210,7 @@ function updateChartWindowControls() {
 }
 
 function applyChartWindow(payload, options = {}) {
+    clearCryptoPeriodSnapshotCache();
     const visibleRange = options.preserveRange && chart ? chart.timeScale().getVisibleLogicalRange() : null;
     const previous = options.replace ? createEmptyChartWindowState() : chartWindowState;
     const previousFirstTime = previous.kline_data[0]?.time || null;
@@ -2919,12 +3221,29 @@ function applyChartWindow(payload, options = {}) {
     merged.window_end = options.replace
         ? payload.window_end
         : laterChartWindowTimestamp(previous.window_end, payload.window_end);
+    merged.history_start = options.replace
+        ? (payload.history_start || payload.window_start)
+        : earlierChartWindowTimestamp(previous.history_start, payload.history_start || payload.window_start);
+    merged.history_end = options.replace
+        ? (payload.history_end || payload.window_end)
+        : laterChartWindowTimestamp(previous.history_end, payload.history_end || payload.window_end);
+    merged.render_start = options.replace
+        ? (payload.render_start || payload.window_start)
+        : earlierChartWindowTimestamp(previous.render_start, payload.render_start || payload.window_start);
+    merged.render_end = options.replace
+        ? (payload.render_end || payload.window_end)
+        : laterChartWindowTimestamp(previous.render_end, payload.render_end || payload.window_end);
+    merged.has_earlier_render = payload.has_earlier_render ?? previous.has_earlier_render;
     if (!options.replace && options.direction === 'earlier') {
         merged.has_later = previous.has_later;
     }
     if (!options.replace && options.direction === 'later') {
         merged.has_earlier = previous.has_earlier;
     }
+    merged.extended_history = Boolean(
+        previous.extended_history
+        || (options.direction === 'earlier' && Array.isArray(payload.kline_data) && payload.kline_data.length > 0)
+    );
     chartWindowState = merged;
     if (currentTraining && !merged.read_only) {
         currentTraining.tradeMarkers = merged.trade_markers || [];
@@ -3155,6 +3474,120 @@ async function refreshTrainingView(options = {}) {
     await updateChipDistribution();
 }
 
+function applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory) {
+    applyIntradaySnapshot(snapshot, { fitContent: false });
+    currentTraining.period = nextPeriod;
+    const periodBars = snapshot.kline_data || [];
+    const renderedStart = latestRenderedKlineData[0]?.time ?? null;
+    const renderedEnd = latestRenderedKlineData[latestRenderedKlineData.length - 1]?.time ?? null;
+    const periodVolumes = Array.isArray(snapshot.volume_data) && snapshot.volume_data.length
+        ? snapshot.volume_data
+        : buildIntradayVolumeData(periodBars);
+    chartWindowState = {
+        ...chartWindowState,
+        period: nextPeriod,
+        window_start: snapshot.window_start || periodBars[0]?.time || periodBars[0]?.start_time || chartWindowState.window_start,
+        window_end: snapshot.window_end || periodBars[periodBars.length - 1]?.time || snapshot.current_time || chartWindowState.window_end,
+        history_start: snapshot.history_start || chartWindowState.history_start,
+        history_end: snapshot.history_end || chartWindowState.history_end,
+        render_start: snapshot.render_start || periodBars[0]?.time || periodBars[0]?.start_time || chartWindowState.render_start,
+        render_end: snapshot.render_end || periodBars[periodBars.length - 1]?.time || snapshot.current_time || chartWindowState.render_end,
+        has_earlier_render: snapshot.has_earlier_render ?? false,
+        has_earlier: snapshot.has_earlier ?? chartWindowState.has_earlier,
+        has_later: snapshot.has_later ?? chartWindowState.has_later,
+        extended_history: hadExtendedHistory,
+        kline_data: periodBars,
+        volume_data: periodVolumes,
+    };
+    const canRestoreRange = visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)
+        && visibleRange.from >= renderedStart && visibleRange.to <= renderedEnd;
+    requestAnimationFrame(() => {
+        if (canRestoreRange) setVisibleTimeRangeAll(visibleRange);
+        else setVisibleTimeRangeAll(null);
+    });
+}
+
+function isFineCryptoPeriod(period) {
+    return period === '5m' || period === '15m';
+}
+
+function cryptoVisibleTimeValue(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.floor(value);
+    const parsed = parseChartWindowTimestamp(value);
+    return parsed ? Math.floor(parsed.getTime() / 1000) : null;
+}
+
+function addFinePeriodVisibleWindow(requestBody, period, visibleRange) {
+    if (!isFineCryptoPeriod(period)) return requestBody;
+    const visibleStart = cryptoVisibleTimeValue(visibleRange?.from ?? chartWindowState.render_start);
+    const visibleEnd = cryptoVisibleTimeValue(visibleRange?.to ?? chartWindowState.render_end);
+    if (visibleStart !== null) requestBody.visible_start = visibleStart;
+    if (visibleEnd !== null) requestBody.visible_end = visibleEnd;
+    return requestBody;
+}
+
+function maybeLoadEarlierCryptoSegment(logicalRange) {
+    const leftEdgeThreshold = 300;
+    if (!isCryptoMode() || !isFineCryptoPeriod(currentPeriod) || !currentTraining?.id) return;
+    if (!chartWindowState.has_earlier_render || cryptoEarlierSegmentLoading) return;
+    if (!logicalRange || !Number.isFinite(logicalRange.from) || logicalRange.from > leftEdgeThreshold) return;
+    void loadEarlierCryptoSegment();
+}
+
+async function loadEarlierCryptoSegment() {
+    if (cryptoEarlierSegmentLoading || !currentTraining?.id || !isFineCryptoPeriod(currentPeriod)) return;
+    const visibleRange = chart?.timeScale().getVisibleLogicalRange?.() || null;
+    const renderStart = cryptoVisibleTimeValue(chartWindowState.render_start || chartWindowState.kline_data[0]?.time);
+    const historyStart = cryptoVisibleTimeValue(chartWindowState.history_start || chartWindowState.window_start);
+    if (renderStart === null || historyStart === null || historyStart >= renderStart) {
+        chartWindowState.has_earlier_render = false;
+        return;
+    }
+    cryptoEarlierSegmentLoading = true;
+    const requestGeneration = ++cryptoEarlierSegmentGeneration;
+    const requestedPeriod = currentPeriod;
+    clearCryptoPeriodSnapshotCache();
+    setChartWindowStatus('正在加载更早的 ' + formatIntradayPeriodBadge(requestedPeriod) + ' 数据...', 'loading');
+    try {
+        const response = await fetch(API_BASE + '/training/' + currentTraining.id + '/period', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                period: requestedPeriod,
+                compact_chart: true,
+                visible_start: historyStart,
+                visible_end: Math.max(historyStart, renderStart - 1),
+            }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || payload.message || `加载更早走势失败: ${response.status}`);
+        if (requestGeneration !== cryptoEarlierSegmentGeneration || currentPeriod !== requestedPeriod) return;
+        const snapshot = extractIntradaySnapshot(payload);
+        const segmentBars = snapshot?.kline_data || [];
+        const segmentVolumes = Array.isArray(snapshot?.volume_data) && snapshot.volume_data.length
+            ? snapshot.volume_data
+            : buildIntradayVolumeData(segmentBars);
+        applyChartWindow({
+            ...snapshot,
+            period: requestedPeriod,
+            window_start: snapshot.render_start || segmentBars[0]?.time,
+            window_end: snapshot.render_end || segmentBars[segmentBars.length - 1]?.time,
+            kline_data: segmentBars,
+            volume_data: segmentVolumes,
+        }, {
+            preserveRange: true,
+            direction: 'earlier',
+        });
+        if (visibleRange && segmentBars.length === 0) setVisibleRangeAll(visibleRange);
+        setChartWindowStatus(segmentBars.length ? '已加载更早走势。' : '没有更早的可用走势。', segmentBars.length ? 'success' : 'empty');
+    } catch (error) {
+        console.error('加载币圈细周期早期分段失败:', error);
+        setChartWindowStatus(error.message || '加载更早走势失败。', 'error');
+    } finally {
+        if (requestGeneration === cryptoEarlierSegmentGeneration) cryptoEarlierSegmentLoading = false;
+    }
+}
+
 async function switchCryptoViewPeriod(nextPeriod) {
     if (currentPeriod === nextPeriod && currentTraining?.id) {
         updatePeriodBadge(nextPeriod);
@@ -3164,21 +3597,48 @@ async function switchCryptoViewPeriod(nextPeriod) {
         updatePeriodBadge(nextPeriod);
         return;
     }
+    syncCryptoPeriodSnapshotCacheTraining(currentTraining.id);
     periodSwitchAbortController?.abort();
     periodSwitchAbortController = new AbortController();
     const requestGeneration = ++periodSwitchGeneration;
     const visibleRange = chart.timeScale().getVisibleRange?.() || null;
+    const requestBody = {
+        period: nextPeriod,
+        request_id: requestGeneration,
+        compact_chart: true,
+    };
+    if (isFineCryptoPeriod(nextPeriod)) {
+        const visibleStart = cryptoVisibleTimeValue(visibleRange?.from ?? chartWindowState.render_start);
+        const visibleEnd = cryptoVisibleTimeValue(visibleRange?.to ?? chartWindowState.render_end);
+        if (visibleStart !== null) requestBody.visible_start = visibleStart;
+        if (visibleEnd !== null) requestBody.visible_end = visibleEnd;
+    }
+    if (chartWindowState.extended_history) {
+        const loadedWindowStart = parseChartWindowTimestamp(chartWindowState.window_start);
+        const loadedWindowEnd = parseChartWindowTimestamp(chartWindowState.window_end);
+        if (loadedWindowStart) requestBody.range_start = Math.floor(loadedWindowStart.getTime() / 1000);
+        if (loadedWindowEnd) requestBody.range_end = Math.floor(loadedWindowEnd.getTime() / 1000);
+    }
+    const hadExtendedHistory = chartWindowState.extended_history;
+    const cacheKey = buildCryptoPeriodSnapshotCacheKey(
+        currentTraining.id,
+        nextPeriod,
+        getCryptoReplayCacheTime(),
+        chartWindowState,
+    );
+    const cachedSnapshot = getCryptoPeriodSnapshotCache(cacheKey);
+    if (cachedSnapshot) {
+        endPeriodSwitchFeedback();
+        applyCryptoPeriodSnapshot(cachedSnapshot, nextPeriod, visibleRange, hadExtendedHistory);
+        setChartWindowStatus('已从缓存切换到 ' + formatIntradayPeriodBadge(nextPeriod) + '。', 'success');
+        return;
+    }
     beginPeriodSwitchFeedback(nextPeriod);
     try {
         const response = await fetch(API_BASE + '/training/' + currentTraining.id + '/period', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                period: nextPeriod,
-                request_id: requestGeneration,
-                range_start: visibleRange?.from ?? null,
-                range_end: visibleRange?.to ?? null,
-            }),
+            body: JSON.stringify(requestBody),
             signal: periodSwitchAbortController.signal,
         });
         if (!response.ok) {
@@ -3188,25 +3648,8 @@ async function switchCryptoViewPeriod(nextPeriod) {
         const data = await response.json();
         if (requestGeneration !== periodSwitchGeneration) return;
         const snapshot = extractIntradaySnapshot(data);
-        applyIntradaySnapshot(snapshot, { fitContent: false });
-        currentTraining.period = nextPeriod;
-        const periodBars = snapshot.kline_data || [];
-        const renderedStart = latestRenderedKlineData[0]?.time ?? null;
-        const renderedEnd = latestRenderedKlineData[latestRenderedKlineData.length - 1]?.time ?? null;
-        chartWindowState = {
-            ...chartWindowState,
-            period: nextPeriod,
-            window_start: periodBars[0]?.time || periodBars[0]?.start_time || chartWindowState.window_start,
-            window_end: periodBars[periodBars.length - 1]?.time || snapshot.current_time || chartWindowState.window_end,
-            kline_data: periodBars,
-            volume_data: snapshot.volume_data || buildIntradayVolumeData(periodBars),
-        };
-        const canRestoreRange = visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)
-            && visibleRange.from >= renderedStart && visibleRange.to <= renderedEnd;
-        requestAnimationFrame(() => {
-            if (canRestoreRange) setVisibleTimeRangeAll(visibleRange);
-            else setVisibleTimeRangeAll(null);
-        });
+        setCryptoPeriodSnapshotCache(cacheKey, snapshot);
+        applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory);
         setChartWindowStatus('已切换到 ' + formatIntradayPeriodBadge(nextPeriod) + '。', 'success');
     } catch (error) {
         if (error?.name === 'AbortError') return;
@@ -3314,8 +3757,9 @@ async function startTraining() {
     const isRandomMode = document.querySelector('.tab-btn.active').dataset.tab === 'random';
     if (selectedTrainingMarketType === CRYPTO_MARKET_TYPE) {
         try {
-            return await startTrainingWithConfig(buildCryptoStartPayload(isRandomMode));
+            return await startCryptoTrainingWithHistoryPreparation(buildCryptoStartPayload(isRandomMode));
         } catch (error) {
+            if (error?.name === 'AbortError' || error?.cryptoHistoryHandled) return;
             alert(error.message || '币圈训练参数不完整');
             return;
         }
@@ -3356,6 +3800,7 @@ async function startTraining() {
 
 function startTrainingWithConfig(trainingConfig) {
     return (async () => {
+    clearCryptoPeriodSnapshotCache();
     const period = trainingConfig.period || 'daily';
     const dataSource = trainingConfig.data_source || 'akshare';
     try {
@@ -3375,6 +3820,7 @@ function startTrainingWithConfig(trainingConfig) {
         if (response.ok) {
             clearSessionDrawings();
             currentTraining = await response.json();
+            syncCryptoPeriodSnapshotCacheTraining(currentTraining.id);
             currentTraining.period = period;
             currentReportData = null;
             hideTrainingSetup();
@@ -3392,6 +3838,11 @@ function startTrainingWithConfig(trainingConfig) {
                     period: snapshot.active_period || period,
                     window_start: currentTraining.window_start || currentTraining.training_start,
                     window_end: currentTraining.window_end || snapshot.current_time,
+                    history_start: currentTraining.history_start || currentTraining.window_start || currentTraining.training_start,
+                    history_end: currentTraining.history_end || currentTraining.window_end || snapshot.current_time,
+                    render_start: currentTraining.render_start || currentTraining.window_start || currentTraining.training_start,
+                    render_end: currentTraining.render_end || currentTraining.window_end || snapshot.current_time,
+                    has_earlier_render: !!currentTraining.has_earlier_render,
                     training_start: currentTraining.training_start,
                     training_end: currentTraining.training_end,
                     has_earlier: !!currentTraining.has_earlier,
@@ -3645,6 +4096,7 @@ function initializeChart() {
         if (timeRange) { // 增加一个 null 检查
             volumeChart.timeScale().setVisibleLogicalRange(timeRange);
             indicatorChart.timeScale().setVisibleLogicalRange(timeRange);
+            maybeLoadEarlierCryptoSegment(timeRange);
         }
         scheduleChipDistributionRender();
     });
@@ -4294,6 +4746,7 @@ function updatePlaybackSpeed() {
 
 function applyCryptoNextDelta(delta) {
     if (!delta) return;
+    clearCryptoPeriodSnapshotCache();
     if (delta.refresh_snapshot) {
         applyActiveSnapshotToChartWindow(delta.refresh_snapshot);
     } else {
@@ -4346,6 +4799,7 @@ async function nextCryptoBar() {
         const payload = await response.json().catch(() => ({}));
         if (response.status === 409 && payload.code === 'advance_in_progress') return false;
         if (!response.ok) throw new Error(payload.error || '获取下一根 K 线失败');
+        clearCryptoPeriodSnapshotCache();
         applyCryptoNextDelta(payload.delta);
         if (previousLogicalRange !== null) setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
         if (payload.finished) {
@@ -6032,6 +6486,7 @@ async function endTraining() {
             const report = await response.json();
             pausePlayback();
             clearSessionDrawings();
+            clearCryptoPeriodSnapshotCache();
             showReport(report);
         } else {
             const error = await response.json();
@@ -6056,6 +6511,7 @@ async function resetTraining() {
         if (response.ok) {
             pausePlayback();
             clearSessionDrawings();
+            clearCryptoPeriodSnapshotCache();
 
             // === intraday_30m 分支: reset 返回的 snapshot 位于 response.snapshot，
             // 重置后重新渲染并同步 active_period ===

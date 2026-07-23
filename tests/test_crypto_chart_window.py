@@ -28,6 +28,15 @@ class Service:
         visible = frame().loc[(frame()["timestamp"] >= pd.Timestamp(start)) & (frame()["timestamp"] <= pd.Timestamp(end))].reset_index(drop=True)
         return SimpleNamespace(source=source or "binance", trade_bars=visible)
 
+class ChartOnlyService(Service):
+    def get_chart_bars(self, symbol, start, end, *, source=None):
+        self.calls.append((symbol, start, end, source))
+        visible = frame().loc[(frame()["timestamp"] >= pd.Timestamp(start)) & (frame()["timestamp"] <= pd.Timestamp(end))].reset_index(drop=True)
+        return source or "binance", visible
+
+    def get_bundle(self, *args, **kwargs):
+        raise AssertionError("chart windows must not load the full trading bundle")
+
 class CryptoChartWindowTests(unittest.TestCase):
     def test_non_aligned_ranges_fetch_from_containing_period_bucket(self):
         cases = {
@@ -65,6 +74,19 @@ class CryptoChartWindowTests(unittest.TestCase):
         self.assertTrue(result.read_only)
         self.assertEqual(payload["source"], "binance")
         self.assertEqual(len(payload["kline_data"]), 9)
+
+    def test_chart_window_uses_trade_only_loader(self):
+        service = ChartOnlyService()
+
+        result = CryptoChartWindowService(service).load(
+            symbol="BTCUSDT", source="binance", period="15m",
+            range_start=START, range_end=START + timedelta(minutes=40),
+            current_time=START + timedelta(minutes=40), read_only=False,
+        )
+
+        self.assertEqual(result.source, "binance")
+        self.assertEqual(len(service.calls), 1)
+        self.assertTrue(result.base_bars.attrs.get("crypto_base_bars_normalized"))
 
 if __name__ == "__main__":
     unittest.main()

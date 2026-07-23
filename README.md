@@ -1,147 +1,174 @@
- ![top_pic](https://github.com/user-attachments/assets/9da63388-b17e-4235-a691-0e15c03c4fd3)
+![KLinePlayground](https://github.com/user-attachments/assets/9da63388-b17e-4235-a691-0e15c03c4fd3)
 
-# A股K线复盘训练 - PyWebView桌面版
+# KLinePlayground
 
-[![支持与服务](https://img.shields.io/badge/Support%20%26%20Services-联系作者-blue?style=for-the-badge )](https://github.com/fat7/KLinePlayground#%E2%9A%99%EF%B8%8F-%E6%94%AF%E6%8C%81%E4%B8%8E%E6%9C%8D%E5%8A%A1 )
+面向个人投资者的本地 K 线复盘与模拟交易训练工具，支持 **A 股**和 **币圈 USDT 永续合约**。项目以历史行情回放为核心，提供多周期 K 线、模拟订单、画线分析、账户与仓位管理、训练报告，以及可选的 AI 复盘能力。
 
-一款专为A股投资者设计的专业级K线复盘与模拟交易训练工具。深度模拟真实交易环境，支持动态复权、多维度技术指标及AI辅助点评。
+> 本项目只用于学习、研究和交易训练，不构成投资建议，也不会连接真实交易账户自动下单。
 
-## 🌟 核心亮点
-### AI 介入测试与智能助理 (`ai_assistant_tester.py`)
-首创 AI 介入模式。通过独立的 AI 策略测试器，您可以：
-- 接入 AI 模型（如 GPT-4）进行实时行情分析。
-- 自动化执行买入、卖出及观望操作。
-- 零代码测试您的量化逻辑，或与 AI 共同完成实盘模拟。
+## 功能概览
 
----
+### A 股复盘
 
-## 🚀 最新功能
+- 指定股票和盲盒随机训练模式。
+- 支持 30 分钟、4 小时、日线和周线等复盘周期。
+- 模拟 T+1、涨跌停、交易费用、持仓和可用资金。
+- 支持市价、限价、突破、止盈和止损等训练操作。
+- 支持 AKShare、BaoStock、mootdx 等数据能力；具体可用性取决于本机环境和数据覆盖。
+- 自动生成训练记录、交易明细、收益、胜率和复盘报告。
 
-- **AI 智能策略**: 把软件交给AI大模型，让TA来执行你的策略/扮演设定的角色自动进行交易，探索更多策略。
-- **AI 复盘点评**: 训练结束后一键生成 AI 点评，获取深度盘后分析建议。
-- **专业级图表**: 删掉了大家反馈的MA标签遮挡。
-- **自定义 MA 周期**: 支持增删改查最多 6 条均线（如 MA5, MA10, MA20, MA60, MA120, MA250），颜色自动配色。
-- **离线数据接入**: 支持使用离线数据，告别网络接口的不稳定。
+### 币圈永续合约复盘
 
+- 支持 Binance、Bybit 的 USDT 永续合约数据，常用训练标的包括 `BTCUSDT`、`ETHUSDT`。
+- 支持 `5m`、`15m`、`30m`、`1h`、`4h`、日线和周线七个周期。
+- 新建训练默认准备训练起点之前 **2 年**历史数据，可选择 `2–5` 年。
+- 缺失行情按自然月自动下载，并保存到本地月度离线缓存；同一训练不会混用不同交易所数据。
+- 5m 和 15m 使用每段最多 12,000 根 K 线的分段加载，向左浏览时自动补充更早历史。
+- 支持逐根推进和自动播放；1h/4h 推进会按顺序处理全部底层 5m K 线。
+- 支持逐仓杠杆、可配置 Maker/Taker 手续费、市价单、限价单、突破单、止盈止损和挂单撤销。
+- 服务重启后可从本地数据库和离线缓存恢复活动训练状态。
 
-## ✨ 主要功能
-*   **AI 智能策略**: 把软件交给AI大模型，让TA来执行你的策略/扮演设定的角色自动进行交易，探索更多策略。
-*   **专业级图表**: 基于 TradingView Lightweight Charts，支持缩放、十字线同步及多维数据展示。
-*   **全能指标库**: 集成 MACD、KDJ、RSI、BOLL 等核心技术指标，支持主附图自由切换。
-*   **AI 复盘点评**: 训练结束后一键生成 AI 点评，获取深度盘后分析建议。
-*   **多用户系统**: 支持创建和切换多个用户，每个用户的训练数据和交易设置都独立保存。
-*   **两种训练模式**:
-    *   **指定模式**: 用户可以自行选择任意A股代码和起始日期进行训练。
-    *   **盲盒模式**: 系统随机抽取一只股票和起始时间，用于无偏见的“盲抽”式训练。
-*   **高度仿真的交易环境**:
-    *   **动态复权**: 支持不复权、前复权、后复权和**动态前复权**，确保价格的连续性和真实性。
-    *   **成本计算**: 精确模拟交易佣金（可设置费率和最低佣金）和印花税。
-    *   **T+1 规则**: 模拟A股市场的T+1交易制度，当日买入的股票次日才能卖出。
-*   **丰富的图表与指标**:
-    *   **专业K线图**: 使用 `Lightweight Charts` 渲染，性能优异，交互流畅。
-    *   **技术指标**: 内置 `MACD`, `KDJ`, `RSI`, `BOLL` 等常用技术指标，并可在图表上动态切换。
-    *   **自定义 MA 周期**: 支持增删改查最多 6 条均线（如 MA5, MA10, MA20, MA60, MA120, MA250），颜色自动配色。
-    *   **交易标记**: 买卖点会在K线上自动标记，方便复盘。
-*   **完善的复盘与统计**:
-    *   **实时账户更新**: 总资产、可用资金、持仓市值、浮动盈亏等信息实时更新。
-    *   **详细复盘报告**: 每局训练结束后，自动生成包含总收益率、交易明细、胜率等关键指标的复盘报告。
-    *   **用户数据统计**: 自动追踪和展示用户的累计收益、总训练次数、局胜率等长期表现数据。
-*   **高效的交互体验**:
-    *   **回放控制**: 支持手动“下一根K线”或设置不同速度的自动播放。
-    *   **键盘快捷键**: 支持使用 `B/S`、`空格`、`数字键` 等快捷键进行快速买卖和播放控制。
-    *   **跨平台桌面应用**: 基于 `PyWebView`，可打包成Windows、macOS或Linux原生桌面应用，无需浏览器。
+### 图表与画线
 
+- 基于 TradingView Lightweight Charts 的 K 线、成交量和技术指标视图。
+- 支持 MACD、KDJ、RSI、BOLL 和自定义均线。
+- 支持趋势线、水平线、射线、矩形、文本、斐波那契、量尺、做多和做空风险收益框。
+- 绘图支持拖动预览、时间/价格磁吸、跨周期投影和锚点交互。
+- 绘图只保留在当前训练运行态；结束、重置或新建训练后自动清除。
+- 币圈工作区支持明暗主题、图表全屏、成交量/指标折叠和可调整交易台。
 
-这是一个基于 `PyWebView`、`Flask` 和 `Lightweight Charts` 构建的A股K线复盘训练桌面应用。它允许用户在真实的历史行情数据上进行模拟交易，以训练和提升自己的盘感、策略和决策能力。
+### 用户与复盘
 
-该应用将Python后端（数据处理、交易逻辑）与现代Web前端（图表展示、用户交互）相结合，提供了一个功能丰富、响应迅速的本地化训练环境。
- ![show_pic_1](https://github.com/user-attachments/assets/e516c90f-9312-4811-991f-f0852a7dff58)
- ![show_pic_2](https://github.com/user-attachments/assets/ef5286a0-8ebc-4c73-81ff-9b518a4b3fea)
- ![show_pic_3](https://github.com/user-attachments/assets/7910546f-ffba-4213-a6ef-89793450dee5)
- ![show_pic_4](https://github.com/user-attachments/assets/ef25345c-284c-47e7-91c0-dde613922065)
- ![show_pic_5](https://github.com/user-attachments/assets/68b91828-df3b-44fc-a932-86c0c08eae0e)
- ![show_pic_6](https://github.com/user-attachments/assets/80865a69-40a2-4acc-b9e7-3cdf92fe5a75)
+- 多用户数据隔离。
+- 保存账户、仓位、订单、成交、手续费、交易理由和训练报告。
+- 可选 AI 复盘与策略测试；需要用户自行配置兼容的模型 API。
 
----
+## 快速开始
 
-## 🛠️ 技术栈
+### Windows 一键启动
 
-*   **桌面应用框架**: `PyWebView` - 用于将Web前端打包成原生GUI应用。
-*   **后端**: `Flask` - 提供API接口，处理数据请求和交易逻辑。
-*   **前端**:
-    *   `HTML5` / `CSS3` / `JavaScript (ES6+)`
-    *   `Lightweight Charts™` - 用于高性能的金融图表绘制。
-*   **数据处理**: `Pandas`, `Numpy` - 用于高效处理和计算K线数据。
-*   **数据源**: `Akshare` - 用于获取A股历史行情数据。
-*   **数据存储**: `SQLite` - 用于存储每个用户的交易历史、设置和统计数据。
-*   **AI 集成**: OpenAI API / 本地 API 桥接
----
+1. 安装 Python 3.11 或 3.12。
+2. 双击根目录的 `启动项目.bat`。
+3. 首次运行会自动创建 `.venv` 并安装 `requirements.txt`。
+4. 浏览器会自动打开本地地址。
 
-## 📦 安装与启动
+启动脚本依次尝试端口 `8000`、`5000`、`5050`，并绑定到 `0.0.0.0`，方便同一局域网内访问。
 
-### 环境准备
-```bash
-pip install -r requirements.txt
+### 手动启动
+
+```powershell
+cd E:\Desktop\01_TODO\mimo\KLinePlayground
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+
+python -m flask --app backend.app_enhanced run --host 0.0.0.0 --port 8000
 ```
 
-### 运行程序
-1. **桌面客户端 (推荐)**:
-   ```bash
-   python webview_app/main_pywebview.py
-   ```
-2. **AI 介入测试器**:
-   ```bash
-   python ai_assistant_tester.py
-   ```
-3. **Web 服务版 (CLI模式)**:
-   ```bash
-   python main_enhanced.py
-   ```
+本机访问：
 
----
+```text
+http://127.0.0.1:8000/
+```
+
+健康检查：
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+## 局域网访问
+
+服务启动后，查找当前电脑的 IPv4 地址：
+
+```powershell
+ipconfig
+```
+
+其他设备使用下面的格式访问：
+
+```text
+http://你的IPv4地址:8000/
+```
+
+例如：
+
+```text
+http://192.168.1.24:8000/
+```
+
+如果可以 `ping` 通但网页无法打开，请检查：
+
+- Flask 是否监听 `0.0.0.0:8000`，而不是只监听 `127.0.0.1`。
+- Windows 防火墙是否允许当前 Python 程序或 TCP 8000 入站。
+- 浏览器或系统代理是否错误代理了局域网地址。
+- 路由器是否启用了 AP 隔离或访客网络隔离。
+
+## 数据与隐私
+
+- 用户数据默认保存在本机 `users/`。
+- 离线行情保存在本机 `data/`，币圈行情按数据源、合约、月份保存为压缩文件。
+- `.runtime/`、本地用户、凭据和离线行情不应提交到 Git。
+- 币圈历史准备任务只在内存中保留有限时间；已经下载的月度缓存可以重复使用。
+- 训练图表只能看到当前回放时间及以前的数据，不会展示未来行情。
+
+## 测试与质量检查
+
+安装依赖后可执行：
+
+```powershell
+node --check frontend/js/main_enhanced.js
+python -m compileall -q backend
+python -m pytest -q
+git diff --check
+```
+
+截至 2026 年 7 月 22 日，当前开发工作区完整测试基线为：
+
+```text
+717 passed, 71 subtests passed
+```
+
+## 项目结构
 
 | 路径 | 说明 |
-| :--- | :--- |
-| `webview_app/` | 桌面版核心程序入口 |
-| `ai_assistant_tester.py` | AI 介入与策略测试工具 |
-| `backend/` | 包含 `app_enhanced.py` 等所有核心逻辑 |
-| `frontend/` | 包含 `index_enhanced.html` 及其 JS/CSS 资源 |
-| `main_enhanced.py` | CLI/Web 模式启动入口 |
-| `requirements.txt` | 环境依赖列表 |
+| --- | --- |
+| `backend/app_enhanced.py` | Flask 主入口、训练 API 和运行态集成 |
+| `backend/crypto/` | 币圈数据源、缓存、聚合、回放、订单和持久化 |
+| `backend/intraday/` | A 股分钟级行情、聚合和回放能力 |
+| `frontend/` | 页面、样式、图表、交易台和前端交互 |
+| `tests/` | 后端、前端静态契约、交易规则和回归测试 |
+| `.agent/` | 项目状态、架构说明、任务包、质量门禁和交接记录 |
+| `AI_TAKEOVER.md` | 新 AI 接手项目的低上下文入口 |
+| `启动项目.bat` | Windows 一键安装依赖并启动服务 |
+| `requirements.txt` | 本地 Python 依赖 |
+| `vercel.json` | Vercel 部署配置 |
 
+## AI 协作与项目接手
 
-## 📜 开源许可
+项目包含文件化的 AI 协作控制面，不需要依赖长聊天记录恢复上下文。
 
-本项目采用 [MIT License](LICENSE) 开源。
+- 接手入口：[`AI_TAKEOVER.md`](AI_TAKEOVER.md)
+- 主 Agent 提示词：[`.agent/prompts/MAIN_AGENT_PROMPT.md`](.agent/prompts/MAIN_AGENT_PROMPT.md)
+- WorkBuddy 任务模板：[`.agent/prompts/WORKBUDDY_TASK_PROMPT.md`](.agent/prompts/WORKBUDDY_TASK_PROMPT.md)
+- 当前状态：[`.agent/STATE.md`](.agent/STATE.md)
+- 质量门禁：[`.agent/QUALITY_GATES.md`](.agent/QUALITY_GATES.md)
 
-## ⚙️ 支持与服务
+新 AI 接手时必须保护现有未提交改动，并避免处理 `.runtime/`、用户数据、凭据和离线行情。
 
-本项目是一个开源软件，作者投入了大量时间和精力进行开发和维护。如果您觉得这个项目对您有帮助，可以通过以下方式支持作者：
+## 部署说明
 
-### 接受赞赏 (Sponsor)
+本地 Windows 运行是完整功能的推荐方式，因为币圈多年行情和用户训练状态需要可持续的本地存储。
 
-您的支持是作者持续更新和改进项目的最大动力！欢迎通过支付宝或微信扫码赞赏。
+仓库包含 Vercel 配置，但无状态 Serverless 环境不适合直接保存大量离线行情。若部署到 Vercel，需要额外配置持久化用户存储、认证和外部行情数据策略；本地 `.runtime/`、`users/` 和 `data/` 不会自动同步到云端。
 
-| 支付宝 (Alipay) | 微信支付 (WeChat Pay) |
-| :---: | :---: |
-| <img src="https://github.com/user-attachments/assets/f7fa53b8-cdb1-4a0c-9677-ce5d0c60c1a7" alt="Alipay QR Code" width="180"> | <img src="https://github.com/user-attachments/assets/955c873f-de30-4496-ac16-9f0b3c2c39c8" alt="WeChat Pay QR Code" width="180"> |
+## 许可证与来源
 
-### 离线数据包领取&技术讨论
-| wx群聊 | 小红书群聊 |
-| :---: | :---: |
-| <img src="df86d68b25b48d2e20724524f69251da.jpg" alt="WX QR Code" width="180"> | |
+项目使用 [MIT License](LICENSE)。本仓库基于原始 [KLinePlayground](https://github.com/fat7/KLinePlayground) 项目持续扩展，请同时遵守原项目许可证和第三方数据源的使用条款。
 
-### 商业服务 (Commercial Services)
+## 免责声明
 
-除了开源版本外，本人（作者）也可以提供一系列付费的商业服务，以满足个人、团队或企业的深度需求。如果您有以下任何需求，欢迎通过 [GitHub Issues](https://github.com/fat7/KLinePlayground/issues) 或其他联系方式与我取得联系：
+本项目仅用于学习、研究和历史行情训练。行情数据可能存在延迟、缺失或来源差异，模拟结果不代表真实交易表现。
 
-*   **技术支持服务**: 为您在使用过程中遇到的问题提供优先级的技术支持和解决方案。
-*   **定制化开发**: 根据您的具体需求，对软件进行功能定制、添加新指标、对接特定数据源或API等。
-*   **企业内训**: 为您的团队提供关于项目架构、量化交易基础、代码实现等方面的培训。
-*   **咨询服务**: 提供与项目相关的技术选型、架构设计、策略实现等方面的专业咨询。
----
-
-## 📜 许可证与免责声明
-
-本项目仅供学习和投研交流使用，不构成任何投资建议。如需商用请联系作者。
-**投资有风险，入市需谨慎。**
+**投资有风险，交易需谨慎。**

@@ -50,6 +50,7 @@ class UserManagerEnhanced:
                     'default_initial_capital': 100000, # 默认初始资金
                     'ma_periods': [5, 10, 20], # 默认MA周期
                     'theme': 'light',
+                    'crypto_theme': 'dark',
                     'default_period': 'daily'
                 },
                 'preferences': {

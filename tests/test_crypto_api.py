@@ -8,7 +8,8 @@ import pandas as pd
 from flask import jsonify
 
 import backend.app_enhanced as app_module
-from backend.crypto.models import CryptoInstrument
+from backend.crypto.models import CryptoInstrument, CryptoRange
+from backend.crypto.session import CryptoReplaySession
 
 
 class _FakeInstrument:
@@ -34,9 +35,10 @@ class _FakeUniverse:
 
 class _FakeCryptoSession:
     def __init__(self, bars, **kwargs):
+        self.base_bars = bars
         self.kwargs = kwargs
 
-    def snapshot(self):
+    def snapshot(self, **kwargs):
         return {
             "current_time": "2025-01-01 00:00:00",
             "kline_data": [],
@@ -48,9 +50,13 @@ class _FakePeriodSession:
     def __init__(self):
         self.period = "5m"
         self.max_bars = None
+        self.range_start = None
+        self.range_end = None
 
     def snapshot(self, *, max_bars=None, range_start=None, range_end=None):
         self.max_bars = max_bars
+        self.range_start = range_start
+        self.range_end = range_end
         return {
             "market_type": "crypto_perpetual",
             "data_mode": "crypto_5m",
@@ -222,7 +228,10 @@ class CryptoAPITests(unittest.TestCase):
         self.assertIn("crypto", response.get_json()["error"].lower())
 
     def test_specified_crypto_start_allows_service_source_fallback(self):
-        service = SimpleNamespace(get_bundle=lambda *args, **kwargs: _bundle("bybit"))
+        service = SimpleNamespace(
+            get_bundle=lambda *args, **kwargs: _bundle("bybit"),
+            prepare_chart_bars=lambda symbol, start, end, **kwargs: ("bybit", _bundle("bybit").trade_bars),
+        )
         with self.client.application.test_request_context():
             with patch.object(app_module, "_get_crypto_universe", side_effect=AssertionError("specified start must not refresh the universe")), \
                     patch.object(app_module, "_get_crypto_data_service", return_value=service), \
@@ -236,7 +245,7 @@ class CryptoAPITests(unittest.TestCase):
                     period="5m",
                     initial_capital=10000,
                     training_id="fallback-test",
-                    payload={"symbol": "BTC", "start_time": "2025-01-01T00:00:00Z"},
+                    payload={"symbol": "BTC", "start_time": "2025-01-01T00:00:00Z", "history_years": 2},
                     max_training_days=1,
                 )
         self.assertEqual(response.get_json()["source"], "bybit")
@@ -263,9 +272,15 @@ class CryptoAPITests(unittest.TestCase):
                 raise ValueError("unusable range")
             return _bundle("binance")
 
+        def prepare_chart_bars(symbol, start, end, **kwargs):
+            return "binance", _bundle("binance").trade_bars
+
         with self.client.application.test_request_context():
             with patch.object(app_module, "_get_crypto_universe", return_value=universe), \
-                    patch.object(app_module, "_get_crypto_data_service", return_value=SimpleNamespace(get_bundle=get_bundle)), \
+                    patch.object(app_module, "_get_crypto_data_service", return_value=SimpleNamespace(
+                        get_bundle=get_bundle,
+                        prepare_chart_bars=prepare_chart_bars,
+                    )), \
                     patch.object(app_module, "_random_crypto_timestamp", return_value=datetime(2025, 1, 1, tzinfo=timezone.utc)), \
                     patch.object(app_module, "_initialize_crypto_futures"), \
                     patch.object(app_module.user_manager, "start_training_session", return_value=True), \
@@ -276,7 +291,7 @@ class CryptoAPITests(unittest.TestCase):
                     period="5m",
                     initial_capital=10000,
                     training_id="retry-test",
-                    payload={"date_start": "2025-01-01", "date_end": "2025-02-01"},
+                    payload={"date_start": "2025-01-01", "date_end": "2025-02-01", "history_years": 2},
                     max_training_days=1,
                 )
         self.assertEqual(attempts, ["BADUSDT", "BTCUSDT"])
@@ -315,6 +330,254 @@ class CryptoAPITests(unittest.TestCase):
         finally:
             app_module.active_trainings.pop(training_id, None)
 
+    def test_crypto_period_switch_preserves_explicit_loaded_window(self):
+        training_id = "period-window-test"
+        session = _FakePeriodSession()
+        app_module.active_trainings[training_id] = {
+            "id": training_id,
+            "user": "tester",
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "period": "5m",
+            "crypto_session": session,
+        }
+        try:
+            with patch.object(app_module, "_persist_crypto_period"):
+                response = self.client.post(
+                    f"/api/training/{training_id}/period",
+                    json={
+                        "period": "15m",
+                        "range_start": datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp(),
+                        "range_end": datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp(),
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.get_json())
+            self.assertIsNone(session.max_bars)
+        finally:
+            app_module.active_trainings.pop(training_id, None)
+    def test_loaded_crypto_chart_window_is_remembered_for_period_switch(self):
+        training_id = "remembered-window-test"
+        session = _FakePeriodSession()
+        training = {
+            "id": training_id,
+            "user": "tester",
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "period": "daily",
+            "crypto_session": session,
+            "symbol": "BTCUSDT",
+            "source": "binance",
+            "training_start": "2025-01-01 00:00:00",
+            "training_end": "2025-12-31 00:00:00",
+            "trade_markers": [],
+        }
+        app_module.active_trainings[training_id] = training
+        remembered_start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        current_time = datetime(2025, 7, 22, 23, 55, tzinfo=timezone.utc)
+        result = SimpleNamespace(
+            window_start=remembered_start,
+            window_end=current_time,
+            has_earlier=False,
+            to_dict=lambda: {
+                "source": "binance",
+                "symbol": "BTCUSDT",
+                "period": "daily",
+                "window_start": "2024-01-01 00:00:00",
+                "window_end": "2025-07-22 23:55:00",
+                "kline_data": [],
+                "volume_data": [],
+                "has_earlier": False,
+                "has_later": False,
+                "read_only": False,
+            },
+        )
+        service = SimpleNamespace(load=lambda **kwargs: result)
+        try:
+            with patch("backend.crypto.chart_window.CryptoChartWindowService", return_value=service):
+                loaded = self.client.get(
+                    f"/api/training/{training_id}/chart-window"
+                    "?period=daily&range_start=2024-01-01T00:00:00Z"
+                    "&range_end=2025-07-22T23:55:00Z"
+                )
+            self.assertEqual(loaded.status_code, 200, loaded.get_json())
+
+            with patch.object(app_module, "_persist_crypto_period"):
+                switched = self.client.post(
+                    f"/api/training/{training_id}/period",
+                    json={"period": "4h"},
+                )
+
+            self.assertEqual(switched.status_code, 200, switched.get_json())
+            self.assertEqual(session.max_bars, app_module.CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT)
+            self.assertIsNone(session.range_start)
+            self.assertIsNone(session.range_end)
+        finally:
+            app_module.active_trainings.pop(training_id, None)
+    def test_period_switch_uses_offline_window_beyond_session_context(self):
+        training_id = "extended-period-window-test"
+        old_start = datetime(2024, 6, 22, tzinfo=timezone.utc)
+        session_start = datetime(2025, 6, 22, tzinfo=timezone.utc)
+        recent_times = pd.date_range(session_start, periods=30 * 24 * 12 + 1, freq="5min", tz="UTC")
+        old_times = pd.date_range(old_start, periods=12, freq="5min", tz="UTC")
+        future_time = recent_times[-1] + pd.Timedelta(minutes=5)
+
+        def bars(times):
+            return pd.DataFrame([
+                {
+                    "timestamp": timestamp,
+                    "open": 100 + index,
+                    "high": 102 + index,
+                    "low": 99 + index,
+                    "close": 101 + index,
+                    "volume": 10 + index,
+                    "turnover": 1000 + index,
+                }
+                for index, timestamp in enumerate(times)
+            ])
+
+        session_bars = bars(recent_times)
+        cached_bars = pd.concat([
+            bars(old_times),
+            session_bars,
+            bars(pd.DatetimeIndex([future_time])),
+        ], ignore_index=True)
+        current_time = recent_times[-1].to_pydatetime()
+        session = CryptoReplaySession(
+            session_bars,
+            initial_time=current_time,
+            symbol="BTCUSDT",
+            source="binance",
+            active_period="daily",
+        )
+
+        class Cache:
+            def coverage(self, source, symbol, kind):
+                return CryptoRange(old_start, future_time.to_pydatetime())
+
+        class DataService:
+            cache = Cache()
+
+            def __init__(self):
+                self.chart_load_calls = 0
+
+            def get_chart_bars(self, symbol, start, end, *, source=None):
+                self.chart_load_calls += 1
+                visible = cached_bars.loc[
+                    (cached_bars["timestamp"] >= pd.Timestamp(start))
+                    & (cached_bars["timestamp"] <= pd.Timestamp(end))
+                ].reset_index(drop=True)
+                return source or "binance", visible
+
+        training = {
+            "id": training_id,
+            "user": "tester",
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "period": "daily",
+            "crypto_session": session,
+            "symbol": "BTCUSDT",
+            "source": "binance",
+            "training_start": session_start.strftime("%Y-%m-%d %H:%M:%S"),
+            "training_end": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "trade_markers": [],
+        }
+        app_module.active_trainings[training_id] = training
+        data_service = DataService()
+        try:
+            with patch.object(app_module, "_get_crypto_data_service", return_value=data_service):
+                loaded = self.client.get(
+                    f"/api/training/{training_id}/chart-window"
+                    f"?period=daily&range_start={old_start.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                    f"&range_end={current_time.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                )
+                self.assertEqual(loaded.status_code, 200, loaded.get_json())
+                with patch.object(app_module, "_persist_crypto_period"):
+                    for request_id, period in enumerate(("4h", "1h", "15m"), start=1):
+                        switched = self.client.post(
+                            f"/api/training/{training_id}/period",
+                            json={"period": period, "request_id": request_id, "compact_chart": True},
+                        )
+                        payload = switched.get_json()
+                        self.assertEqual(switched.status_code, 200, payload)
+                        self.assertEqual(payload["active_period"], period)
+                        self.assertEqual(payload["current_time"], current_time.strftime("%Y-%m-%d %H:%M:%S"))
+                        self.assertEqual(payload["window_start"], old_start.strftime("%Y-%m-%d %H:%M:%S"))
+                        if period in app_module.CRYPTO_FINE_PERIOD_SECONDS:
+                            self.assertTrue(payload["has_earlier_render"])
+                            self.assertGreater(payload["render_start"], payload["history_start"])
+                        else:
+                            self.assertTrue(payload["kline_data"][0]["time"].startswith("2024-06-22"))
+                        self.assertLessEqual(payload["kline_data"][-1]["time"], payload["current_time"])
+                        self.assertEqual(
+                            set(payload["kline_data"][0]),
+                            {"time", "open", "high", "low", "close", "volume"},
+                        )
+                        self.assertEqual(payload["volume_data"], [])
+                self.assertEqual(data_service.chart_load_calls, 1)
+                self.assertIn("_crypto_chart_base_frame", training)
+        finally:
+            app_module.active_trainings.pop(training_id, None)
+
+    def test_period_switch_repairs_missing_session_tail_before_aggregation(self):
+        training_id = "repair-session-tail-test"
+        current_time = datetime(2025, 1, 1, 0, 55, tzinfo=timezone.utc)
+        session_bars = pd.DataFrame([
+            {
+                "timestamp": datetime(2025, 1, 1, 0, minute, tzinfo=timezone.utc),
+                "open": 100 + index,
+                "high": 102 + index,
+                "low": 99 + index,
+                "close": 101 + index,
+                "volume": 10,
+                "turnover": 1000,
+            }
+            for index, minute in enumerate(range(0, 60, 5))
+        ])
+        session = CryptoReplaySession(
+            session_bars,
+            initial_time=current_time,
+            symbol="BTCUSDT",
+            source="binance",
+            active_period="1h",
+        )
+
+        class Cache:
+            def coverage(self, source, symbol, kind):
+                return CryptoRange(session_bars.iloc[0]["timestamp"].to_pydatetime(), current_time)
+
+        training = {
+            "id": training_id,
+            "user": "tester",
+            "market_type": "crypto_perpetual",
+            "data_mode": "crypto_5m",
+            "period": "1h",
+            "crypto_session": session,
+            "symbol": "BTCUSDT",
+            "source": "binance",
+            "training_start": "2025-01-01 00:00:00",
+            "training_end": "2025-01-02 00:00:00",
+            "trade_markers": [],
+            "_crypto_chart_window_start": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            "_crypto_chart_window_end": current_time,
+            "_crypto_chart_base_frame": session_bars.iloc[[0, -1]].copy(),
+        }
+        app_module.active_trainings[training_id] = training
+        try:
+            with patch.object(app_module, "_get_crypto_data_service", return_value=SimpleNamespace(cache=Cache())), \
+                    patch.object(app_module, "_persist_crypto_period"):
+                response = self.client.post(
+                    f"/api/training/{training_id}/period",
+                    json={"period": "1h", "request_id": 1},
+                )
+
+            self.assertEqual(response.status_code, 200, response.get_json())
+            payload = response.get_json()
+            self.assertEqual(payload["kline_data"][-1]["source_bar_count"], 12)
+            self.assertTrue(payload["kline_data"][-1]["complete"])
+            self.assertEqual(len(training["_crypto_chart_base_frame"]), 12)
+        finally:
+            app_module.active_trainings.pop(training_id, None)
     def test_completed_crypto_history_uses_crypto_chart_window(self):
         report = {
             "market_type": "crypto_perpetual",

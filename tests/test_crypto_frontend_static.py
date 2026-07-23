@@ -17,12 +17,57 @@ class CryptoFrontendStaticTests(unittest.TestCase):
         cls.css = CSS_PATH.read_text(encoding="utf-8")
         cls.js = JS_PATH.read_text(encoding="utf-8")
 
+    def test_crypto_workspace_has_independent_theme_toggle(self):
+        self.assertIn('id="crypto-theme-toggle-btn"', self.html)
+        self.assertIn('aria-label="切换币圈明暗主题"', self.html)
+        self.assertIn("let currentCryptoTheme", self.js)
+        self.assertIn("function applyCryptoTheme", self.js)
+        self.assertIn("function toggleCryptoTheme", self.js)
+        self.assertIn("cryptoUiTheme", self.js)
+        self.assertIn("crypto_theme", self.js)
+        self.assertIn("☀", self.js)
+        self.assertIn("☾", self.js)
+        self.assertIn('[data-crypto-theme="light"]', self.css)
+        self.assertIn('[data-crypto-theme="dark"]', self.css)
+
+    def test_crypto_theme_is_independent_from_global_a_share_theme(self):
+        start = self.js.index("function applyCryptoTheme")
+        end = self.js.index("\nfunction ", start + 1)
+        source = self.js[start:end]
+        self.assertIn("dataset.cryptoTheme", source)
+        self.assertNotIn("document.body.dataset.theme", source)
+        self.assertIn("crypto_theme", source)
     def test_setup_has_explicit_market_selector(self):
         self.assertIn('data-market-type="a_share"', self.html)
         self.assertIn('data-market-type="crypto_perpetual"', self.html)
         self.assertIn('id="crypto-market-fields"', self.html)
         self.assertIn('id="crypto-symbol-search"', self.html)
         self.assertIn('id="crypto-symbol-results"', self.html)
+
+    def test_crypto_setup_has_history_years_and_prepare_progress_modal(self):
+        self.assertIn('id="crypto-history-years"', self.html)
+        self.assertRegex(
+            self.html,
+            re.compile(
+                r'id="crypto-history-years"[^>]*type="number"[^>]*value="2"'
+                r'[^>]*min="2"[^>]*max="5"[^>]*step="1"'
+            ),
+        )
+        self.assertIn('id="crypto-history-years-help"', self.html)
+        self.assertIn('不改变向后训练时长', self.html)
+        for element_id in (
+            'crypto-history-prepare-modal',
+            'crypto-history-prepare-status',
+            'crypto-history-prepare-month',
+            'crypto-history-prepare-count',
+            'crypto-history-prepare-percent',
+            'crypto-history-prepare-progress',
+            'cancel-crypto-history-prepare-btn',
+            'retry-crypto-history-prepare-btn',
+        ):
+            self.assertEqual(self.html.count(f'id="{element_id}"'), 1, element_id)
+        self.assertIn('.crypto-history-prepare-progress', self.css)
+        self.assertIn('.crypto-history-prepare-error', self.css)
 
     def test_render_crypto_account_passes_pending_orders_to_renderer(self):
         start = self.js.index("function renderCryptoAccount")

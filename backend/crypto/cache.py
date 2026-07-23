@@ -233,7 +233,7 @@ class CryptoMonthlyCache:
             data_temp.replace(data_path)
             metadata_temp.replace(metadata_path)
 
-    def _load_path(self, source, symbol, kind, path, *, missing_ok=False):
+    def _load_path(self, source, symbol, kind, path, *, missing_ok=False, numeric="decimal"):
         pd = _load_pandas()
         if not path.exists():
             if missing_ok:
@@ -247,7 +247,10 @@ class CryptoMonthlyCache:
             frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
             for column in ("open", "high", "low", "close", "volume", "turnover"):
                 if column in frame.columns:
-                    frame[column] = frame[column].map(lambda value: Decimal(value) if pd.notna(value) and value != "" else None)
+                    if numeric == "float":
+                        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
+                    else:
+                        frame[column] = frame[column].map(lambda value: Decimal(value) if pd.notna(value) and value != "" else None)
             validation = _validate_frame(frame, kind=kind)
             if not validation.is_valid:
                 raise ValueError(", ".join(issue.code for issue in validation.issues))
@@ -255,11 +258,11 @@ class CryptoMonthlyCache:
         except Exception as exc:
             raise CryptoCacheCorruption(f"corrupt crypto cache for {source}/{symbol}/{kind}/{path.stem.replace('.csv', '')}: {exc}") from exc
 
-    def load(self, source: str, symbol: str, kind: str, start: datetime | None = None, end: datetime | None = None) -> pd.DataFrame:
+    def load(self, source: str, symbol: str, kind: str, start: datetime | None = None, end: datetime | None = None, *, numeric="decimal") -> pd.DataFrame:
         pd = _load_pandas()
         directory = self._directory(source, symbol, kind)
         frames = [
-            self._load_path(source, symbol, kind, path)
+            self._load_path(source, symbol, kind, path, numeric=numeric)
             for path in self._paths_for_range(directory, start, end)
         ]
         result = self.merge(pd.DataFrame(columns=CANDLE_COLUMNS), pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=CANDLE_COLUMNS))

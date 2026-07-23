@@ -77,12 +77,17 @@ class CryptoReplaySession:
             lower = pd.Timestamp(normalized_start) if normalized_start is not None else end_times.iloc[0]
             upper = pd.Timestamp(normalized_end) if normalized_end is not None else end_times.iloc[-1]
             matching = aggregated.index[(end_times >= lower) & (end_times <= upper)]
-            if len(matching):
-                focus_end = min(int(matching[-1]) + 51, len(aggregated))
+            if max_bars is None:
+                range_start_index = int(end_times.searchsorted(lower, side="left"))
+                range_end_index = int(end_times.searchsorted(upper, side="right"))
+                visible = aggregated.iloc[range_start_index:range_end_index]
             else:
-                focus_end = min(int(end_times.searchsorted(upper, side="right")) + 50, len(aggregated))
-            focus_start = 0 if max_bars is None else max(focus_end - max_bars, 0)
-            visible = aggregated.iloc[focus_start:focus_end]
+                if len(matching):
+                    focus_end = min(int(matching[-1]) + 51, len(aggregated))
+                else:
+                    focus_end = min(int(end_times.searchsorted(upper, side="right")) + 50, len(aggregated))
+                focus_start = max(focus_end - max_bars, 0)
+                visible = aggregated.iloc[focus_start:focus_end]
         elif max_bars is not None:
             visible = aggregated.tail(max_bars)
         if max_bars is not None and len(visible) > max_bars:

@@ -266,6 +266,11 @@
                         <input type="number" id="crypto-initial-capital" value="10000" min="100" step="100">
                     </div>
                     <div class="form-group crypto-market-field hidden">
+                        <label for="crypto-history-years">训练前历史（年）</label>
+                        <input id="crypto-history-years" type="number" value="2" min="2" max="5" step="1" aria-describedby="crypto-history-years-help">
+                        <small id="crypto-history-years-help">用于训练开始前的行情观察，默认至少 2 年，不改变向后训练时长。</small>
+                    </div>
+                    <div class="form-group crypto-market-field hidden">
                         <label>默认杠杆</label>
                         <select id="crypto-leverage">
                             <option value="1">1x</option><option value="2">2x</option>
@@ -278,6 +283,26 @@
                 <div class="modal-actions">
                     <button id="start-training-btn" class="btn btn-primary">开始训练</button>
                     <button id="cancel-setup-btn" class="btn btn-secondary">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="crypto-history-prepare-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="crypto-history-prepare-title">
+            <div class="modal-content crypto-history-prepare-card">
+                <h2 id="crypto-history-prepare-title">准备币圈历史数据</h2>
+                <p id="crypto-history-prepare-status">正在检查离线缓存并补齐缺失月份...</p>
+                <div class="crypto-history-prepare-details" aria-live="polite">
+                    <span>当前月份 <strong id="crypto-history-prepare-month">--</strong></span>
+                    <span>完成进度 <strong id="crypto-history-prepare-count">0 / 0</strong></span>
+                    <span><strong id="crypto-history-prepare-percent">0%</strong></span>
+                </div>
+                <div class="crypto-history-prepare-progress" aria-hidden="true">
+                    <div id="crypto-history-prepare-progress" class="crypto-history-prepare-progress-fill"></div>
+                </div>
+                <p id="crypto-history-prepare-error" class="crypto-history-prepare-error hidden"></p>
+                <div class="modal-actions">
+                    <button id="retry-crypto-history-prepare-btn" class="btn btn-primary hidden" type="button">重试准备</button>
+                    <button id="cancel-crypto-history-prepare-btn" class="btn btn-secondary" type="button">取消</button>
                 </div>
             </div>
         </div>
@@ -452,6 +477,7 @@
                             <div class="chart-panel-controls" role="group" aria-label="图表面板控制">
                                 <button id="toggle-volume-panel-btn" type="button" aria-controls="volume-chart" aria-expanded="true">成交量</button>
                                 <button id="toggle-indicator-panel-btn" type="button" aria-controls="indicator-chart" aria-expanded="true">指标</button>
+                                <button id="crypto-theme-toggle-btn" type="button" class="hidden" data-crypto-workspace-only aria-label="切换币圈明暗主题" aria-pressed="false" title="切换为浅色主题">☀</button>
                                 <button id="chart-fullscreen-btn" type="button" aria-controls="chart-panels" aria-label="全屏图表">全屏</button>
                             </div>
                         </div>
