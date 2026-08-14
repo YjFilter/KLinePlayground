@@ -895,6 +895,21 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `308859f`。
 
+## True Cross Margin Bankruptcy & Zero Balance Liquidation (2026-08-14)
+- **用户需求**：
+  - 全仓爆仓（强平）后账户资产应该直接亏成 0（不能剩下部分资金），强平价应严格算上总资产。
+- **调整落地**：
+  1. **全仓强平爆仓价公式重构**：
+     - 多头：`P_liq = EntryPrice - Balance / Quantity`；
+     - 空头：`P_liq = EntryPrice + Balance / Quantity`；
+     - 强平价严格代表总资产全部亏损完毕的真实破产价格。
+  2. **强平爆仓结算直接归零**：
+     - `check_liquidation` 触发时，将账户余额全部结算为已实现亏损，`balance` 直接归零为 `0 USDT`，仓位清空；
+     - 记录已实现亏损为全部账户资产（`-balance_lost`），彻底消除强平后仍有剩余资产的现象。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `1d92dc2`。
+
 ## Next Action
 等待用户下一项需求。
 
