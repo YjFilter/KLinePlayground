@@ -4895,12 +4895,12 @@ function startTrainingWithConfig(trainingConfig) {
                 startAutoSync();
             }
         } else {
-            const error = await response.json();
-            alert(error.error || error.message || '开始训练失败');
+            const error = await response.json().catch(() => ({}));
+            alert(error.error || error.message || `开始训练失败 (HTTP ${response.status})`);
         }
     } catch (error) {
         console.error('开始训练失败:', error);
-        alert('开始训练失败');
+        alert(error?.message || '开始训练失败');
     } finally {
         hideLoading();
     }
@@ -4930,56 +4930,45 @@ function showTrainingInterface() {
 
 function formatChartCrosshairTime(time) {
     if (!time) return '';
-    if (typeof time === 'object' && time !== null) {
-        const y = time.year;
-        const m = String(time.month).padStart(2, '0');
-        const d = String(time.day).padStart(2, '0');
-        return `${y}-${m}-${d}`;
-    }
-    const date = new Date(Number(time) * 1000);
-    if (Number.isNaN(date.getTime())) return '';
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
-    const hours = String(date.getUTCHours()).padStart(2, '0');
-    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-
-    // 格式化为 aicoin / TradingView 风格: 2026-08-14 17:00
-    if (isCryptoMode() || isIntradayMode() || hours !== '00' || minutes !== '00') {
-        return `${year}-${month}-${day} ${hours}:${minutes}`;
-    }
-    return `${year}-${month}-${day}`;
-}
-
-function formatChartTickMark(time, tickMarkType) {
-    const date = new Date(Number(time) * 1000);
-    if (Number.isNaN(date.getTime())) return '';
-    const year = date.getUTCFullYear();
-    const month = date.getUTCMonth() + 1;
-    const day = date.getUTCDate();
-    const hours = String(date.getUTCHours()).padStart(2, '0');
-    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
-
-    // 0: Year, 1: Month, 2: DayOfMonth, 3: Time, 4: TimeWithSeconds
-    if (tickMarkType === 3 || tickMarkType === 4) {
-        return `${hours}:${minutes}`;
-    }
-    if (tickMarkType === 2) {
-        return `${month}月 ${day}`;
-    }
-    if (tickMarkType === 1) {
-        return `${year}-${String(month).padStart(2, '0')}`;
-    }
-    if (tickMarkType === 0) {
-        return `${year}`;
-    }
-    if (isCryptoMode() || isIntradayMode()) {
-        if (hours === '00' && minutes === '00') {
-            return `${month}月 ${day}`;
+    try {
+        if (typeof time === 'object' && time !== null) {
+            if (time instanceof Date) {
+                const y = time.getUTCFullYear();
+                const m = String(time.getUTCMonth() + 1).padStart(2, '0');
+                const d = String(time.getUTCDate()).padStart(2, '0');
+                const hh = String(time.getUTCHours()).padStart(2, '0');
+                const mm = String(time.getUTCMinutes()).padStart(2, '0');
+                if (isCryptoMode() || isIntradayMode() || hh !== '00' || mm !== '00') {
+                    return `${y}-${m}-${d} ${hh}:${mm}`;
+                }
+                return `${y}-${m}-${d}`;
+            }
+            if (time.year) {
+                const y = time.year;
+                const m = String(time.month || 1).padStart(2, '0');
+                const d = String(time.day || 1).padStart(2, '0');
+                return `${y}-${m}-${d}`;
+            }
         }
-        return `${hours}:${minutes}`;
+        const num = Number(time);
+        if (Number.isFinite(num)) {
+            const date = new Date(num * 1000);
+            if (!Number.isNaN(date.getTime())) {
+                const year = date.getUTCFullYear();
+                const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                const day = String(date.getUTCDate()).padStart(2, '0');
+                const hours = String(date.getUTCHours()).padStart(2, '0');
+                const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                if (isCryptoMode() || isIntradayMode() || hours !== '00' || minutes !== '00') {
+                    return `${year}-${month}-${day} ${hours}:${minutes}`;
+                }
+                return `${year}-${month}-${day}`;
+            }
+        }
+    } catch (e) {
+        return '';
     }
-    return `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`;
+    return String(time || '');
 }
 
 // 图表管理
@@ -5031,7 +5020,6 @@ function initializeChart() {
             borderColor: palette.border,
             timeVisible: true,
             secondsVisible: false,
-            tickMarkFormatter: (time, tickMarkType) => formatChartTickMark(time, tickMarkType),
         },
     });
 
@@ -5084,14 +5072,9 @@ function initializeChart() {
             borderColor: palette.border,
             minimumWidth: 80,
         },
-        localization: {
-            timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp),
-            locale: 'zh-CN',
-        },
         timeScale: {
             borderColor: palette.border,
             visible: false,
-            tickMarkFormatter: (time, tickMarkType) => formatChartTickMark(time, tickMarkType),
         },
     });
 
@@ -5139,14 +5122,9 @@ function initializeChart() {
             borderColor: palette.border,
             minimumWidth: 80,
         },
-        localization: {
-            timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp),
-            locale: 'zh-CN',
-        },
         timeScale: {
             borderColor: palette.border,
             visible: false,
-            tickMarkFormatter: (time, tickMarkType) => formatChartTickMark(time, tickMarkType),
         },
     });
 

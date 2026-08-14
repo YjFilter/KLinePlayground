@@ -410,7 +410,6 @@ class ChartTimeMinutePrecisionTests(unittest.TestCase):
 
     def test_time_formatter_uses_minute_precision_format(self):
         self.assertIn("function formatChartCrosshairTime", self.js)
-        self.assertIn("function formatChartTickMark", self.js)
         self.assertIn("timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp)", self.js)
 
     def test_node_execution_formats_time_to_minute_precision(self):
@@ -429,15 +428,10 @@ class ChartTimeMinutePrecisionTests(unittest.TestCase):
             throw new Error(`Expected '2026-08-14 17:00' but got '${formatted}'`);
         }
 
-        // Tick mark formatting
-        const tickTime = formatChartTickMark(timestamp, 3);
-        if (tickTime !== '17:00') {
-            throw new Error(`Expected '17:00' but got '${tickTime}'`);
-        }
-
-        const tickDay = formatChartTickMark(timestamp, 2);
-        if (tickDay !== '8月 14') {
-            throw new Error(`Expected '8月 14' but got '${tickDay}'`);
+        // BusinessDay object: { year: 2026, month: 8, day: 14 }
+        const objFormatted = formatChartCrosshairTime({ year: 2026, month: 8, day: 14 });
+        if (objFormatted !== '2026-08-14') {
+            throw new Error(`Expected '2026-08-14' but got '${objFormatted}'`);
         }
 
         console.log('TIME_MINUTE_PRECISION_TESTS_PASSED');
