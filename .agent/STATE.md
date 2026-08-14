@@ -926,6 +926,22 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `43700f9`。
 
+## Compact Position Card & Zero-Scroll Layout (2026-08-14)
+- **用户需求**：
+  1. 当前持仓卡片（蓝色框）做得精致好看，能一页看完，不要滚动；
+  2. 手续费率与资金费（红色框）对开仓没有影响，移到开始训练时的设置弹窗中。
+- **调整落地**：
+  1. **持仓卡片精致化与高密度重构**：
+     - 头部整合 `[币种] [做多/做空] [全仓] [杠杆]` 胶囊标签，右侧清晰展示总浮动盈亏（USDT与百分比）；
+     - 数据网格优化为紧凑的 `均价/现价`、`持仓量`、`保证金`、`预估强平价`（红色醒目）、`止盈/止损`；
+     - 底部精细化药丸按钮 `[止盈止损] [平仓] [市价全平]`，高度紧凑精致。
+  2. **手续费率移至训练设置弹窗**：
+     - 在「开始训练」弹窗中加入 `Maker 手续费率 (%)` 与 `Taker 手续费率 (%)` 输入项；
+     - 隐藏下单台中的大块手续费设置与资金费面板，直接消除多余高度占用，右侧交易台实现**一页尽收眼底，无需滚动**。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `dab9629`。
+
 ## Next Action
 等待用户下一项需求。
 
