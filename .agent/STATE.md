@@ -910,9 +910,21 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `1d92dc2`。
 
-## GitHub Repository Sync (2026-08-14)
-- **操作落地**：
-  - 项目全量代码及最新提交成功推送到 GitHub 远程仓库 `https://github.com/YjFilter/KLinePlayground.git`（`main` 分支已完全同步）。
+## Stage 2: Code Architecture Governance & Modularization (2026-08-14)
+- **用户需求**：
+  - 先搞定第二阶段（代码治理）：将单文件臃肿逻辑进行结构化解耦与模块化重构。
+- **调整落地**：
+  1. **前端模块化分层 (`frontend/js/modules/`)**：
+     - `chart_theme.js`：图表色盘、多主题适配（暗黑/明亮/AiCoin Crypto主题）、蜡烛实体与十字光标配置；
+     - `chart_trade_lines.js`：主图持仓均价线、止盈止损线、限价/突破挂单线与强平爆仓线可视化及拖拽改单；
+     - `crypto_order_panel.js`：下单方向、订单类型、杠杆切换、快捷比例分配与以损定仓计算；
+     - `position_manager.js`：持仓卡片渲染、爆仓监听与成交流水；
+     - `index_enhanced.html`：按依赖顺序列入模块化脚本引入。
+  2. **后端路由解耦规划 (`backend/routes/`)**：
+     - 初始化 `crypto_routes`、`stock_routes`、`user_routes`、`training_routes` Blueprints。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `43700f9`。
 
 ## Next Action
 等待用户下一项需求。
