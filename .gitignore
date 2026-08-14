@@ -6546,3 +6546,6 @@ dist/
 /.runtime/
 
 /.venv/
+*.log
+.playwright-cli/
+
