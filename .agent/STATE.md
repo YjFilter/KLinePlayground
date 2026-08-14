@@ -717,10 +717,30 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - `python scripts/agent_status.py .agent/tasks` 通过。
   - 新增测试：`tests/test_chart_workspace_frontend.py` 增加 `ChartTradePriceLinesTests`。
   - 全量测试套件：`.venv\Scripts\python.exe -m pytest -q` -> `750 passed, 89 subtests passed in 26.14s`（100% 全绿）。
-  - Commit ID: `0bf0395`。
+## One-Click 2024 BTC Fast Test Mode & Cache Acceleration (2026-08-14)
+- **用户痛点与需求**：测试新功能（指标、画图、持仓线、下单）时，每次填写表单并等待多年前期历史数据准备进度弹窗耗时较长。需要一个固定 2024 年 BTC 离线数据的一键极速开局入口，快速进入看盘测试。
+- **功能实现**：
+  1. **UI 极速入口**：
+     - 在顶部主导航栏增加金黄色高亮 **「⚡ 快速测试(BTC)」** 按钮。
+     - 在新建训练弹窗顶部嵌入 **「⚡ 极速功能测试模式」** 快捷横幅与「一键极速开局」按钮。
+  2. **预设 2024 BTC 极速配置**：
+     - 合约：`BTCUSDT`（100% 离线缓存，无任何网络依赖）。
+     - 起始时间：`2024-07-01 00:00:00`，训练前历史：`1 年`（覆盖 2024 上半年完整 K 线）。
+     - 训练时限：`60 天`，周期：`5m`，初始资金：`100,000 USDT`，杠杆：`10x`。
+  3. **后端年份放宽与热缓存加速**：
+     - 修改 `CRYPTO_HISTORY_MIN_YEARS = 1`（支持 1 年观察期）。
+     - 在 `CryptoMonthlyCache` 中引入 `_frame_cache` 内存热缓存机制，避免重复 Gzip 解压与逐行反序列化。
+     - 在 `CryptoDataService.get_chart_bars` 中增加连续性快速路径 `actual.equals(expected)`。
+- **质量门禁**：
+  - `node --check frontend/js/main_enhanced.js` 通过。
+  - `python scripts/agent_status.py .agent/tasks` 通过。
+  - 新增测试：`tests/test_chart_workspace_frontend.py` 增加 `QuickTestBtcEntryTests`；更新 `test_crypto_history_api.py` 与 `test_crypto_frontend_static.py`。
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **753 passed, 89 subtests passed in 24.62s（100% 全绿）**。
+  - Commit ID: `c62e900`。
 
 ## Next Action
 等待用户下一项需求。
+
 
 
 
