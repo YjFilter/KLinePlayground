@@ -3483,19 +3483,22 @@ function setVisibleTimeRangeAll(range) {
     });
 }
 
+let lastSelectedRiskDrawingModel = null;
+
 /**
- * 同步画图浮动工具条（选中对象时显示在 chart 顶部居中）。
- * 浮动工具条是通用模版：选中任意画图对象时出现，提供"拖动点/设置/锁定/隐藏/删除"操作。
- * 设置按钮触发当前对象类型的设置面板（如斐波那契的档位列表）。
+ * 同步浮动工具条的显示位置与状态。
  */
 function syncDrawingFloatingToolbar(selectedId, model) {
     const toolbar = document.getElementById('drawing-floating-toolbar');
     if (!toolbar) return;
     if (!selectedId || !model) {
         toolbar.classList.add('hidden');
-        // 同时收起当前打开的设置面板（避免选中取消后面板残留）
         closeAllDrawingSettingPanels();
         return;
+    }
+    const isRiskDrawing = model.type === 'long' || model.type === 'short' || model.type === 'risk-reward';
+    if (isRiskDrawing) {
+        lastSelectedRiskDrawingModel = model;
     }
     toolbar.classList.remove('hidden');
     toolbar.style.display = model.hidden ? 'none' : '';
@@ -3504,7 +3507,6 @@ function syncDrawingFloatingToolbar(selectedId, model) {
     toolbar.querySelector('[data-drawing-action="hide"]')?.classList.toggle('active', !!model.hidden);
 
     // 如果是做多/做空/风险回报测算框，显示「⚡ 同步下单」按钮
-    const isRiskDrawing = model.type === 'long' || model.type === 'short' || model.type === 'risk-reward';
     toolbar.querySelector('[data-drawing-action="sync-order"]')?.classList.toggle('hidden', !isRiskDrawing);
 }
 
@@ -3577,11 +3579,33 @@ function bindDrawingFloatingToolbar() {
     const toolbar = document.getElementById('drawing-floating-toolbar');
     if (!toolbar) return;
     drawingFloatingToolbarBound = true;
+
+    // 防止在工具条和设置弹窗内部点击/按下时冒泡触发画布取消选中
+    [
+        'drawing-floating-toolbar',
+        'drawing-fibonacci-settings',
+        'drawing-line-settings',
+        'drawing-rectangle-settings',
+        'drawing-text-settings',
+        'drawing-position-settings',
+    ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('pointerdown', (e) => e.stopPropagation());
+            el.addEventListener('mousedown', (e) => e.stopPropagation());
+        }
+    });
+
     toolbar.querySelectorAll('[data-drawing-action]').forEach((button) => {
-        button.addEventListener('click', () => {
+        button.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             const action = button.dataset.drawingAction;
             if (action === 'settings') {
-                const model = drawingController?.store?.get?.(drawingController?.selectedId);
+                const model = (drawingController?.selectedId && drawingController?.store?.get?.(drawingController?.selectedId))
+                    || lastSelectedRiskDrawingModel
+                    || drawingController?.activeDrawing
+                    || drawingController?.selectedDrawing;
                 if (!model) {
                     setDrawingStatus('请先选中一个画图对象。', 'active');
                     return;
@@ -3590,7 +3614,11 @@ function bindDrawingFloatingToolbar() {
                 return;
             }
             if (action === 'sync-order') {
-                const model = drawingController?.store?.get?.(drawingController?.selectedId);
+                const model = (drawingController?.selectedId && drawingController?.store?.get?.(drawingController?.selectedId))
+                    || lastSelectedRiskDrawingModel
+                    || drawingController?.activeDrawing
+                    || drawingController?.selectedDrawing
+                    || (drawingController?.store?.list?.() || []).slice().reverse().find((d) => d.type === 'long' || d.type === 'short' || d.type === 'risk-reward');
                 if (!model) {
                     setDrawingStatus('请先选中一个做多/做空测算框。', 'active');
                     return;
@@ -3602,7 +3630,6 @@ function bindDrawingFloatingToolbar() {
                 drawingController?.activateTool?.('select');
                 return;
             }
-            // lock / hide / delete 映射到现有方法
             invokeDrawingAction(action);
         });
     });
@@ -3613,11 +3640,14 @@ function bindDrawingFloatingToolbar() {
  */
 function syncDrawingToOrderPanel(model) {
     if (!model) {
-        model = drawingController?.store?.get?.(drawingController?.selectedId)
+        model = (drawingController?.selectedId && drawingController?.store?.get?.(drawingController?.selectedId))
+            || lastSelectedRiskDrawingModel
             || drawingController?.activeDrawing
-            || drawingController?.selectedDrawing;
+            || drawingController?.selectedDrawing
+            || (drawingController?.store?.list?.() || []).slice().reverse().find((d) => d.type === 'long' || d.type === 'short' || d.type === 'risk-reward');
     }
     if (!model) {
+        setCryptoOrderStatus('请先在图表上选中一个做多/做空测算框', 'error');
         alert('请先在图表上选中一个做多/做空测算框');
         return;
     }
