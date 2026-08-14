@@ -768,8 +768,23 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **762 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `22fc298`。
 
+## Drawing Sync-Order Button UI & Logic Fixes (2026-08-14)
+- **原因分析**：
+  1. 浮动工具条 CSS 中 `.drawing-floating-toolbar button` 限制了 `width: 30px; height: 30px`，导致带文字的按钮被硬挤成竖向单字折行。
+  2. 画图全局监听拦截了 `invokeDrawingAction`，但未在 `invokeDrawingAction` 中分发 `sync-order` 分支；同时 `syncDrawingToOrderPanel` 中对 `isCrypto` 判定因未显式同步模式而失效，且未向 DOM 发送 `input`/`change` 事件驱动计算。
+- **调整落地**：
+  1. **UI 美化**：为 `.drawing-sync-order-btn` 编写独立样式（`width: auto !important; height: 26px; padding: 0 10px; font-weight: 600; white-space: nowrap`），搭配标准闪电图标与暗金主题，水平完美居中排列。
+  2. **逻辑修复**：
+     - 在 `invokeDrawingAction` 中增加 `sync-order` 处理入口，多路兜底保障点击响应。
+     - 强化 `isCrypto` 判定（涵盖 `isCryptoMode()`、`CRYPTO_MARKET_TYPE` 与界面 DOM 识别）。
+     - 同步后自动触发 `input`/`change` 事件，自动填入限价价格、勾选并展开止盈止损、勾选并展开以损定仓并计算保证金，最后提供金色高亮提示与平滑聚焦。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **762 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `20c2c5c`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
