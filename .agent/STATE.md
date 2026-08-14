@@ -782,8 +782,27 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **762 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `20c2c5c`。
 
+## Chart Trade Price Lines Interactive Drag-To-Modify (2026-08-14)
+- **功能背景**：
+  - 用户需求：允许在图表上直接拖动「止损线/止盈线/限价挂单线」修改价格，松开鼠标自动同步修改后台订单。
+- **技术实现**：
+  1. **后端订单薄与接口**：
+     - `backend/crypto/futures_orders.py`：在 `FuturesOrderBook` 中增加 `modify_order_price(order_id, new_price, timestamp)`，原生支持限价单、突破单、TP 保护单与 SL 保护单的价格即时修改。
+     - `backend/app_enhanced.py`：暴露 `PUT /api/training/<training_id>/orders/<order_id>` 与 `POST /api/training/<training_id>/orders/<order_id>/modify`，带原子锁保护与运行快照持久化。
+  2. **前端交互与图表层**：
+     - `frontend/css/style_enhanced.css`：新增 `.chart-price-line-tooltip`（TP/SL/Limit 动态彩色高亮与毛玻璃阴影）与 `body.chart-dragging-order`（全局锁定 `ns-resize` 光标与防止文本选中）。
+     - `frontend/js/main_enhanced.js`：
+       - 在 `updateChartTradePriceLines` 中为每个有效挂单线绑定元数据 `{ line, orderId, order, type, price, side, quantity, entryPrice }` 并标明 `[可拖动]`。
+       - 实现 `initChartTradeLineDragging`：监听指针移动与命中检测（±8px 容差），悬浮时变换光标；按住左键拖拽时实时根据 `candlestickSeries.coordinateToPrice(mouseY)` 计算新价格，并驱动价格线实时跟随与悬浮 Tooltip 动态展示新价格、相对开仓价幅度及预估 USDT 盈亏；松开鼠标后调用 PUT 接口异步改单并平滑刷新挂单列表与图表线。
+- **质量门禁**：
+  - 新增测试：`tests/test_crypto_order_modification.py`（5 个测试全部通过）。
+  - 更新测试：`tests/test_chart_workspace_frontend.py`（24 个测试全部通过）。
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **769 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `5937532`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
