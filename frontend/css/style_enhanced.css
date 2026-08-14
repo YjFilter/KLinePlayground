@@ -3191,12 +3191,43 @@ body.chart-panel-resizing {
 .drawing-settings select { flex: 1; min-width: 0; }
 .drawing-settings-hint { margin: 6px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
 /* 浮动工具条：选中画图对象时显示在 chart 顶部居中（参考 AiCoin 风格） */
-.drawing-floating-toolbar { position: absolute; z-index: 36; top: 12px; left: 50%; transform: translateX(-50%); display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--surface-strong); box-shadow: 0 8px 22px rgba(15, 23, 42, 0.28); }
+.drawing-floating-toolbar { position: absolute; z-index: 36; top: 12px; left: 50%; transform: translateX(-50%); display: inline-flex; flex-direction: row; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border-color, #2b313a); background: var(--surface-strong, #1e2329); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 .drawing-floating-toolbar button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; transition: background-color 0.15s, color 0.15s; }
 .drawing-floating-toolbar button:hover { background: var(--surface-muted); color: var(--text-primary); }
 .drawing-floating-toolbar button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 1px; }
 .drawing-floating-toolbar button.active { background: var(--primary-color); color: #fff; }
 .drawing-floating-toolbar button svg { display: block; }
+.drawing-floating-toolbar button.drawing-sync-order-btn {
+    width: auto !important;
+    min-width: 0 !important;
+    height: 26px !important;
+    padding: 0 10px !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    line-height: 26px !important;
+    white-space: nowrap !important;
+    background: rgba(240, 185, 11, 0.15) !important;
+    color: #f0b90b !important;
+    border: 1px solid rgba(240, 185, 11, 0.4) !important;
+    border-radius: 6px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    margin-right: 4px !important;
+    cursor: pointer !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) !important;
+    transition: all 0.15s ease !important;
+}
+.drawing-floating-toolbar button.drawing-sync-order-btn:hover {
+    background: #f0b90b !important;
+    color: #1e2329 !important;
+    border-color: #f0b90b !important;
+    box-shadow: 0 2px 8px rgba(240, 185, 11, 0.35) !important;
+}
+.drawing-floating-toolbar button.drawing-sync-order-btn svg {
+    display: inline-block !important;
+    flex-shrink: 0 !important;
+}
 /* 斐波那契设置面板：默认隐藏，仅在浮动工具条点"设置"后弹出 */
 .drawing-settings-popover { left: auto; right: 12px; top: 56px; }
 #main-app.crypto-training-active .drawing-floating-toolbar,

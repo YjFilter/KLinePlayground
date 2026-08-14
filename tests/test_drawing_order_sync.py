@@ -23,7 +23,7 @@ class DrawingOrderSyncTests(unittest.TestCase):
     def test_sync_order_button_exists_in_html(self):
         self.assertIn('data-drawing-action="sync-order"', self.html)
         self.assertIn('class="drawing-sync-order-btn', self.html)
-        self.assertIn('⚡ 同步下单', self.html)
+        self.assertIn('同步到下单区', self.html)
 
     def test_offline_data_dashboard_elements_exist_in_html(self):
         self.assertIn('id="refresh-offline-data-btn"', self.html)

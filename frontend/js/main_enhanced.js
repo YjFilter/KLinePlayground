@@ -3134,6 +3134,17 @@ function clearSessionDrawings() {
 
 function invokeDrawingAction(action) {
     if (!drawingController) return;
+    if (action === 'sync-order') {
+        const model = drawingController?.store?.get?.(drawingController?.selectedId)
+            || drawingController?.activeDrawing
+            || drawingController?.selectedDrawing;
+        if (!model) {
+            setDrawingStatus('请先选中一个做多/做空测算框。', 'active');
+            return;
+        }
+        syncDrawingToOrderPanel(model);
+        return;
+    }
     const methodMap = {
         lock: 'toggleLock',
         hide: 'toggleHidden',
@@ -3601,8 +3612,16 @@ function bindDrawingFloatingToolbar() {
  * 将图表做多/做空风险测算框的入场、止损、止盈与风险金额一键同步到下单面板。
  */
 function syncDrawingToOrderPanel(model) {
-    if (!model) return;
-    const isCrypto = selectedTrainingMarketType === CRYPTO_MARKET_TYPE;
+    if (!model) {
+        model = drawingController?.store?.get?.(drawingController?.selectedId)
+            || drawingController?.activeDrawing
+            || drawingController?.selectedDrawing;
+    }
+    if (!model) {
+        alert('请先在图表上选中一个做多/做空测算框');
+        return;
+    }
+    const isCrypto = isCryptoMode() || selectedTrainingMarketType === CRYPTO_MARKET_TYPE || !!document.getElementById('crypto-trading-panel');
     const anchors = Array.isArray(model.anchors) ? model.anchors : [];
     if (anchors.length < 2) {
         alert('该测算框尚未绘制完成，缺少入场或止损价');
@@ -3633,7 +3652,7 @@ function syncDrawingToOrderPanel(model) {
         riskAmount = model.accountRiskAmount;
     } else {
         const riskPct = Number(drawingController?.accountRiskPercent || document.getElementById('drawing-pos-risk')?.value || 1);
-        const equity = Number(currentCryptoSummary?.account_equity || currentCryptoSummary?.balance || 10000);
+        const equity = Number(currentCryptoSummary?.account_equity || currentCryptoSummary?.balance || currentTraining?.account?.equity || 10000);
         riskAmount = Math.max(1, Math.round(equity * (riskPct / 100)));
     }
 
@@ -3645,19 +3664,27 @@ function syncDrawingToOrderPanel(model) {
         // B. 设置为限价单并填入入场价
         setCryptoOrderType('limit', { preservePrice: true });
         const limitPriceInput = document.getElementById('crypto-limit-price');
-        if (limitPriceInput) limitPriceInput.value = String(Number(entryPrice.toFixed(4)));
+        if (limitPriceInput) {
+            limitPriceInput.value = String(Number(entryPrice.toFixed(4)));
+            limitPriceInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
 
         // C. 开启止盈止损并填入
         const tpslCheckbox = document.getElementById('crypto-tpsl-enabled');
         if (tpslCheckbox) {
             tpslCheckbox.checked = true;
             document.getElementById('crypto-tpsl-fields')?.classList.remove('hidden');
+            tpslCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const slInput = document.getElementById('crypto-sl-price');
-        if (slInput) slInput.value = String(Number(stopPrice.toFixed(4)));
+        if (slInput) {
+            slInput.value = String(Number(stopPrice.toFixed(4)));
+            slInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         const tpInput = document.getElementById('crypto-tp-price');
         if (tpInput && targetPrice !== null) {
             tpInput.value = String(Number(targetPrice.toFixed(4)));
+            tpInput.dispatchEvent(new Event('input', { bubbles: true }));
         }
 
         // D. 开启以损定仓并填入
@@ -3665,21 +3692,43 @@ function syncDrawingToOrderPanel(model) {
         if (riskcalcCheckbox) {
             riskcalcCheckbox.checked = true;
             document.getElementById('crypto-riskcalc-fields')?.classList.remove('hidden');
+            riskcalcCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const riskcalcEntry = document.getElementById('crypto-riskcalc-entry');
-        if (riskcalcEntry) riskcalcEntry.value = String(Number(entryPrice.toFixed(4)));
+        if (riskcalcEntry) {
+            riskcalcEntry.value = String(Number(entryPrice.toFixed(4)));
+            riskcalcEntry.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         const riskcalcStop = document.getElementById('crypto-riskcalc-stop');
-        if (riskcalcStop) riskcalcStop.value = String(Number(stopPrice.toFixed(4)));
+        if (riskcalcStop) {
+            riskcalcStop.value = String(Number(stopPrice.toFixed(4)));
+            riskcalcStop.dispatchEvent(new Event('input', { bubbles: true }));
+        }
         const riskcalcMaxLoss = document.getElementById('crypto-riskcalc-maxloss');
-        if (riskcalcMaxLoss) riskcalcMaxLoss.value = String(Math.round(riskAmount));
+        if (riskcalcMaxLoss) {
+            riskcalcMaxLoss.value = String(Math.round(riskAmount));
+            riskcalcMaxLoss.dispatchEvent(new Event('input', { bubbles: true }));
+        }
 
         // E. 自动执行计算并填入建议保证金与委托量
+        refreshCryptoRiskCalcResult();
         applyCryptoRiskCalc();
+        refreshCryptoOrderPreview();
+        refreshCryptoTpSlPnl();
 
         // F. 界面高亮与提示
         setCryptoOrderStatus(`⚡ 已从图表同步${isLong ? '做多' : '做空'}测算框：入场 ${entryPrice.toFixed(2)}，止损 ${stopPrice.toFixed(2)}${targetPrice ? '，止盈 ' + targetPrice.toFixed(2) : ''}，风险 ${riskAmount} USDT`, 'ready');
 
-        const orderPanel = document.querySelector('.crypto-order-panel') || document.getElementById('crypto-order-grid');
+        // 高亮提示限价输入框
+        const limitGroup = document.getElementById('crypto-limit-price-group');
+        if (limitGroup) {
+            limitGroup.style.transition = 'all 0.3s ease';
+            limitGroup.style.outline = '2px solid #f0b90b';
+            limitGroup.style.outlineOffset = '2px';
+            setTimeout(() => { limitGroup.style.outline = ''; }, 1500);
+        }
+
+        const orderPanel = document.getElementById('crypto-trading-panel') || document.querySelector('.crypto-order-panel') || document.getElementById('crypto-order-grid');
         orderPanel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 }
