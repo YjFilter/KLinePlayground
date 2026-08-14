@@ -758,10 +758,19 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - `python scripts/agent_status.py .agent/tasks` 通过。
   - 新增测试：`tests/test_drawing_order_sync.py`（4 个测试全过），`tests/test_crypto_offline_data_manager.py`（5 个测试全过）。
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **762 passed, 89 subtests passed in 40.31s（100% 全绿）**。
-  - Commit ID: `f51840d`。
+## Quick Test Acceleration: 6-Month Fast Test Window (2026-08-14)
+- **优化原因**：之前 1 年历史参数在 `start_time = 2024-07-01` 时回溯到了 `2023-07`，触发了向外网请求 2023 年份数据导致耗时。
+- **调整落地**：
+  - 将快速测试入口调整为固定使用 **2024 年上半年（2024-01 ~ 2024-07 共 6 个月）** 作为历史观察期，向后训练 30 天（2024-07-01 ~ 2024-07-31）。
+  - 所有数据 100% 存在于本地已下载的 2024 年离线归档中，零网络依赖。
+  - 支持 `history_months: 6` 参数，极速开局秒点秒开。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **762 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `22fc298`。
 
 ## Next Action
 等待用户下一项需求。
+
 
 
 
