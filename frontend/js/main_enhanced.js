@@ -3135,14 +3135,7 @@ function clearSessionDrawings() {
 function invokeDrawingAction(action) {
     if (!drawingController) return;
     if (action === 'sync-order') {
-        const model = drawingController?.store?.get?.(drawingController?.selectedId)
-            || drawingController?.activeDrawing
-            || drawingController?.selectedDrawing;
-        if (!model) {
-            setDrawingStatus('请先选中一个做多/做空测算框。', 'active');
-            return;
-        }
-        syncDrawingToOrderPanel(model);
+        syncDrawingToOrderPanel();
         return;
     }
     const methodMap = {
@@ -3571,6 +3564,36 @@ function openSelectedDrawingSettingsPanel(model) {
 }
 
 /**
+ * 获取当前活跃或最近绘制的做多/做空风险测算框模型。
+ */
+function getActiveRiskDrawingModel(explicitModel) {
+    if (explicitModel && (explicitModel.type === 'long' || explicitModel.type === 'short' || explicitModel.type === 'risk-reward')) {
+        return explicitModel;
+    }
+    if (drawingController?.selectedId) {
+        const m = drawingController?.store?.get?.(drawingController.selectedId);
+        if (m && (m.type === 'long' || m.type === 'short' || m.type === 'risk-reward')) return m;
+    }
+    if (lastSelectedRiskDrawingModel) {
+        return lastSelectedRiskDrawingModel;
+    }
+    if (drawingController?.activeDrawing && (drawingController.activeDrawing.type === 'long' || drawingController.activeDrawing.type === 'short' || drawingController.activeDrawing.type === 'risk-reward')) {
+        return drawingController.activeDrawing;
+    }
+    if (drawingController?.selectedDrawing && (drawingController.selectedDrawing.type === 'long' || drawingController.selectedDrawing.type === 'short' || drawingController.selectedDrawing.type === 'risk-reward')) {
+        return drawingController.selectedDrawing;
+    }
+    const all = drawingController?.store?.snapshot?.()
+        || drawingController?.store?._drawings
+        || drawingController?.store?.getAll?.()
+        || drawingController?.store?.list?.()
+        || [];
+    const found = all.slice().reverse().find((d) => d.type === 'long' || d.type === 'short' || d.type === 'risk-reward');
+    if (found) return found;
+    return explicitModel || null;
+}
+
+/**
  * 绑定浮动工具条按钮事件（仅绑定一次）。
  */
 let drawingFloatingToolbarBound = false;
@@ -3614,16 +3637,7 @@ function bindDrawingFloatingToolbar() {
                 return;
             }
             if (action === 'sync-order') {
-                const model = (drawingController?.selectedId && drawingController?.store?.get?.(drawingController?.selectedId))
-                    || lastSelectedRiskDrawingModel
-                    || drawingController?.activeDrawing
-                    || drawingController?.selectedDrawing
-                    || (drawingController?.store?.list?.() || []).slice().reverse().find((d) => d.type === 'long' || d.type === 'short' || d.type === 'risk-reward');
-                if (!model) {
-                    setDrawingStatus('请先选中一个做多/做空测算框。', 'active');
-                    return;
-                }
-                syncDrawingToOrderPanel(model);
+                syncDrawingToOrderPanel();
                 return;
             }
             if (action === 'drag') {
@@ -3639,22 +3653,16 @@ function bindDrawingFloatingToolbar() {
  * 将图表做多/做空风险测算框的入场、止损、止盈与风险金额一键同步到下单面板。
  */
 function syncDrawingToOrderPanel(model) {
+    model = getActiveRiskDrawingModel(model);
     if (!model) {
-        model = (drawingController?.selectedId && drawingController?.store?.get?.(drawingController?.selectedId))
-            || lastSelectedRiskDrawingModel
-            || drawingController?.activeDrawing
-            || drawingController?.selectedDrawing
-            || (drawingController?.store?.list?.() || []).slice().reverse().find((d) => d.type === 'long' || d.type === 'short' || d.type === 'risk-reward');
-    }
-    if (!model) {
-        setCryptoOrderStatus('请先在图表上选中一个做多/做空测算框', 'error');
+        setCryptoOrderStatus('请先在图表上选中或绘制做多/做空测算框', 'error');
         alert('请先在图表上选中一个做多/做空测算框');
         return;
     }
     const isCrypto = isCryptoMode() || selectedTrainingMarketType === CRYPTO_MARKET_TYPE || !!document.getElementById('crypto-trading-panel');
     const anchors = Array.isArray(model.anchors) ? model.anchors : [];
     if (anchors.length < 2) {
-        alert('该测算框尚未绘制完成，缺少入场或止损价');
+        setCryptoOrderStatus('该测算框尚未绘制完成，缺少入场或止损价', 'error');
         return;
     }
     const entryPrice = Number(anchors[0]?.price);
@@ -3662,7 +3670,7 @@ function syncDrawingToOrderPanel(model) {
     const targetPrice = anchors.length >= 3 && Number.isFinite(Number(anchors[2]?.price)) ? Number(anchors[2]?.price) : null;
 
     if (!Number.isFinite(entryPrice) || !Number.isFinite(stopPrice)) {
-        alert('测算框价格数据无效');
+        setCryptoOrderStatus('测算框价格数据无效', 'error');
         return;
     }
 
@@ -3680,6 +3688,8 @@ function syncDrawingToOrderPanel(model) {
     let riskAmount = 100;
     if (Number.isFinite(model.accountRiskAmount) && model.accountRiskAmount > 0) {
         riskAmount = model.accountRiskAmount;
+    } else if (Number.isFinite(model.options?.accountRiskAmount) && model.options.accountRiskAmount > 0) {
+        riskAmount = model.options.accountRiskAmount;
     } else {
         const riskPct = Number(drawingController?.accountRiskPercent || document.getElementById('drawing-pos-risk')?.value || 1);
         const equity = Number(currentCryptoSummary?.account_equity || currentCryptoSummary?.balance || currentTraining?.account?.equity || 10000);
@@ -3695,8 +3705,9 @@ function syncDrawingToOrderPanel(model) {
         setCryptoOrderType('limit', { preservePrice: true });
         const limitPriceInput = document.getElementById('crypto-limit-price');
         if (limitPriceInput) {
-            limitPriceInput.value = String(Number(entryPrice.toFixed(4)));
+            limitPriceInput.value = formatCryptoInputPrice(entryPrice);
             limitPriceInput.dispatchEvent(new Event('input', { bubbles: true }));
+            limitPriceInput.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
         // C. 开启止盈止损并填入
@@ -3704,17 +3715,18 @@ function syncDrawingToOrderPanel(model) {
         if (tpslCheckbox) {
             tpslCheckbox.checked = true;
             document.getElementById('crypto-tpsl-fields')?.classList.remove('hidden');
-            tpslCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const slInput = document.getElementById('crypto-sl-price');
         if (slInput) {
-            slInput.value = String(Number(stopPrice.toFixed(4)));
+            slInput.value = formatCryptoInputPrice(stopPrice);
             slInput.dispatchEvent(new Event('input', { bubbles: true }));
+            slInput.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const tpInput = document.getElementById('crypto-tp-price');
         if (tpInput && targetPrice !== null) {
-            tpInput.value = String(Number(targetPrice.toFixed(4)));
+            tpInput.value = formatCryptoInputPrice(targetPrice);
             tpInput.dispatchEvent(new Event('input', { bubbles: true }));
+            tpInput.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
         // D. 开启以损定仓并填入
@@ -3722,22 +3734,24 @@ function syncDrawingToOrderPanel(model) {
         if (riskcalcCheckbox) {
             riskcalcCheckbox.checked = true;
             document.getElementById('crypto-riskcalc-fields')?.classList.remove('hidden');
-            riskcalcCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const riskcalcEntry = document.getElementById('crypto-riskcalc-entry');
         if (riskcalcEntry) {
-            riskcalcEntry.value = String(Number(entryPrice.toFixed(4)));
+            riskcalcEntry.value = formatCryptoInputPrice(entryPrice);
             riskcalcEntry.dispatchEvent(new Event('input', { bubbles: true }));
+            riskcalcEntry.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const riskcalcStop = document.getElementById('crypto-riskcalc-stop');
         if (riskcalcStop) {
-            riskcalcStop.value = String(Number(stopPrice.toFixed(4)));
+            riskcalcStop.value = formatCryptoInputPrice(stopPrice);
             riskcalcStop.dispatchEvent(new Event('input', { bubbles: true }));
+            riskcalcStop.dispatchEvent(new Event('change', { bubbles: true }));
         }
         const riskcalcMaxLoss = document.getElementById('crypto-riskcalc-maxloss');
         if (riskcalcMaxLoss) {
             riskcalcMaxLoss.value = String(Math.round(riskAmount));
             riskcalcMaxLoss.dispatchEvent(new Event('input', { bubbles: true }));
+            riskcalcMaxLoss.dispatchEvent(new Event('change', { bubbles: true }));
         }
 
         // E. 自动执行计算并填入建议保证金与委托量

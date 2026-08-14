@@ -485,6 +485,14 @@
       return clone(this._drawings);
     }
 
+    list() {
+      return this.snapshot();
+    }
+
+    getAll() {
+      return this.snapshot();
+    }
+
     get(id) {
       return clone(this._drawings.find((drawing) => drawing.id === id));
     }
