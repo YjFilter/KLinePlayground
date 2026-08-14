@@ -1053,6 +1053,7 @@ def _crypto_trade(training, data):
             action=data.get('action'),
             order_type=data.get('order_type', 'market'),
             margin=data.get('margin'),
+            quantity=data.get('quantity'),
             leverage=int(data.get('leverage', training.get('leverage', 5))),
             limit_price=data.get('limit_price'),
             trigger_price=data.get('trigger_price'),

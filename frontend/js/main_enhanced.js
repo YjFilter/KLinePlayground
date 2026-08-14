@@ -2770,6 +2770,7 @@ function selectCryptoOrderAction(action, updateSelect = true) {
         document.getElementById('crypto-tpsl-fields')?.classList.add('hidden');
     }
     updateCryptoPriceShortcuts();
+    refreshCryptoMarginFraction();
     refreshCryptoOrderPreview();
     refreshCryptoTpSlPnl();
 }
@@ -3138,6 +3139,16 @@ function invokeDrawingAction(action) {
         syncDrawingToOrderPanel();
         return;
     }
+    if (action === 'magnet') {
+        const enabled = drawingController.toggleMagnet();
+        const magnetBtn = document.getElementById('drawing-magnet-btn');
+        if (magnetBtn) {
+            magnetBtn.classList.toggle('active', enabled);
+            magnetBtn.setAttribute('aria-pressed', String(enabled));
+        }
+        setDrawingStatus(enabled ? '🧲 磁吸模式已开启（吸附 OHLC 极值点）' : '磁吸模式已关闭', 'active');
+        return;
+    }
     const methodMap = {
         lock: 'toggleLock',
         hide: 'toggleHidden',
@@ -3398,6 +3409,13 @@ function initializeDrawingTools() {
         onInteractionChange: (active) => setDrawingInteractionState(active),
         onToolChange: (tool) => syncDrawingToolbarState(tool),
         onSelectionChange: (selectedId, model) => syncDrawingFloatingToolbar(selectedId, model),
+        onMagnetChange: (enabled) => {
+            const magnetBtn = document.getElementById('drawing-magnet-btn');
+            if (magnetBtn) {
+                magnetBtn.classList.toggle('active', enabled);
+                magnetBtn.setAttribute('aria-pressed', String(enabled));
+            }
+        },
     });
 
     document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
@@ -8212,8 +8230,22 @@ function getCryptoOrderPreview() {
     const pendingPrice = Number(document.getElementById('crypto-limit-price')?.value || 0);
     const entryPrice = orderType === 'market' ? currentPrice : pendingPrice;
     const step = Number(cryptoOrderConstraints?.quantity_step || 0);
-    const positionQuantity = Math.abs(Number(currentTraining?.position?.quantity || 0));
-    const quantity = action === 'close' ? positionQuantity : floorCryptoQuantity((margin * leverage) / entryPrice, step);
+    const positionQuantity = Math.abs(Number(currentCryptoSummary?.position?.quantity ?? currentTraining?.position?.quantity ?? currentTraining?.account?.position?.quantity ?? 0));
+    const positionMargin = Number(currentCryptoSummary?.position?.isolated_margin ?? currentTraining?.position?.isolated_margin ?? currentTraining?.account?.position?.isolated_margin ?? 0);
+    let quantity = 0;
+    if (action === 'close') {
+        if (positionQuantity > 0) {
+            if (positionMargin > 0 && margin > 0 && margin < positionMargin) {
+                const ratio = Math.min(1, margin / positionMargin);
+                quantity = floorCryptoQuantity(positionQuantity * ratio, step);
+                if (quantity <= 0) quantity = positionQuantity;
+            } else {
+                quantity = positionQuantity;
+            }
+        }
+    } else {
+        quantity = floorCryptoQuantity((margin * leverage) / entryPrice, step);
+    }
     const feeRate = Number(orderType === 'limit' ? cryptoOrderConstraints?.maker_fee_rate : cryptoOrderConstraints?.taker_fee_rate) || 0;
     const notional = quantity * entryPrice;
     return { orderType, action, leverage, margin, currentPrice, entryPrice, quantity, notional, feeRate, fee: notional * feeRate };
@@ -8332,6 +8364,11 @@ function copyCryptoOrderParameters(orderId) {
 }
 
 function getCryptoMaxOpenMargin(orderType, leverage) {
+    const action = document.getElementById('crypto-order-action')?.value || 'open_long';
+    if (action === 'close') {
+        const positionMargin = Number(currentCryptoSummary?.position?.isolated_margin ?? currentTraining?.position?.isolated_margin ?? currentTraining?.account?.position?.isolated_margin ?? 0);
+        return Math.max(0, Math.floor(positionMargin * 100) / 100);
+    }
     const constraints = cryptoOrderConstraints || currentTraining?.order_constraints || {};
     const account = currentTraining?.account || {};
     const normalizedType = ['market', 'limit', 'breakout'].includes(orderType) ? orderType : 'market';
@@ -8575,6 +8612,10 @@ async function submitCryptoOrder() {
         return;
     }
     const body = { action, order_type: orderType, margin, leverage };
+    if (action === 'close') {
+        if (margin > 0) body.margin = margin;
+        if (quantity > 0) body.quantity = quantity;
+    }
     if (orderType !== 'market') {
         const directionError = validateCryptoPendingPrice(orderType, action, entryPrice, currentPrice);
         if (directionError) {

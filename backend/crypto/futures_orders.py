@@ -229,6 +229,7 @@ class FuturesOrderBook:
         timestamp: datetime,
         current_price,
         margin=None,
+        quantity=None,
         leverage: int | None = None,
         limit_price=None,
         trigger_price=None,
@@ -266,7 +267,26 @@ class FuturesOrderBook:
         if reduce_only:
             if self.simulator.position.is_flat:
                 raise FuturesOrderError("no_position", "当前没有可平仓的持仓。")
-            quantity = self.simulator.position.absolute_quantity
+            position_qty = self.simulator.position.absolute_quantity
+            step = getattr(self.simulator, "quantity_step", Decimal("0.0001"))
+            if quantity is not None and decimal_value(quantity) > ZERO:
+                selected_qty = decimal_value(quantity)
+                quantity = min(selected_qty, position_qty)
+            elif margin is not None and decimal_value(margin) > ZERO and self.simulator.position.isolated_margin > ZERO:
+                margin_val = decimal_value(margin)
+                closing_ratio = min(Decimal("1"), margin_val / self.simulator.position.isolated_margin)
+                if closing_ratio >= Decimal("0.999"):
+                    quantity = position_qty
+                else:
+                    quantity = (position_qty * closing_ratio).quantize(step, rounding=ROUND_DOWN)
+                    if quantity <= ZERO:
+                        quantity = min(step, position_qty)
+            else:
+                quantity = position_qty
+
+            if quantity <= ZERO:
+                raise FuturesOrderError("invalid_quantity", "平仓数量必须大于 0。")
+
             margin_value = ZERO
             side = "sell" if self.simulator.position.quantity > ZERO else "buy"
             if order_type in {"limit", "breakout"}:

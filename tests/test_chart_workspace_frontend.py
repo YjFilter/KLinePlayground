@@ -367,6 +367,42 @@ class ChartViewportPreservationTests(unittest.TestCase):
         self.assertIn("ALL_PRESERVATION_TESTS_PASSED", result.stdout)
 
 
+class DrawingMagnetSnapTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.html = HTML_PATH.read_text(encoding="utf-8")
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+        cls.drawing_js = (PROJECT_ROOT / "frontend" / "js" / "drawing_tools.js").read_text(encoding="utf-8")
+
+    def test_magnet_button_exists_in_html(self):
+        self.assertIn('id="drawing-magnet-btn"', self.html)
+        self.assertIn('data-drawing-action="magnet"', self.html)
+
+    def test_drawing_controller_has_magnet_support(self):
+        self.assertIn("setMagnetEnabled(enabled)", self.drawing_js)
+        self.assertIn("toggleMagnet()", self.drawing_js)
+        self.assertIn("this.magnetEnabled", self.drawing_js)
+        self.assertIn("isMagnet", self.drawing_js)
+
+    def test_drawing_action_magnet_in_main_js(self):
+        self.assertIn("if (action === 'magnet')", self.js)
+        self.assertIn("drawingController.toggleMagnet()", self.js)
+
+
+class CryptoPartialCloseUITests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_get_crypto_max_open_margin_handles_close_action(self):
+        self.assertIn("if (action === 'close')", self.js)
+        self.assertIn("currentCryptoSummary?.position?.isolated_margin", self.js)
+
+    def test_get_crypto_order_preview_handles_partial_close(self):
+        self.assertIn("if (positionMargin > 0 && margin > 0 && margin < positionMargin)", self.js)
+        self.assertIn("floorCryptoQuantity(positionQuantity * ratio, step)", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -1065,6 +1065,24 @@
             context.stroke();
           }
         }
+
+        if (model.snapPoint && Number.isFinite(model.snapPoint.x) && Number.isFinite(model.snapPoint.y)) {
+          const snapX = model.snapPoint.x * ratioX;
+          const snapY = model.snapPoint.y * ratioY;
+          context.save();
+          context.strokeStyle = '#00e5ff';
+          context.lineWidth = 2 * Math.max(ratioX, ratioY);
+          context.fillStyle = 'rgba(0, 229, 255, 0.25)';
+          context.beginPath();
+          context.arc(snapX, snapY, 7 * Math.max(ratioX, ratioY), 0, Math.PI * 2);
+          context.fill();
+          context.stroke();
+          context.beginPath();
+          context.arc(snapX, snapY, 2.5 * Math.max(ratioX, ratioY), 0, Math.PI * 2);
+          context.fillStyle = '#ffffff';
+          context.fill();
+          context.restore();
+        }
         context.restore();
       });
     }
@@ -1489,6 +1507,10 @@
         || null;
       this.onToolChange = parameters.onToolChange || null;
       this.onSelectionChange = parameters.onSelectionChange || null;
+      this.onMagnetChange = parameters.onMagnetChange || null;
+      this.magnetEnabled = parameters.magnetEnabled !== undefined ? Boolean(parameters.magnetEnabled) : true;
+      this.magnetDistance = Number.isFinite(parameters.magnetDistance) ? parameters.magnetDistance : 22;
+      this._lastActiveSnapPoint = null;
       this.accountSizeProvider = parameters.accountSizeProvider || null;
       this.accountRiskPercent = Number.isFinite(parameters.accountRiskPercent)
         ? parameters.accountRiskPercent
@@ -1535,6 +1557,16 @@
       this.element.addEventListener('pointerleave', this._boundPointerLeave);
       this.keyTarget.addEventListener('keydown', this._boundKeyDown);
       this.refresh();
+    }
+
+    setMagnetEnabled(enabled) {
+      this.magnetEnabled = Boolean(enabled);
+      if (this.onMagnetChange) this.onMagnetChange(this.magnetEnabled);
+      return this.magnetEnabled;
+    }
+
+    toggleMagnet() {
+      return this.setMagnetEnabled(!this.magnetEnabled);
     }
 
     activateTool(tool) {
@@ -1886,7 +1918,11 @@
 
     _safePointerEvent(event) {
       try {
-        return {...normalizePointerEvent(event, this.element), altKey: Boolean(event && event.altKey)};
+        return {
+          ...normalizePointerEvent(event, this.element),
+          altKey: Boolean(event && event.altKey),
+          ctrlKey: Boolean(event && (event.ctrlKey || event.metaKey)),
+        };
       } catch (error) {
         return null;
       }
@@ -1944,6 +1980,9 @@
     _createModelForTool(tool, anchors, id) {
       const normalizedType = normalizeDrawingType(tool);
       const config = {id, selected: Boolean(id)};
+      if (this._lastActiveSnapPoint) {
+        config.snapPoint = clone(this._lastActiveSnapPoint);
+      }
       if (normalizedType === 'risk-reward') config.side = 'long';
       if (normalizedType === 'long' || normalizedType === 'short'
           || normalizedType === 'risk-reward') {
@@ -2028,39 +2067,57 @@
       return [clone(anchor), clone(anchor)];
     }
 
-    _anchorFromPoint(point, altKey) {
+    _anchorFromPoint(point, altKey, ctrlKey) {
       const timeScale = this.chart.timeScale();
       let time = coordinateToProjectedTime(timeScale, point.x, this._timeProjection);
       let price = this.series.coordinateToPrice(point.y);
-      if (!altKey && Array.isArray(this._bars) && this._bars.length) {
-        let snapBar = null;
-        let snapDistance = Infinity;
+      const isAlt = Boolean(altKey !== undefined ? altKey : point?.altKey);
+      const isCtrl = Boolean(ctrlKey !== undefined ? ctrlKey : point?.ctrlKey);
+      const isMagnet = (this.magnetEnabled || isCtrl) && !isAlt;
+
+      let activeSnapPoint = null;
+
+      if (isMagnet && Array.isArray(this._bars) && this._bars.length) {
+        const snapThreshold = isCtrl ? 36 : (this.magnetDistance || 22);
+        let bestDist = snapThreshold;
+        let bestBar = null;
+        let bestPrice = null;
+        let bestKey = null;
+        let bestX = null;
+        let bestY = null;
+
         for (const bar of this._bars) {
           const barX = timeScale.timeToCoordinate(bar.time);
           if (!Number.isFinite(barX)) continue;
-          const distance = Math.abs(point.x - barX);
-          if (distance <= SNAP_DISTANCE_PX && distance < snapDistance) {
-            snapBar = bar;
-            snapDistance = distance;
-          }
-        }
-        if (snapBar) {
-          time = snapBar.time;
-          let snapPrice = null;
-          let priceDistance = Infinity;
+          const xDist = Math.abs(point.x - barX);
+          if (xDist > snapThreshold * 1.6) continue;
+
           for (const key of ['open', 'high', 'low', 'close']) {
-            if (!Number.isFinite(snapBar[key])) continue;
-            const coordinate = this.series.priceToCoordinate(snapBar[key]);
-            if (!Number.isFinite(coordinate)) continue;
-            const distance = Math.abs(point.y - coordinate);
-            if (distance <= SNAP_DISTANCE_PX && distance < priceDistance) {
-              snapPrice = snapBar[key];
-              priceDistance = distance;
+            const val = bar[key];
+            if (!Number.isFinite(val)) continue;
+            const barY = this.series.priceToCoordinate(val);
+            if (!Number.isFinite(barY)) continue;
+            const dist = Math.hypot(point.x - barX, point.y - barY);
+            if (dist < bestDist) {
+              bestDist = dist;
+              bestBar = bar;
+              bestPrice = val;
+              bestKey = key;
+              bestX = barX;
+              bestY = barY;
             }
           }
-          if (snapPrice != null) price = snapPrice;
+        }
+
+        if (bestBar && bestPrice != null) {
+          time = bestBar.time;
+          price = bestPrice;
+          activeSnapPoint = { x: bestX, y: bestY, time, price, key: bestKey };
         }
       }
+
+      this._lastActiveSnapPoint = activeSnapPoint;
+
       try {
         return normalizeAnchor({time, price});
       } catch (error) {
@@ -2091,7 +2148,7 @@
       const point = this._safePointerEvent(event);
       if (!point) return;
       if (this.activeTool && this.activeTool !== 'select') {
-        const anchor = this._anchorFromPoint(point, point.altKey);
+        const anchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
         if (!anchor) return;
         try {
           const anchors = this._defaultCreationAnchors(this.activeTool, anchor);
@@ -2144,7 +2201,7 @@
       const gesture = this._gesture;
       if (!gesture) return;
       if (gesture.type === 'create') {
-        const endAnchor = this._anchorFromPoint(point, point.altKey);
+        const endAnchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
         const anchors = endAnchor
           ? this._creationAnchors(gesture.tool, gesture.startAnchor, endAnchor)
           : null;
@@ -2164,7 +2221,7 @@
       }
       let anchors;
       if (gesture.type === 'anchor') {
-        const movedAnchor = this._anchorFromPoint(point, point.altKey);
+        const movedAnchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
         if (!movedAnchor) {
           gesture.invalid = true;
           return;
@@ -2183,11 +2240,16 @@
           if (!Number.isFinite(originalX) || !Number.isFinite(originalY)) return clone(anchor);
           return this._anchorFromPoint(
             {x: originalX + deltaX, y: originalY + deltaY},
-            point.altKey
+            point.altKey,
+            point.ctrlKey
           ) || clone(anchor);
         });
       }
-      const candidate = {...gesture.original, anchors};
+      const candidate = {
+        ...gesture.original,
+        anchors,
+        snapPoint: this._lastActiveSnapPoint ? clone(this._lastActiveSnapPoint) : null,
+      };
       try {
         serializeDrawing(candidate);
       } catch (error) {
@@ -2251,6 +2313,7 @@
         }
         this.refresh();
       }
+      this._lastActiveSnapPoint = null;
       this._gesture = null;
       this._releasePointerCapture();
       this._setInteractionState(false, gesture.type);
