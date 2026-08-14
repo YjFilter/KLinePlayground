@@ -53,26 +53,27 @@ class FuturesEngineTests(unittest.TestCase):
 
     def test_solved_long_and_short_liquidation_prices_use_mark_extremes(self):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)
-        # 全仓语义：强平价由账户余额支撑。余额=100（等同逐仓保证金）时与原公式一致；
-        # 余额远大于仓位名义时强平价会趋近 0（永不强平）。
+        # 全仓语义：强平爆仓价由账户总资产支撑，触及即直接亏完爆仓归零 (0 USDT)。
         long_simulator, _, long_engine = self.make_engine(balance="100")
         long_simulator.open_long(margin="100", price="100", timestamp=timestamp)
         long_price = long_engine.liquidation_price()
-        self.assertEqual(long_price.quantize(Decimal("0.000001")), Decimal("80.808081"))
+        self.assertEqual(long_price, Decimal("80"))
         self.assertIsNone(long_engine.check_liquidation(timestamp=timestamp, mark_low="81", mark_high="120"))
         long_event = long_engine.check_liquidation(timestamp=timestamp, mark_low="80", mark_high="120")
         self.assertEqual(long_event.price, long_price)
         self.assertEqual(long_event.side, "long")
         self.assertTrue(long_simulator.position.is_flat)
+        self.assertEqual(long_simulator.account.balance, Decimal("0"))
 
         short_simulator, _, short_engine = self.make_engine(balance="100")
         short_simulator.open_short(margin="100", price="100", timestamp=timestamp)
         short_price = short_engine.liquidation_price()
-        self.assertEqual(short_price.quantize(Decimal("0.000001")), Decimal("118.811881"))
-        self.assertIsNone(short_engine.check_liquidation(timestamp=timestamp, mark_low="80", mark_high="118"))
-        short_event = short_engine.check_liquidation(timestamp=timestamp, mark_low="80", mark_high="119")
+        self.assertEqual(short_price, Decimal("120"))
+        self.assertIsNone(short_engine.check_liquidation(timestamp=timestamp, mark_low="80", mark_high="119"))
+        short_event = short_engine.check_liquidation(timestamp=timestamp, mark_low="80", mark_high="120")
         self.assertEqual(short_event.side, "short")
         self.assertTrue(short_simulator.position.is_flat)
+        self.assertEqual(short_simulator.account.balance, Decimal("0"))
 
     def test_liquidation_has_priority_applies_fee_cancels_orders_and_keeps_equity_nonnegative(self):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)
@@ -81,15 +82,15 @@ class FuturesEngineTests(unittest.TestCase):
         pending = orders.submit_order(action="close", order_type="breakout", trigger_price="90", timestamp=timestamp, current_price="100")
         result = engine.process_bar(
             timestamp=timestamp + timedelta(minutes=5),
-            trade_bar={"high": "110", "low": "80", "close": "90"},
-            mark_bar={"high": "110", "low": "80", "close": "90"},
+            trade_bar={"high": "110", "low": "79", "close": "80"},
+            mark_bar={"high": "110", "low": "79", "close": "80"},
             funding_events=[],
         )
         self.assertEqual(len(result["liquidations"]), 1)
         self.assertEqual(result["fills"], [])
         self.assertEqual(pending.status, "cancelled")
-        self.assertGreater(simulator.account.liquidation_fees, Decimal("0"))
-        self.assertGreaterEqual(result["equity"], Decimal("0"))
+        self.assertEqual(simulator.account.balance, Decimal("0"))
+        self.assertEqual(result["equity"], Decimal("0"))
 
     def test_funding_can_trigger_liquidation_before_orders(self):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)

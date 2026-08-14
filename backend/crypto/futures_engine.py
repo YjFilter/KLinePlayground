@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Iterable
 
-from .futures_models import ZERO, decimal_value, timestamp_value
+from .futures_models import FuturesPosition, ZERO, decimal_value, timestamp_value
 from .futures_orders import FuturesOrderBook
 from .futures_simulator import FuturesSimulator
 from .models import FundingEvent
@@ -168,23 +168,19 @@ class FuturesEngine:
         if position.is_flat:
             return None
         quantity = position.absolute_quantity
-        reserve_rate = self.simulator.maintenance_margin_rate + self.liquidation_fee_rate
-        # 全仓（Cross）：用账户余额（balance）作为仓位风险支撑，
-        # 而非单仓保证金 isolated_margin。余额充足时强平价远离现价甚至为 0（不会触发）。
         balance = self.simulator.account.balance
+        # 全仓（Cross）强平爆仓价：算上账户总资产，触及即直接亏完爆仓归零
         if position.quantity > ZERO:
-            denominator = quantity * (Decimal("1") - reserve_rate)
-            if denominator <= ZERO:
-                raise ValueError("liquidation rates leave no valid long trigger")
-            return max(ZERO, (quantity * position.entry_price - balance) / denominator)
-        denominator = quantity * (Decimal("1") + reserve_rate)
-        return max(ZERO, (balance + quantity * position.entry_price) / denominator)
+            return max(ZERO, position.entry_price - balance / quantity)
+        return max(ZERO, position.entry_price + balance / quantity)
 
     def check_liquidation(self, *, timestamp: datetime, mark_low, mark_high) -> LiquidationEvent | None:
         position = self.simulator.position
         if position.is_flat:
             return None
         trigger = self.liquidation_price()
+        if trigger is None:
+            return None
         low_value = decimal_value(mark_low)
         high_value = decimal_value(mark_high)
         crossed = low_value <= trigger if position.quantity > ZERO else high_value >= trigger
@@ -193,24 +189,31 @@ class FuturesEngine:
         side = position.side
         quantity = position.absolute_quantity
         entry_price = position.entry_price
-        equity_before = self.simulator.equity(trigger)
-        maintenance = self.simulator.maintenance_margin(trigger)
-        liquidation_fee = quantity * trigger * self.liquidation_fee_rate
         event_time = timestamp_value(timestamp)
         self.order_book.cancel_all(event_time)
         fill_side = "sell" if position.quantity > ZERO else "buy"
-        self.simulator.apply_quantity(
-            fill_side,
-            quantity,
-            trigger,
-            timestamp=event_time,
-            fee_rate=self.liquidation_fee_rate,
-            fee_type="liquidation",
-            action="liquidation",
+
+        # 爆仓结算：全仓资产直接亏完归零 (0 USDT)
+        balance_lost = self.simulator.account.balance
+        self.simulator.account.realized_pnl -= balance_lost
+        self.simulator.account.balance = ZERO
+        self.simulator.account.used_margin = ZERO
+        self.simulator.position = FuturesPosition(leverage=self.simulator.leverage)
+
+        self.simulator._create_fill(
             order_id=f"liquidation-{self._next_liquidation_id}",
+            action="liquidation",
+            side=fill_side,
+            quantity=quantity,
+            price=trigger,
+            fee=ZERO,
+            fee_type="liquidation",
+            timestamp=event_time,
+            realized_pnl=-balance_lost,
             reduce_only=True,
         )
-        self.simulator.account.balance = max(ZERO, self.simulator.account.balance)
+        self.simulator.last_mark_price = trigger
+
         event = LiquidationEvent(
             liquidation_id=f"liquidation-{self._next_liquidation_id}",
             timestamp=event_time,
@@ -218,9 +221,10 @@ class FuturesEngine:
             quantity=quantity,
             entry_price=entry_price,
             price=trigger,
-            fee=liquidation_fee,
-            equity_before=max(ZERO, equity_before),
-            maintenance_margin=maintenance,
+            fee=ZERO,
+            equity_before=balance_lost,
+            maintenance_margin=ZERO,
+            reason="cross_margin_bankruptcy",
         )
         self._next_liquidation_id += 1
         self.liquidation_events.append(event)
