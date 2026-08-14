@@ -52,6 +52,7 @@ let periodSwitchGeneration = 0;
 let periodSwitchFeedbackTimer = null;
 let cryptoPeriodSnapshotCacheTrainingId = null;
 let cryptoOrderConstraints = null;
+let currentCryptoSummary = null;
 let cryptoOrderSubmitting = false;
 let cryptoNextInFlight = false;
 let cryptoFeeSubmitting = false;
@@ -7707,6 +7708,13 @@ function renderCryptoAccount(accountPayload) {
     const position = accountPayload?.position || account.position || {};
     cryptoOrderConstraints = accountPayload?.order_constraints || account.order_constraints || cryptoOrderConstraints;
     const pendingOrders = accountPayload?.pending_orders || account.pending_orders || [];
+    // 更新 currentCryptoSummary 供下单面板/磁吸/持仓计算使用
+    currentCryptoSummary = {
+        account_equity: account.equity ?? account.total_assets ?? null,
+        balance: account.available_balance ?? account.available_cash ?? null,
+        position: position,
+        account: account,
+    };
     if (currentTraining) {
         currentTraining.account = account;
         currentTraining.position = position;
