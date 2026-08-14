@@ -142,6 +142,7 @@ class FuturesPosition:
             "mark_price": float(selected_mark),
             "leverage": self.leverage,
             "isolated_margin": float(self.isolated_margin),
+            "margin_mode": "cross",
             "unrealized_pnl": float(self.unrealized_pnl(selected_mark)),
         }
 

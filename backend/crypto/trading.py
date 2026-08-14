@@ -110,6 +110,9 @@ class FuturesReplayExecutor:
     def snapshot(self) -> dict[str, Any]:
         mark_price = self._mark_bars[self.clock.current_time]["close"]
         simulator_snapshot = self.engine.simulator.snapshot(mark_price)
+        liq_price = self.engine.liquidation_price()
+        position_data = simulator_snapshot["position"]
+        position_data["liquidation_price"] = None if liq_price is None else float(liq_price)
         return {
             "market_type": "crypto_perpetual",
             "data_mode": "crypto_5m",
@@ -119,7 +122,7 @@ class FuturesReplayExecutor:
             "active_period": self.clock.active_period.value,
             "finished": not self.clock.has_next(),
             "account": simulator_snapshot["account"],
-            "position": simulator_snapshot["position"],
+            "position": position_data,
             "orders": self.engine.order_book.to_dict(),
             "fills": [fill.to_dict() for fill in self.engine.simulator.fills],
             "funding_events": [event.to_dict() for event in self.engine.funding_events],

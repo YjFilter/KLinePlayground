@@ -5835,6 +5835,10 @@ function applyCryptoNextDelta(delta) {
     if (delta.trade_markers) syncActiveTradeMarkers(delta.trade_markers);
     renderCryptoAccount(delta);
     renderCryptoTradeHistory(delta.fills || []);
+    const liqFill = (delta.fills || []).find((f) => f.action === 'liquidation');
+    if (liqFill) {
+        setCryptoOrderStatus(`💀 仓位已触发强平（爆仓）！强平价格: ${formatCryptoValue(liqFill.price)} USDT`, 'error');
+    }
 }
 
 async function nextCryptoBar() {
@@ -7736,7 +7740,10 @@ function renderCryptoAccount(accountPayload) {
     document.getElementById('crypto-floating-pnl').textContent = unrealized.toLocaleString() + ' USDT';
     document.getElementById('crypto-position-side').textContent = position.side || '空仓';
     document.getElementById('crypto-mark-price').textContent = Number(account.mark_price ?? position.mark_price ?? 0).toLocaleString();
-    document.getElementById('crypto-liquidation-price').textContent = position.liquidation_price ? Number(position.liquidation_price).toLocaleString() : '--';
+    const liqPrice = Number(position.liquidation_price || 0);
+    document.getElementById('crypto-liquidation-price').textContent = liqPrice > 0
+        ? Number(liqPrice).toLocaleString()
+        : (position.side && position.side !== 'flat' ? '0.00' : '--');
     document.getElementById('crypto-margin-ratio').textContent = account.margin_ratio == null ? '--' : (Number(account.margin_ratio) * 100).toFixed(2) + '%';
     const fundingNet = Number(account.funding_net ?? accountPayload?.funding_net ?? 0);
     document.getElementById('crypto-funding-summary').textContent = '资金费净额：' + fundingNet.toFixed(4) + ' USDT';
@@ -7858,7 +7865,7 @@ function initChartTradeLineDragging() {
         if (hovered) {
             chartEl.style.cursor = 'ns-resize';
         } else if (chartEl.style.cursor === 'ns-resize') {
-            chartEl.style.cursor = '';
+            chartEl.style.cursor = 'crosshair';
         }
     });
 
@@ -8070,6 +8077,32 @@ function updateChartTradePriceLines() {
             });
         } catch (e) {}
     }
+
+    // 4. 强平价线 (Liquidation Price Line / 爆仓线) - 与止损线明显区分（警戒深红 + 虚线/点线 + 骷髅标识）
+    const liquidationPrice = Number(position.liquidation_price || 0);
+    if (side !== 'flat' && quantity > 0 && liquidationPrice > 0 && !drawnPrices.has(liquidationPrice)) {
+        try {
+            const liqLine = candlestickSeries.createPriceLine({
+                price: liquidationPrice,
+                color: '#d50000',
+                lineWidth: 2,
+                lineStyle: lineStyleDotted,
+                axisLabelVisible: true,
+                title: '💀 强平 (Liq): ' + formatCryptoValue(liquidationPrice) + ' [爆仓线]',
+            });
+            activeChartTradePriceLines.push({
+                line: liqLine,
+                type: 'liquidation',
+                price: liquidationPrice,
+                side: side,
+                quantity: quantity,
+                entryPrice: entryPrice,
+            });
+            drawnPrices.add(liquidationPrice);
+        } catch (e) {
+            console.warn('创建强平价格线失败:', e);
+        }
+    }
 }
 
 // ===== AiCoin 风格持仓卡片 =====
@@ -8108,12 +8141,13 @@ function renderCryptoPositionCard(account, position, pendingOrders) {
     const liquidation = Number(position?.liquidation_price || 0);
     const protective = getCryptoProtectivePrices(pendingOrders);
     const pnlClass = unrealized >= 0 ? 'positive' : 'negative';
+    const marginModeText = position?.margin_mode === 'isolated' ? '逐仓' : '全仓';
 
     container.innerHTML = '<div class="crypto-pos-card">'
         + '<div class="crypto-pos-card-header">'
         + '<span class="crypto-pos-symbol">' + escapeHtml(symbol) + '</span>'
         + '<span class="crypto-pos-side ' + (isLong ? 'long' : 'short') + '">' + (isLong ? '多' : '空') + '</span>'
-        + '<span class="crypto-pos-tag">逐仓</span>'
+        + '<span class="crypto-pos-tag">' + marginModeText + '</span>'
         + '<span class="crypto-pos-tag">' + leverage + 'x</span>'
         + '<strong class="crypto-pos-pnl ' + pnlClass + '">' + (unrealized >= 0 ? '+' : '') + formatCryptoValue(unrealized, 4)
         + (pnlPercent === null ? '' : ' (' + (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%)') + '</strong>'
@@ -8124,10 +8158,9 @@ function renderCryptoPositionCard(account, position, pendingOrders) {
         + '<div><span>保证金(USDT)</span><strong>' + formatCryptoValue(margin, 4) + '</strong></div>'
         + '<div><span>标记价格</span><strong>' + formatCryptoValue(markPrice) + '</strong></div>'
         + '<div><span>保证金率</span><strong>' + (marginRatio === null ? '--' : marginRatio.toFixed(2) + '%') + '</strong></div>'
-        + '<div><span>预估强平价</span><strong>' + (liquidation > 0 ? formatCryptoValue(liquidation) : '--') + '</strong></div>'
+        + '<div><span>预估强平价</span><strong style="color: #ff3b30;">' + (liquidation > 0 ? formatCryptoValue(liquidation) : '0.00 (全仓安全)') + '</strong></div>'
         + '<div><span>止盈</span><strong class="tp">' + (protective.tp > 0 ? formatCryptoValue(protective.tp) : '--') + '</strong></div>'
         + '<div><span>止损</span><strong class="sl">' + (protective.sl > 0 ? formatCryptoValue(protective.sl) : '--') + '</strong></div>'
-        + '</div>'
         + '<div class="crypto-pos-actions">'
         + '<button type="button" data-crypto-pos-action="tpsl">止盈止损</button>'
         + '<button type="button" data-crypto-pos-action="close">平仓</button>'

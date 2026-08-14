@@ -446,8 +446,25 @@ class ChartTimeMinutePrecisionTests(unittest.TestCase):
         self.assertIn("TIME_MINUTE_PRECISION_TESTS_PASSED", result.stdout)
 
 
+class CrossMarginAndLiquidationPriceLineTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_position_card_uses_cross_margin_tag_and_safe_liquidation(self):
+        self.assertIn("const marginModeText = position?.margin_mode === 'isolated' ? '逐仓' : '全仓'", self.js)
+        self.assertIn("<span class=\"crypto-pos-tag\">' + marginModeText + '</span>", self.js)
+        self.assertIn("0.00 (全仓安全)", self.js)
+
+    def test_update_chart_trade_price_lines_creates_liquidation_line(self):
+        self.assertIn("type: 'liquidation'", self.js)
+        self.assertIn("💀 强平 (Liq):", self.js)
+        self.assertIn("color: '#d50000'", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 
