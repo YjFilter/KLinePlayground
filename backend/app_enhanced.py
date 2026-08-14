@@ -2468,6 +2468,7 @@ def _crypto_training_days(payload, explicit_days=None):
 def _crypto_prepare_candidate(
     *, symbol, training_start, training_days, history_years,
     preferred_source=None, progress_callback=None, cancel_check=None,
+    history_months=None, history_start=None,
 ):
     service = _get_crypto_data_service()
     prepare_days = training_days if training_days is not None else 365
@@ -2509,7 +2510,13 @@ def _crypto_prepare_candidate(
             f'起始时间 {training_start.strftime("%Y-%m-%d %H:%M")} 距今不足 {prepare_days} 天，'
             f'请将起始时间提前，或将"训练交易日限制"设为不超过 {available_days} 天。'
         )
-    history_start = _subtract_calendar_years(training_start, history_years)
+    if history_months is not None:
+        history_start = training_start - timedelta(days=int(history_months) * 30)
+    elif history_start:
+        if isinstance(history_start, str):
+            history_start = _parse_crypto_timestamp(history_start)
+    else:
+        history_start = _subtract_calendar_years(training_start, history_years)
     candidate_sources = []
     if preferred_source:
         candidate_sources.append(str(preferred_source))
@@ -2597,6 +2604,8 @@ def _prepare_crypto_history_job(user, payload, progress_callback, cancel_check):
             preferred_source=(payload or {}).get('source'),
             progress_callback=progress_callback,
             cancel_check=cancel_check,
+            history_months=(payload or {}).get('history_months'),
+            history_start=(payload or {}).get('history_start'),
         )
 
     last_error = None

@@ -4597,7 +4597,7 @@ async function switchViewPeriod(period) {
     }
 }
 
-// 极速功能测试模式（固定 2024 年 BTC 离线数据）
+// 极速功能测试模式（固定 2024 年 BTC 半年离线数据，极速开局）
 async function launchQuickTestBtc() {
     document.getElementById('training-setup')?.classList.add('hidden');
     if (!currentUser) {
@@ -4614,10 +4614,11 @@ async function launchQuickTestBtc() {
         start_time: '2024-07-01 00:00:00',
         data_source: 'binance',
         period: '5m',
-        max_training_days: 60,
+        max_training_days: 30,
         initial_capital: 100000,
         leverage: 10,
         history_years: 1,
+        history_months: 6, // 固定半年数据（2024-01 ~ 2024-07），100% 离线秒开
     };
     try {
         await startCryptoTrainingWithHistoryPreparation(payload);

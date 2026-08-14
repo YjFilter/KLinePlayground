@@ -301,6 +301,7 @@ class QuickTestBtcEntryTests(unittest.TestCase):
         self.assertIn("initial_capital: 100000", self.js)
         self.assertIn("leverage: 10", self.js)
         self.assertIn("history_years: 1", self.js)
+        self.assertIn("history_months: 6", self.js)
 
 
 if __name__ == "__main__":
