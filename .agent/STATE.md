@@ -827,8 +827,23 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **769 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `314df76`。
 
+## Chart Viewport Preservation on Next Bar Stepping (2026-08-14)
+- **用户需求**：
+  - 用户手动将图表向左拖动、在右侧留有留白空间（如截图 1 所示）时，每次点击「下一根 K 线」，图表不再强行跳动到最右端（截图 2），而是保持当前可视视口不变，新 K 线静默在右侧空白处生成。
+- **调整落地**：
+  1. **智能视口范围计算（`computePreservedNextLogicalRange`）**：
+     - 当最新 K 线的 logical index 已经处于当前可视区间内部（`newBarIndex >= from && newBarIndex <= to - 1`）时，**完全维持当前的 `from` 和 `to` 不变**，绝不移动/跳动图表；
+     - 只有当用户推进到图表右边缘（`newBarIndex > to - 1`）时，才整体按差值平移以容纳最新 K 线，同时完美保持用户当前的缩放比例；
+     - 用户回溯历史时，保持历史查看区间不变。
+  2. **全面覆盖**：在币圈模式（`nextCryptoBar`）、Intraday 模式及股票模式（`nextBar`）统一接入。
+  3. **自动化测试覆盖**：在 `tests/test_chart_workspace_frontend.py` 中新增 `ChartViewportPreservationTests`。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **771 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `5754c77`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
