@@ -841,8 +841,30 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **771 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `5754c77`。
 
+## OHLC Magnetic Snap & Flexible Partial Position Closing (2026-08-14)
+- **用户需求**：
+  1. 🧲 绘制磁吸模式（OHLC Magnetic Snap）：画线时支持精准吸附到 K 线的最高价、最低价、开盘价、收盘价；
+  2. 灵活分批平仓（Partial Position Closing）：持仓 100u 时，支持平 50u 或按 25%/50%/75% 比例分批平仓，不再强制全平。
+- **调整落地**：
+  1. **🧲 磁吸模式**：
+     - 工具栏新增 `🧲 磁吸模式` 开关按钮，支持快捷键（`Ctrl` 临时强力吸附，`Alt` 临时禁用）；
+     - `DrawingController._anchorFromPoint` 实现基于欧氏距离的 OHLC 极值吸附算法；
+     - `DrawingPaneRenderer` 在吸附时渲染青色高亮光圈指示点；
+  2. **🪙 灵活分批平仓**：
+     - `FuturesOrderBook.submit_order` 在 `action == "close"` 时支持传入 `margin` / `quantity`，按比例分批市价/限价平仓；
+     - 下单面板切换到「平仓」时，最大保证金自动对齐当前持仓保证金，25%/50%/75%/全部 比例按钮基于持仓保证金自动填入；
+     - 预计平仓数量与金额实时联动计算。
+  3. **测试覆盖**：
+     - 新增 `tests/test_crypto_partial_close.py`（3 个测试通过）；
+     - 新增 `DrawingMagnetSnapTests` 与 `CryptoPartialCloseUITests`（31 个测试通过）；
+     - 40 个画图运行时测试通过。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **779 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `0edae94`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
