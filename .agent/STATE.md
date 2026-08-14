@@ -876,6 +876,25 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **781 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `aacd420`。
 
+## Cross Margin Mode & Liquidation Price Line (2026-08-14)
+- **用户需求**：
+  1. 仓位模式切换为「全仓」（不要逐仓）；
+  2. 每单都有明确预估强平价，并在主图绘制专属红色强平价线（与止损线区分）；价格触及强平线即触发强平爆仓。
+- **调整落地**：
+  1. **全仓模式展示与数据模型**：
+     - `FuturesPosition.to_dict()` 增加 `margin_mode: "cross"`；
+     - 持仓卡片标签显示为 `全仓`；
+     - `trading.py` 快照挂载引擎实时计算的 `liquidation_price`；
+     - 预估强平价：在全仓权益充裕且价格跌到 0 也不爆仓时，展示 `0.00 (全仓安全)`；持仓有风险暴露时准确显示计算强平价（如 `50,389.66`）。
+  2. **主图强平价线（爆仓线）可视化**：
+     - `updateChartTradePriceLines` 绘制红色点状强平线：`💀 强平 (Liq): xxx [爆仓线]`（颜色 `#d50000`，粗细 2px，点状虚线，与止损虚线明显区分）；
+     - 当 K 线推进价格穿透强平线时，后端引擎自动执行强平结算并记录事件，前端弹出强平爆仓警示并更新账户。
+  3. **测试覆盖**：
+     - `tests/test_chart_workspace_frontend.py` 新增 `CrossMarginAndLiquidationPriceLineTests`。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `308859f`。
+
 ## Next Action
 等待用户下一项需求。
 
