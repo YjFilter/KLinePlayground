@@ -190,5 +190,94 @@ class MaIndicatorDefaultSettingsTests(unittest.TestCase):
         self.assertIn("if (!isMaLineVisible(p)) return;", self.js)
 
 
+class ChartTradePriceLinesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_trade_price_lines_functions_and_variables_exist(self):
+        self.assertIn("let activeChartTradePriceLines = [];", self.js)
+        self.assertIn("function clearChartTradePriceLines()", self.js)
+        self.assertIn("function updateChartTradePriceLines()", self.js)
+
+    def test_trade_price_lines_wired_into_lifecycle_events(self):
+        self.assertIn("updateChartTradePriceLines();", self.js)
+        self.assertIn("clearChartTradePriceLines();", self.js)
+
+    def test_trade_price_lines_node_execution_logic(self):
+        script = r"""
+const lines = [];
+const candlestickSeries = {
+  createPriceLine(opt) {
+    lines.push(opt);
+    return opt;
+  },
+  removePriceLine(line) {
+    const idx = lines.indexOf(line);
+    if (idx >= 0) lines.splice(idx, 1);
+  }
+};
+let activeChartTradePriceLines = [];
+let currentTraining = {
+  id: 'test-session',
+  position: { side: 'long', quantity: 1.5, entry_price: 64200, unrealized_pnl: 150.25, isolated_margin: 642 },
+  pending_orders: [
+    { order_id: 'tp1', parent_order_id: 'p1', protection_type: 'tp', limit_price: 66000, status: 'active' },
+    { order_id: 'sl1', parent_order_id: 'p1', protection_type: 'sl', trigger_price: 63000, status: 'active' },
+    { order_id: 'o2', action: 'open_short', order_type: 'limit', limit_price: 68000, quantity: 0.5, status: 'active' }
+  ]
+};
+function isCryptoMode() { return true; }
+function formatCryptoValue(val, maxD = 8) { return Number(val).toLocaleString(undefined, { maximumFractionDigits: maxD }); }
+function getCryptoProtectivePrices(pendingOrders) {
+  let tp = 0, sl = 0;
+  (pendingOrders || []).forEach(o => {
+    if (!o || !o.parent_order_id) return;
+    if (o.protection_type === 'tp') tp = Number(o.limit_price || o.tp_price || 0);
+    if (o.protection_type === 'sl') sl = Number(o.trigger_price || o.sl_price || 0);
+  });
+  return { tp, sl };
+}
+""" + self.js[self.js.find("function clearChartTradePriceLines()"):self.js.find("function renderCryptoPositionCard(")] + r"""
+
+updateChartTradePriceLines();
+if (lines.length !== 4) {
+  throw new Error(`Expected 4 price lines (pos, tp, sl, limit), got ${lines.length}`);
+}
+const posLine = lines.find(l => l.price === 64200);
+if (!posLine || !posLine.title.includes('多') || !posLine.title.includes('1.5') || posLine.color !== '#2196f3') {
+  throw new Error('Position price line invalid: ' + JSON.stringify(posLine));
+}
+const tpLine = lines.find(l => l.price === 66000);
+if (!tpLine || !tpLine.title.includes('止盈') || tpLine.color !== '#0ecb81') {
+  throw new Error('TP price line invalid: ' + JSON.stringify(tpLine));
+}
+const slLine = lines.find(l => l.price === 63000);
+if (!slLine || !slLine.title.includes('止损') || slLine.color !== '#f6465d') {
+  throw new Error('SL price line invalid: ' + JSON.stringify(slLine));
+}
+const limitLine = lines.find(l => l.price === 68000);
+if (!limitLine || !limitLine.title.includes('限价') || limitLine.color !== '#2962ff') {
+  throw new Error('Limit order price line invalid: ' + JSON.stringify(limitLine));
+}
+
+// Test clear
+clearChartTradePriceLines();
+if (lines.length !== 0) {
+  throw new Error('Failed to clear price lines');
+}
+"""
+        completed = subprocess.run(
+            ["node", "-e", script],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
+

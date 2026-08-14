@@ -8,6 +8,7 @@ let volumeSeries = null;
 let maSeries = {}; // 存储移动平均线系列
 let indicatorSeries = null;
 let tradeMarkerSeries = null;
+let activeChartTradePriceLines = [];
 let isPlaying = false;
 let playbackInterval = null;
 let currentTraining = null;
@@ -3038,6 +3039,7 @@ function replaceRenderedKlineData(klineData) {
     if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
     applyLastPriceTagColor();
     showLatestChartInfo();
+    updateChartTradePriceLines();
 }
 
 function upsertRenderedBar(bar) {
@@ -3048,6 +3050,7 @@ function upsertRenderedBar(bar) {
         if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
         applyLastPriceTagColor();
         showLatestChartInfo();
+        updateChartTradePriceLines();
         return;
     }
 
@@ -3058,6 +3061,7 @@ function upsertRenderedBar(bar) {
         if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
         applyLastPriceTagColor();
         showLatestChartInfo();
+        updateChartTradePriceLines();
         return;
     }
 
@@ -3066,6 +3070,7 @@ function upsertRenderedBar(bar) {
     if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
     applyLastPriceTagColor();
     showLatestChartInfo();
+    updateChartTradePriceLines();
 }
 
 function syncDrawingToolBars() {
@@ -3114,6 +3119,7 @@ function syncDrawingToolbarState(tool = null) {
 }
 
 function clearSessionDrawings() {
+    clearChartTradePriceLines();
     drawingController?.resetAll?.();
     drawingController?.cancelGesture?.();
     setDrawingInteractionState(false);
@@ -7315,6 +7321,144 @@ function renderCryptoAccount(accountPayload) {
     renderCryptoPendingOrders(pendingOrders);
     renderCryptoPositionCard(account, position, pendingOrders);
     refreshCryptoOrderPreview();
+    updateChartTradePriceLines();
+}
+
+// ===== 主图持仓均价线与止盈止损/挂单线可视化 (AICoin / TradingView 风格) =====
+function clearChartTradePriceLines() {
+    if (typeof candlestickSeries === 'undefined' || !candlestickSeries || typeof activeChartTradePriceLines === 'undefined' || !activeChartTradePriceLines || !activeChartTradePriceLines.length) {
+        if (typeof activeChartTradePriceLines !== 'undefined') activeChartTradePriceLines = [];
+        return;
+    }
+    activeChartTradePriceLines.forEach((line) => {
+        try {
+            candlestickSeries.removePriceLine(line);
+        } catch (e) {
+            // 忽略图表重置时的移除异常
+        }
+    });
+    activeChartTradePriceLines = [];
+}
+
+function updateChartTradePriceLines() {
+    clearChartTradePriceLines();
+    if (typeof candlestickSeries === 'undefined' || !candlestickSeries || typeof isCryptoMode !== 'function' || !isCryptoMode() || typeof currentTraining === 'undefined' || !currentTraining?.id) return;
+
+    const position = currentTraining.position || {};
+    const pendingOrders = Array.isArray(currentTraining.pending_orders) ? currentTraining.pending_orders : [];
+    const side = String(position.side || 'flat');
+    const quantity = Number(position.quantity || 0);
+    const entryPrice = Number(position.entry_price || 0);
+
+    const lineStyleSolid = (typeof LightweightCharts !== 'undefined' && LightweightCharts?.LineStyle?.Solid != null) ? LightweightCharts.LineStyle.Solid : 0;
+    const lineStyleDashed = (typeof LightweightCharts !== 'undefined' && LightweightCharts?.LineStyle?.Dashed != null) ? LightweightCharts.LineStyle.Dashed : 2;
+    const lineStyleDotted = (typeof LightweightCharts !== 'undefined' && LightweightCharts?.LineStyle?.Dotted != null) ? LightweightCharts.LineStyle.Dotted : 1;
+
+    // 1. 主图持仓均价线 (Position Entry Price Line)
+    if (side !== 'flat' && quantity > 0 && entryPrice > 0) {
+        const isLong = side === 'long';
+        const unrealized = Number(position.unrealized_pnl || 0);
+        const margin = Number(position.isolated_margin || 0);
+        const pnlPercent = margin > 0 ? (unrealized / margin) * 100 : 0;
+        const pnlFormatted = (unrealized >= 0 ? '+' : '') + formatCryptoValue(unrealized, 2) + ' USDT';
+        const pctFormatted = (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%';
+        const title = (isLong ? '多 ' : '空 ') + formatCryptoValue(quantity) + ' @ ' + formatCryptoValue(entryPrice) + ' [' + pnlFormatted + ', ' + pctFormatted + ']';
+        const lineColor = isLong ? '#2196f3' : '#f6465d';
+
+        try {
+            const posLine = candlestickSeries.createPriceLine({
+                price: entryPrice,
+                color: lineColor,
+                lineWidth: 2,
+                lineStyle: lineStyleSolid,
+                axisLabelVisible: true,
+                title: title,
+            });
+            activeChartTradePriceLines.push(posLine);
+        } catch (e) {
+            console.warn('创建持仓均价线失败:', e);
+        }
+    }
+
+    // 2. 挂单价格线（止盈 TP、止损 SL、限价 Limit、突破 Breakout）
+    const actionMap = { open_long: '买入', open_short: '卖出', close: '平仓' };
+    const drawnPrices = new Set();
+
+    pendingOrders.forEach((order) => {
+        if (!order || order.status === 'filled' || order.status === 'cancelled') return;
+        const isProtective = !!order.parent_order_id;
+        const isTp = isProtective && order.protection_type === 'tp';
+        const isSl = isProtective && order.protection_type === 'sl';
+        const price = Number(order.limit_price ?? order.trigger_price ?? 0);
+        if (!Number.isFinite(price) || price <= 0) return;
+
+        let lineColor = '#848e9c';
+        let lineStyle = lineStyleDashed;
+        let title = '';
+
+        if (isTp) {
+            lineColor = '#0ecb81';
+            title = '止盈 (TP): ' + formatCryptoValue(price);
+        } else if (isSl) {
+            lineColor = '#f6465d';
+            title = '止损 (SL): ' + formatCryptoValue(price);
+        } else {
+            const actionText = actionMap[order.action] || '挂单';
+            if (order.order_type === 'breakout') {
+                lineColor = '#f0b90b';
+                title = '突破' + actionText + ': ' + formatCryptoValue(price) + ' (' + formatCryptoValue(order.quantity || 0) + ')';
+            } else {
+                lineColor = '#2962ff';
+                title = '限价' + actionText + ': ' + formatCryptoValue(price) + ' (' + formatCryptoValue(order.quantity || 0) + ')';
+            }
+        }
+
+        try {
+            const orderLine = candlestickSeries.createPriceLine({
+                price: price,
+                color: lineColor,
+                lineWidth: 1,
+                lineStyle: lineStyle,
+                axisLabelVisible: true,
+                title: title,
+            });
+            activeChartTradePriceLines.push(orderLine);
+            drawnPrices.add(price);
+        } catch (e) {
+            console.warn('创建挂单价格线失败:', e);
+        }
+    });
+
+    // 3. 兜底持仓保护价（若 pendingOrders 中未体现但 position 有独立 tp/sl 属性）
+    const protective = getCryptoProtectivePrices(pendingOrders);
+    const tpPrice = Number(protective.tp || position.tp_price || 0);
+    const slPrice = Number(protective.sl || position.sl_price || 0);
+    if (tpPrice > 0 && !drawnPrices.has(tpPrice)) {
+        try {
+            const tpLine = candlestickSeries.createPriceLine({
+                price: tpPrice,
+                color: '#0ecb81',
+                lineWidth: 1,
+                lineStyle: lineStyleDashed,
+                axisLabelVisible: true,
+                title: '止盈 (TP): ' + formatCryptoValue(tpPrice),
+            });
+            activeChartTradePriceLines.push(tpLine);
+        } catch (e) {}
+    }
+    if (slPrice > 0 && !drawnPrices.has(slPrice)) {
+        try {
+            const slLine = candlestickSeries.createPriceLine({
+                price: slPrice,
+                color: '#f6465d',
+                lineWidth: 1,
+                lineStyle: lineStyleDashed,
+                axisLabelVisible: true,
+                title: '止损 (SL): ' + formatCryptoValue(slPrice),
+            });
+            activeChartTradePriceLines.push(slLine);
+        } catch (e) {}
+    }
 }
 
 // ===== AiCoin 风格持仓卡片 =====
