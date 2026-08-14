@@ -29,6 +29,7 @@ class CryptoMonthlyCache:
         self.base_interval = base_interval
         self.base_interval_minutes = int(base_interval[:-1]) if base_interval.endswith("m") else int(base_interval)
         self._instrument_paths_cache = None
+        self._frame_cache = {}
 
     def _kind_directory(self, source: str, symbol: str, kind: str) -> Path:
         return self.root / source / symbol.upper() / kind
@@ -251,6 +252,7 @@ class CryptoMonthlyCache:
             metadata_temp.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
             data_temp.replace(data_path)
             metadata_temp.replace(metadata_path)
+        self._frame_cache.clear()
 
     def _load_path(self, source, symbol, kind, path, *, missing_ok=False, numeric="decimal"):
         pd = _load_pandas()
@@ -258,6 +260,9 @@ class CryptoMonthlyCache:
             if missing_ok:
                 return pd.DataFrame(columns=CANDLE_COLUMNS)
             return pd.DataFrame(columns=CANDLE_COLUMNS)
+        cache_key = (str(path), numeric, path.stat().st_mtime)
+        if cache_key in self._frame_cache:
+            return self._frame_cache[cache_key].copy()
         try:
             with gzip.open(path, "rt", encoding="utf-8") as handle:
                 frame = pd.read_csv(handle, dtype=str)
@@ -273,7 +278,8 @@ class CryptoMonthlyCache:
             validation = _validate_frame(frame, kind=kind)
             if not validation.is_valid:
                 raise ValueError(", ".join(issue.code for issue in validation.issues))
-            return frame
+            self._frame_cache[cache_key] = frame
+            return frame.copy()
         except Exception as exc:
             raise CryptoCacheCorruption(f"corrupt crypto cache for {source}/{symbol}/{kind}/{path.stem.replace('.csv', '')}: {exc}") from exc
 

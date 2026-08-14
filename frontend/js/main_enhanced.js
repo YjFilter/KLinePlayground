@@ -1275,6 +1275,8 @@ function setupEventListeners() {
     document.getElementById('trade-reason-text')?.addEventListener('input', updateTradeReasonCount);
 
     // 训练设置相关
+    document.getElementById('quick-test-btc-btn')?.addEventListener('click', launchQuickTestBtc);
+    document.getElementById('modal-quick-test-btc-btn')?.addEventListener('click', launchQuickTestBtc);
     document.getElementById('new-training-btn').addEventListener('click', showTrainingSetup);
     document.getElementById('cancel-setup-btn').addEventListener('click', hideTrainingSetup);
     document.getElementById('start-training-btn').addEventListener('click', startTraining);
@@ -4387,6 +4389,36 @@ async function switchViewPeriod(period) {
         alert('切换K线视图失败');
     } finally {
         hideLoading();
+    }
+}
+
+// 极速功能测试模式（固定 2024 年 BTC 离线数据）
+async function launchQuickTestBtc() {
+    document.getElementById('training-setup')?.classList.add('hidden');
+    if (!currentUser) {
+        alert('请先选择或创建用户');
+        showUserSelection();
+        return;
+    }
+    const payload = {
+        user: currentUser,
+        market_type: CRYPTO_MARKET_TYPE,
+        data_mode: CRYPTO_DATA_MODE,
+        mode: 'specified',
+        symbol: 'BTCUSDT',
+        start_time: '2024-07-01 00:00:00',
+        data_source: 'binance',
+        period: '5m',
+        max_training_days: 60,
+        initial_capital: 100000,
+        leverage: 10,
+        history_years: 1,
+    };
+    try {
+        await startCryptoTrainingWithHistoryPreparation(payload);
+    } catch (error) {
+        if (error?.name === 'AbortError' || error?.cryptoHistoryHandled) return;
+        alert(error.message || '极速功能测试启动失败');
     }
 }
 

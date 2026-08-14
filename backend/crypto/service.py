@@ -81,6 +81,10 @@ class CryptoDataService:
         for candidate in candidates:
             try:
                 frame = self.cache.load(candidate.name, symbol, "trade", start, end, numeric="float")
+                expected = pd.date_range(start=start, end=end, freq=f"{BASE_INTERVAL_MINUTES}min", tz="UTC")
+                actual = pd.DatetimeIndex(frame["timestamp"]) if not frame.empty else pd.DatetimeIndex([])
+                if actual.equals(expected):
+                    return candidate.name, self._decorate(frame, candidate.name, symbol, "trade")
                 missing = self._missing_ranges(frame, start, end)
                 for range_start, range_end in missing:
                     for chunk_start, chunk_end in self._natural_month_chunks(range_start, range_end):
@@ -93,8 +97,7 @@ class CryptoDataService:
                             self.cache.save(candidate.name, symbol, "trade", incoming)
                 if missing:
                     frame = self.cache.load(candidate.name, symbol, "trade", start, end, numeric="float")
-                expected = pd.date_range(start=start, end=end, freq=f"{BASE_INTERVAL_MINUTES}min", tz="UTC")
-                actual = pd.DatetimeIndex(frame["timestamp"]) if not frame.empty else pd.DatetimeIndex([])
+                    actual = pd.DatetimeIndex(frame["timestamp"]) if not frame.empty else pd.DatetimeIndex([])
                 if not actual.equals(expected):
                     raise CryptoDataUnavailable(f"{candidate.name} lacks complete trade coverage for {symbol}")
                 return candidate.name, self._decorate(frame, candidate.name, symbol, "trade")

@@ -49,8 +49,8 @@ class CryptoFrontendStaticTests(unittest.TestCase):
         self.assertRegex(
             self.html,
             re.compile(
-                r'id="crypto-history-years"[^>]*type="number"[^>]*value="2"'
-                r'[^>]*min="2"[^>]*max="5"[^>]*step="1"'
+                r'id="crypto-history-years"[^>]*type="number"[^>]*value="1"'
+                r'[^>]*min="1"[^>]*max="5"[^>]*step="1"'
             ),
         )
         self.assertIn('id="crypto-history-years-help"', self.html)

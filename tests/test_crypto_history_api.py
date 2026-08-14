@@ -83,13 +83,13 @@ class CryptoHistoryAPITests(unittest.TestCase):
     def tearDown(self):
         app_module.active_trainings.clear()
 
-    def test_history_years_defaults_to_two_and_accepts_two_through_five(self):
+    def test_history_years_defaults_to_two_and_accepts_one_through_five(self):
         self.assertEqual(app_module._parse_crypto_history_years({}), 2)
-        for value in (2, 3, 4, 5, "2", "5"):
+        for value in (1, 2, 3, 4, 5, "1", "5"):
             self.assertEqual(app_module._parse_crypto_history_years({"history_years": value}), int(value))
 
     def test_history_years_rejects_out_of_range_and_fractional_values(self):
-        for value in (1, 6, 2.5, "2.5", True):
+        for value in (0, 6, 2.5, "2.5", True):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "history_years"):
                 app_module._parse_crypto_history_years({"history_years": value})
 
@@ -136,7 +136,7 @@ class CryptoHistoryAPITests(unittest.TestCase):
             "symbol": "BTCUSDT",
             "start_time": "2025-01-01T00:00:00Z",
             "period": "5m",
-            "history_years": 1,
+            "history_years": 0,
         })
         self.assertEqual(response.status_code, 400, response.get_json())
         self.assertIn("history_years", response.get_json()["error"])

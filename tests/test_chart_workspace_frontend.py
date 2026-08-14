@@ -278,6 +278,32 @@ if (lines.length !== 0) {
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
+class QuickTestBtcEntryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.html = HTML_PATH.read_text(encoding="utf-8")
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_quick_test_btc_buttons_exist_in_html(self):
+        self.assertIn('id="quick-test-btc-btn"', self.html)
+        self.assertIn('id="modal-quick-test-btc-btn"', self.html)
+        self.assertIn('⚡ 快速测试(BTC)', self.html)
+        self.assertIn('⚡ 极速功能测试模式', self.html)
+
+    def test_launch_quick_test_btc_function_and_bindings_in_js(self):
+        self.assertIn("async function launchQuickTestBtc()", self.js)
+        self.assertIn("document.getElementById('quick-test-btc-btn')?.addEventListener('click', launchQuickTestBtc)", self.js)
+        self.assertIn("document.getElementById('modal-quick-test-btc-btn')?.addEventListener('click', launchQuickTestBtc)", self.js)
+
+    def test_launch_quick_test_btc_uses_2024_btc_offline_defaults(self):
+        self.assertIn("symbol: 'BTCUSDT'", self.js)
+        self.assertIn("start_time: '2024-07-01 00:00:00'", self.js)
+        self.assertIn("initial_capital: 100000", self.js)
+        self.assertIn("leverage: 10", self.js)
+        self.assertIn("history_years: 1", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

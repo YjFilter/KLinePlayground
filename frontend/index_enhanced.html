@@ -72,6 +72,7 @@
                 <div id="current-bar-id" class="bar-id-display"></div>
             </div>
             <div class="toolbar-right">
+                <button id="quick-test-btc-btn" class="btn btn-warning" title="使用 2024 年 BTC 离线数据一键秒开训练，用于快速测试各项功能" style="background: linear-gradient(135deg, #f0b90b 0%, #f39c12 100%); color: #1e2329; font-weight: 600; border: none; box-shadow: 0 2px 8px rgba(240, 185, 11, 0.35);">⚡ 快速测试(BTC)</button>
                 <button id="theme-toggle-btn" class="btn btn-secondary">深色主题</button>
                 <button id="data-sync-btn" class="btn btn-secondary">数据更新器</button>
                 <button id="settings-btn" class="btn btn-secondary">设置</button>
@@ -177,6 +178,13 @@
         <div id="training-setup" class="modal hidden">
             <div class="modal-content">
                 <h2>新建训练</h2>
+                <div class="quick-test-banner" style="background: rgba(240, 185, 11, 0.12); border: 1px dashed rgba(240, 185, 11, 0.5); border-radius: 8px; padding: 10px 14px; margin: 12px 0 16px; display: flex; align-items: center; justify-content: space-between;">
+                    <div style="font-size: 13px;">
+                        <strong style="color: #f0b90b;">⚡ 极速功能测试模式</strong>
+                        <div style="font-size: 12px; color: var(--text-muted, #848e9c); margin-top: 2px;">固定使用 2024 年 BTC 离线数据，秒级直达看盘，专为测试各项功能打造</div>
+                    </div>
+                    <button id="modal-quick-test-btc-btn" type="button" class="btn btn-warning" style="background: #f0b90b; color: #1e2329; font-weight: 600; padding: 6px 14px; font-size: 13px; border: none; white-space: nowrap; cursor: pointer;">一键极速开局</button>
+                </div>
                 <div class="market-type-switch" role="tablist" aria-label="训练市场">
                     <button class="market-type-btn active" type="button" data-market-type="a_share">A股</button>
                     <button class="market-type-btn" type="button" data-market-type="crypto_perpetual">币圈永续</button>
@@ -276,8 +284,8 @@
                     </div>
                     <div class="form-group crypto-market-field hidden">
                         <label for="crypto-history-years">训练前历史（年）</label>
-                        <input id="crypto-history-years" type="number" value="2" min="2" max="5" step="1" aria-describedby="crypto-history-years-help">
-                        <small id="crypto-history-years-help">用于训练开始前的行情观察，默认至少 2 年，不改变向后训练时长。</small>
+                        <input id="crypto-history-years" type="number" value="1" min="1" max="5" step="1" aria-describedby="crypto-history-years-help">
+                        <small id="crypto-history-years-help">用于训练开始前的行情观察，默认 1 年，不改变向后训练时长。</small>
                     </div>
                     <div class="form-group crypto-market-field hidden">
                         <label>默认杠杆</label>
