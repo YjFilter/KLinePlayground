@@ -7617,9 +7617,12 @@ function clearChartTradePriceLines() {
         if (typeof activeChartTradePriceLines !== 'undefined') activeChartTradePriceLines = [];
         return;
     }
-    activeChartTradePriceLines.forEach((line) => {
+    activeChartTradePriceLines.forEach((item) => {
+        const line = item?.line || item;
         try {
-            candlestickSeries.removePriceLine(line);
+            if (line && typeof candlestickSeries?.removePriceLine === 'function') {
+                candlestickSeries.removePriceLine(line);
+            }
         } catch (e) {
             // 忽略图表重置时的移除异常
         }
@@ -7627,9 +7630,169 @@ function clearChartTradePriceLines() {
     activeChartTradePriceLines = [];
 }
 
+let chartTradeLineDragBound = false;
+let currentDraggedTradeLine = null;
+let chartDragTooltipEl = null;
+
+function getChartDragTooltip() {
+    if (!chartDragTooltipEl) {
+        chartDragTooltipEl = document.createElement('div');
+        chartDragTooltipEl.className = 'chart-price-line-tooltip';
+        document.body.appendChild(chartDragTooltipEl);
+    }
+    return chartDragTooltipEl;
+}
+
+function initChartTradeLineDragging() {
+    if (typeof document === 'undefined' || !document || typeof window === 'undefined') return;
+    if (chartTradeLineDragBound) return;
+    const chartEl = document.getElementById('chart');
+    if (!chartEl) return;
+    chartTradeLineDragBound = true;
+
+    function getHoveredTradeLine(e) {
+        if (!candlestickSeries || !activeChartTradePriceLines.length) return null;
+        if (drawingController?.activeTool && drawingController.activeTool !== 'select') return null;
+        const rect = chartEl.getBoundingClientRect();
+        const mouseY = e.clientY - rect.top;
+        const mouseX = e.clientX - rect.left;
+        if (mouseX < 0 || mouseX > rect.width || mouseY < 0 || mouseY > rect.height) return null;
+
+        for (const item of activeChartTradePriceLines) {
+            if (!item?.orderId || !item?.price) continue;
+            try {
+                const lineY = candlestickSeries.priceToCoordinate(item.price);
+                if (lineY != null && Math.abs(mouseY - lineY) <= 8) {
+                    return item;
+                }
+            } catch (err) {}
+        }
+        return null;
+    }
+
+    chartEl.addEventListener('pointermove', (e) => {
+        if (currentDraggedTradeLine) {
+            e.preventDefault();
+            const rect = chartEl.getBoundingClientRect();
+            const mouseY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+            const newPrice = candlestickSeries.coordinateToPrice(mouseY);
+            if (newPrice != null && newPrice > 0 && Number.isFinite(newPrice)) {
+                currentDraggedTradeLine.tempPrice = Number(newPrice.toFixed(2));
+                const item = currentDraggedTradeLine.item;
+                const priceFormatted = formatCryptoValue(currentDraggedTradeLine.tempPrice);
+                let title = '';
+                let typeClass = 'limit';
+                if (item.type === 'tp') {
+                    title = `止盈 (TP): ${priceFormatted}`;
+                    typeClass = 'tp';
+                } else if (item.type === 'sl') {
+                    title = `止损 (SL): ${priceFormatted}`;
+                    typeClass = 'sl';
+                } else {
+                    title = `修改挂单: ${priceFormatted}`;
+                    typeClass = 'limit';
+                }
+
+                try {
+                    item.line.applyOptions({
+                        price: currentDraggedTradeLine.tempPrice,
+                        title: title,
+                    });
+                } catch (err) {}
+
+                const tooltip = getChartDragTooltip();
+                tooltip.className = `chart-price-line-tooltip ${typeClass}`;
+                tooltip.style.display = 'block';
+                tooltip.style.left = `${e.clientX + 14}px`;
+                tooltip.style.top = `${e.clientY}px`;
+
+                let pnlText = '';
+                if (item.entryPrice > 0) {
+                    const isLong = item.side === 'open_long' || item.side === 'long' || (item.order?.action === 'open_long');
+                    const diff = isLong ? (currentDraggedTradeLine.tempPrice - item.entryPrice) : (item.entryPrice - currentDraggedTradeLine.tempPrice);
+                    const pct = (diff / item.entryPrice) * 100;
+                    const pnlUsdt = (item.quantity || 0) * diff;
+                    pnlText = ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% | ${pnlUsdt >= 0 ? '+' : ''}${formatCryptoValue(pnlUsdt, 2)} USDT)`;
+                }
+                tooltip.textContent = `松开修改为: $${priceFormatted}${pnlText}`;
+            }
+            return;
+        }
+
+        const hovered = getHoveredTradeLine(e);
+        if (hovered) {
+            chartEl.style.cursor = 'ns-resize';
+        } else if (chartEl.style.cursor === 'ns-resize') {
+            chartEl.style.cursor = '';
+        }
+    });
+
+    chartEl.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        const hovered = getHoveredTradeLine(e);
+        if (!hovered) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+        try { chartEl.setPointerCapture(e.pointerId); } catch (err) {}
+
+        currentDraggedTradeLine = {
+            item: hovered,
+            pointerId: e.pointerId,
+            startPrice: hovered.price,
+            tempPrice: hovered.price,
+        };
+        document.body.classList.add('chart-dragging-order');
+    });
+
+    async function finishDrag(e) {
+        if (!currentDraggedTradeLine) return;
+        const dragInfo = currentDraggedTradeLine;
+        currentDraggedTradeLine = null;
+        document.body.classList.remove('chart-dragging-order');
+        if (chartDragTooltipEl) chartDragTooltipEl.style.display = 'none';
+        try { chartEl.releasePointerCapture(dragInfo.pointerId); } catch (err) {}
+
+        const finalPrice = dragInfo.tempPrice;
+        const item = dragInfo.item;
+
+        if (!finalPrice || Math.abs(finalPrice - dragInfo.startPrice) < 0.01) {
+            try { item.line.applyOptions({ price: dragInfo.startPrice }); } catch (err) {}
+            return;
+        }
+
+        try {
+            setCryptoOrderStatus(`⏳ 正在同步修改挂单价格至 ${formatCryptoValue(finalPrice)}...`, 'loading');
+            const response = await fetch(`${API_BASE}/training/${currentTraining.id}/orders/${item.orderId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ price: finalPrice }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+
+            item.price = finalPrice;
+            if (Array.isArray(data.pending_orders)) {
+                currentTraining.pending_orders = data.pending_orders;
+                renderCryptoPendingOrders(data.pending_orders);
+            }
+            updateChartTradePriceLines();
+            setCryptoOrderStatus(`⚡ 已成功将挂单修改为 ${formatCryptoValue(finalPrice)} USDT`, 'ready');
+        } catch (err) {
+            console.error('修改挂单价格失败:', err);
+            setCryptoOrderStatus(`❌ 改单失败: ${err.message}`, 'error');
+            try { item.line.applyOptions({ price: dragInfo.startPrice }); } catch (e) {}
+        }
+    }
+
+    chartEl.addEventListener('pointerup', finishDrag);
+    chartEl.addEventListener('pointercancel', finishDrag);
+}
+
 function updateChartTradePriceLines() {
     clearChartTradePriceLines();
     if (typeof candlestickSeries === 'undefined' || !candlestickSeries || typeof isCryptoMode !== 'function' || !isCryptoMode() || typeof currentTraining === 'undefined' || !currentTraining?.id) return;
+    initChartTradeLineDragging();
 
     const position = currentTraining.position || {};
     const pendingOrders = Array.isArray(currentTraining.pending_orders) ? currentTraining.pending_orders : [];
@@ -7661,7 +7824,14 @@ function updateChartTradePriceLines() {
                 axisLabelVisible: true,
                 title: title,
             });
-            activeChartTradePriceLines.push(posLine);
+            activeChartTradePriceLines.push({
+                line: posLine,
+                type: 'position',
+                price: entryPrice,
+                side: side,
+                quantity: quantity,
+                entryPrice: entryPrice,
+            });
         } catch (e) {
             console.warn('创建持仓均价线失败:', e);
         }
@@ -7685,18 +7855,18 @@ function updateChartTradePriceLines() {
 
         if (isTp) {
             lineColor = '#0ecb81';
-            title = '止盈 (TP): ' + formatCryptoValue(price);
+            title = '止盈 (TP): ' + formatCryptoValue(price) + ' [可拖动]';
         } else if (isSl) {
             lineColor = '#f6465d';
-            title = '止损 (SL): ' + formatCryptoValue(price);
+            title = '止损 (SL): ' + formatCryptoValue(price) + ' [可拖动]';
         } else {
             const actionText = actionMap[order.action] || '挂单';
             if (order.order_type === 'breakout') {
                 lineColor = '#f0b90b';
-                title = '突破' + actionText + ': ' + formatCryptoValue(price) + ' (' + formatCryptoValue(order.quantity || 0) + ')';
+                title = '突破' + actionText + ': ' + formatCryptoValue(price) + ' (' + formatCryptoValue(order.quantity || 0) + ') [可拖动]';
             } else {
                 lineColor = '#2962ff';
-                title = '限价' + actionText + ': ' + formatCryptoValue(price) + ' (' + formatCryptoValue(order.quantity || 0) + ')';
+                title = '限价' + actionText + ': ' + formatCryptoValue(price) + ' (' + formatCryptoValue(order.quantity || 0) + ') [可拖动]';
             }
         }
 
@@ -7709,7 +7879,16 @@ function updateChartTradePriceLines() {
                 axisLabelVisible: true,
                 title: title,
             });
-            activeChartTradePriceLines.push(orderLine);
+            activeChartTradePriceLines.push({
+                line: orderLine,
+                orderId: order.order_id,
+                order: order,
+                type: isTp ? 'tp' : isSl ? 'sl' : 'limit',
+                price: price,
+                side: order.side,
+                quantity: Number(order.quantity || 0),
+                entryPrice: entryPrice,
+            });
             drawnPrices.add(price);
         } catch (e) {
             console.warn('创建挂单价格线失败:', e);
@@ -7730,7 +7909,12 @@ function updateChartTradePriceLines() {
                 axisLabelVisible: true,
                 title: '止盈 (TP): ' + formatCryptoValue(tpPrice),
             });
-            activeChartTradePriceLines.push(tpLine);
+            activeChartTradePriceLines.push({
+                line: tpLine,
+                type: 'tp',
+                price: tpPrice,
+                entryPrice: entryPrice,
+            });
         } catch (e) {}
     }
     if (slPrice > 0 && !drawnPrices.has(slPrice)) {
@@ -7743,7 +7927,12 @@ function updateChartTradePriceLines() {
                 axisLabelVisible: true,
                 title: '止损 (SL): ' + formatCryptoValue(slPrice),
             });
-            activeChartTradePriceLines.push(slLine);
+            activeChartTradePriceLines.push({
+                line: slLine,
+                type: 'sl',
+                price: slPrice,
+                entryPrice: entryPrice,
+            });
         } catch (e) {}
     }
 }

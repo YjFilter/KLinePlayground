@@ -3228,6 +3228,33 @@ body.chart-panel-resizing {
     display: inline-block !important;
     flex-shrink: 0 !important;
 }
+/* 图表挂单线/止盈止损线拖拽改价 Tooltip 与指示器 */
+.chart-price-line-tooltip {
+    position: fixed;
+    z-index: 9999;
+    padding: 5px 10px;
+    background: rgba(24, 29, 38, 0.95);
+    color: #e0e6ed;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    pointer-events: none;
+    white-space: nowrap;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    transform: translateY(-50%);
+    display: none;
+    backdrop-filter: blur(4px);
+    transition: opacity 0.1s ease;
+}
+.chart-price-line-tooltip.tp { border-color: #0ecb81; color: #0ecb81; }
+.chart-price-line-tooltip.sl { border-color: #f6465d; color: #f6465d; }
+.chart-price-line-tooltip.limit { border-color: #f0b90b; color: #f0b90b; }
+body.chart-dragging-order, body.chart-dragging-order * {
+    cursor: ns-resize !important;
+    user-select: none !important;
+}
 /* 斐波那契设置面板：默认隐藏，仅在浮动工具条点"设置"后弹出 */
 .drawing-settings-popover { left: auto; right: 12px; top: 56px; }
 #main-app.crypto-training-active .drawing-floating-toolbar,

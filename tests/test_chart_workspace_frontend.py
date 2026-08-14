@@ -304,7 +304,27 @@ class QuickTestBtcEntryTests(unittest.TestCase):
         self.assertIn("history_months: 6", self.js)
 
 
+class ChartTradePriceLineDraggingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.css = CSS_PATH.read_text(encoding="utf-8")
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_chart_order_drag_css_rules(self):
+        self.assertIn(".chart-price-line-tooltip", self.css)
+        self.assertIn("body.chart-dragging-order", self.css)
+        self.assertIn("ns-resize", self.css)
+
+    def test_chart_order_drag_functions_in_js(self):
+        self.assertIn("function initChartTradeLineDragging()", self.js)
+        self.assertIn("function getChartDragTooltip()", self.js)
+        self.assertIn("candlestickSeries.priceToCoordinate", self.js)
+        self.assertIn("candlestickSeries.coordinateToPrice", self.js)
+        self.assertIn("training/${currentTraining.id}/orders/", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

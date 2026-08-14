@@ -398,6 +398,31 @@ class FuturesOrderBook:
                 cancelled.append(order)
         return cancelled
 
+    def modify_order_price(self, order_id: str, new_price, timestamp: datetime | None = None) -> FuturesOrder | None:
+        target = None
+        for order in self.orders:
+            if order.order_id == str(order_id) and order.status == "active":
+                target = order
+                break
+        if not target:
+            return None
+        price_val = decimal_value(new_price)
+        if price_val <= 0:
+            raise ValueError("order price must be positive")
+
+        if target.order_type == "limit":
+            target.limit_price = price_val
+            if target.protection_type == "tp":
+                target.tp_price = price_val
+        elif target.order_type == "breakout":
+            target.trigger_price = price_val
+            if target.protection_type == "sl":
+                target.sl_price = price_val
+        else:
+            target.limit_price = price_val
+
+        return target
+
     def process_bar(
         self,
         *,

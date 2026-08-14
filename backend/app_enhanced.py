@@ -3522,6 +3522,51 @@ def cancel_pending_order(training_id, order_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/training/<training_id>/orders/<order_id>', methods=['PUT'])
+@app.route('/api/training/<training_id>/orders/<order_id>/modify', methods=['POST', 'PUT'])
+def modify_pending_order(training_id, order_id):
+    try:
+        if training_id not in active_trainings:
+            return jsonify({'error': '训练会话不存在'}), 404
+        training = active_trainings[training_id]
+        payload = request.get_json() or {}
+        new_price = payload.get('price')
+        if new_price is None:
+            return jsonify({'error': 'price is required'}), 400
+
+        if _is_crypto_session(training):
+            lock = training.setdefault('_crypto_next_lock', Lock())
+            with lock:
+                order_book = training['futures_executor'].engine.order_book
+                normalized_order_id = str(order_id)
+                updated_order = order_book.modify_order_price(
+                    normalized_order_id,
+                    new_price,
+                    training['crypto_session'].clock.current_time,
+                )
+                if updated_order:
+                    _checkpoint_crypto_futures(training)
+                futures_payload = _crypto_futures_payload(training)
+                pending_orders = futures_payload['pending_orders']
+            if not updated_order:
+                return jsonify({
+                    'error': '订单不存在或已不可修改',
+                    'code': 'order_not_modifiable',
+                    'pending_orders': pending_orders,
+                }), 404
+            return jsonify({
+                'success': True,
+                'order_id': normalized_order_id,
+                'order': updated_order.to_dict(),
+                'pending_orders': pending_orders,
+            })
+
+        return jsonify({'error': 'A股暂不支持拖拽改单'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/training/<training_id>/trade_records', methods=['GET'])
 def get_trade_records(training_id):
     """获取最新交易记录明细"""
