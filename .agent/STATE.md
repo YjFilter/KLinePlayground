@@ -862,20 +862,19 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **779 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `0edae94`。
 
-## Chart Time Minute Precision (AICoin Style) (2026-08-14)
+## Chart Time Minute Precision & Initialization Robustness (2026-08-14)
 - **用户需求**：
   - 图表底部时间轴及十字光标悬浮显示时间精确到分钟，格式如 AICoin 所示（`2026-08-14 17:00`）。
 - **调整落地**：
-  1. **时间格式化重构**：
-     - 新增 `formatChartCrosshairTime(time)`：十字光标悬浮时间轴胶囊标签统一格式化为 `YYYY-MM-DD HH:mm`（如 `2026-08-14 17:00`）；
-     - 新增 `formatChartTickMark(time, tickMarkType)`：时间轴刻度智能按类型和日内/分钟级展示 `HH:mm` / `M月 D日`；
-     - 主图、成交量图、指标图统一接入 `localization.timeFormatter` 与 `timeScale.tickMarkFormatter`；
-     - `updateCurrentInfo` 同步使用分钟级时间格式更新顶部栏。
+  1. **时间格式化与图表初始化健壮性**：
+     - `formatChartCrosshairTime(time)` 全面容错处理 `Date`、`BusinessDay` 对象与时间戳，十字光标悬浮胶囊精确显示 `YYYY-MM-DD HH:mm`（如 `2026-08-14 17:00`）；
+     - 清理次级图表（成交量、技术指标）冗余的时间格式化配置，交由主图时间轴统一驱动；
+     - 训练启动异常提示精确暴露错误原因，杜绝被硬编码 alert 遮蔽。
   2. **测试覆盖**：
-     - `tests/test_chart_workspace_frontend.py` 新增 `ChartTimeMinutePrecisionTests`。
+     - `tests/test_chart_workspace_frontend.py` 的 `ChartTimeMinutePrecisionTests` 全绿通过。
 - **质量门禁**：
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **781 passed, 89 subtests passed (100% 全绿)**。
-  - Commit ID: `0796765`。
+  - Commit ID: `aacd420`。
 
 ## Next Action
 等待用户下一项需求。
