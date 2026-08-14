@@ -53,7 +53,9 @@ class FuturesEngineTests(unittest.TestCase):
 
     def test_solved_long_and_short_liquidation_prices_use_mark_extremes(self):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)
-        long_simulator, _, long_engine = self.make_engine()
+        # 全仓语义：强平价由账户余额支撑。余额=100（等同逐仓保证金）时与原公式一致；
+        # 余额远大于仓位名义时强平价会趋近 0（永不强平）。
+        long_simulator, _, long_engine = self.make_engine(balance="100")
         long_simulator.open_long(margin="100", price="100", timestamp=timestamp)
         long_price = long_engine.liquidation_price()
         self.assertEqual(long_price.quantize(Decimal("0.000001")), Decimal("80.808081"))
@@ -63,7 +65,7 @@ class FuturesEngineTests(unittest.TestCase):
         self.assertEqual(long_event.side, "long")
         self.assertTrue(long_simulator.position.is_flat)
 
-        short_simulator, _, short_engine = self.make_engine()
+        short_simulator, _, short_engine = self.make_engine(balance="100")
         short_simulator.open_short(margin="100", price="100", timestamp=timestamp)
         short_price = short_engine.liquidation_price()
         self.assertEqual(short_price.quantize(Decimal("0.000001")), Decimal("118.811881"))
@@ -74,7 +76,7 @@ class FuturesEngineTests(unittest.TestCase):
 
     def test_liquidation_has_priority_applies_fee_cancels_orders_and_keeps_equity_nonnegative(self):
         timestamp = datetime(2024, 1, 1, tzinfo=UTC)
-        simulator, orders, engine = self.make_engine()
+        simulator, orders, engine = self.make_engine(balance="100")
         orders.submit_order(action="open_long", order_type="market", margin="99", leverage=5, timestamp=timestamp, current_price="100")
         pending = orders.submit_order(action="close", order_type="breakout", trigger_price="90", timestamp=timestamp, current_price="100")
         result = engine.process_bar(

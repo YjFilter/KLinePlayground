@@ -192,7 +192,7 @@ class KLineProcessorEnhanced:
             )
         return volume_data
 
-    def get_ma_data(self, periods: List[int] = [5, 10, 20], view_period: str = "daily") -> Dict[int, List[Dict]]:
+    def get_ma_data(self, periods: List[int] = [10, 20, 40, 80, 160], view_period: str = "daily") -> Dict[int, List[Dict]]:
         adjusted = self._get_adjusted_frame(view_period=view_period, full=False)
         meta = self._build_bar_meta(adjusted)
         result = {}

@@ -13,7 +13,7 @@ from backend.crypto.service import CryptoDataService, CryptoDataUnavailable
 UTC = timezone.utc
 START = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
 END = datetime(2024, 1, 1, 0, 10, tzinfo=UTC)
-MONTH_START = datetime(2024, 1, 31, 23, 55, tzinfo=UTC)
+MONTH_START = datetime(2024, 1, 31, 23, 59, tzinfo=UTC)
 MONTH_END = datetime(2024, 2, 1, 0, 10, tzinfo=UTC)
 
 def instrument(source):
@@ -24,7 +24,7 @@ def bars(source, kind, start=START, end=END):
     cursor = start
     while cursor <= end:
         result.append(CryptoBar(source, "BTCUSDT", kind, cursor, Decimal("10"), Decimal("12"), Decimal("9"), Decimal("11"), Decimal("1") if kind == "trade" else None, Decimal("11") if kind == "trade" else None))
-        cursor += timedelta(minutes=5)
+        cursor += timedelta(minutes=1)
     return result
 
 class FakeSource:
@@ -103,7 +103,7 @@ class CryptoDataServiceTests(unittest.TestCase):
         source_name, first = service.get_chart_bars("BTCUSDT", START, END, source="binance")
 
         self.assertEqual(source_name, "binance")
-        self.assertEqual(len(first), 3)
+        self.assertEqual(len(first), 11)
         self.assertEqual(source.calls, [("trade", START, END)])
 
         source.calls.clear()
@@ -111,7 +111,7 @@ class CryptoDataServiceTests(unittest.TestCase):
         cached_source, cached = service.get_chart_bars("BTCUSDT", START, END, source="binance")
 
         self.assertEqual(cached_source, "binance")
-        self.assertEqual(len(cached), 3)
+        self.assertEqual(len(cached), 11)
         self.assertEqual(source.calls, [])
 
     def test_prepare_chart_bars_splits_requests_at_natural_month_boundaries(self):
@@ -162,7 +162,7 @@ class CryptoDataServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(source_name, "binance")
-        self.assertEqual(len(frame), 4)
+        self.assertEqual(len(frame), 12)
         self.assertEqual(source.calls, [])
 
     def test_prepare_chart_bars_reports_stable_progress_after_each_chunk(self):
@@ -282,13 +282,13 @@ class CryptoDataServiceTests(unittest.TestCase):
 
         self.assertEqual(source.calls, [])
 
-    def test_prepare_chart_bars_rejects_unaligned_five_minute_boundaries(self):
+    def test_prepare_chart_bars_rejects_unaligned_one_minute_boundaries(self):
         source = FakeSource("binance")
 
-        with self.assertRaisesRegex(ValueError, "5-minute boundaries"):
+        with self.assertRaisesRegex(ValueError, "1-minute boundaries"):
             CryptoDataService([source], self.cache).prepare_chart_bars(
                 "BTCUSDT",
-                START + timedelta(minutes=1),
+                START + timedelta(seconds=30),
                 END,
                 source="binance",
             )
@@ -322,7 +322,7 @@ class CryptoDataServiceTests(unittest.TestCase):
         self.assertEqual(offline.calls, [])
 
     def test_rejects_partial_trade_or_mark_coverage(self):
-        partial_mark = bars("binance", "mark", START, START + timedelta(minutes=5))
+        partial_mark = bars("binance", "mark", START, START + timedelta(minutes=1))
         source = FakeSource("binance", mark=partial_mark)
         with self.assertRaisesRegex(CryptoDataUnavailable, "complete aligned trade/mark coverage"):
             CryptoDataService([source], self.cache).get_bundle("BTCUSDT", START, END)

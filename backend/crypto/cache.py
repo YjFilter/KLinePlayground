@@ -24,18 +24,37 @@ class CryptoCacheCorruption(RuntimeError):
     pass
 
 class CryptoMonthlyCache:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, base_interval: str = "1m"):
         self.root = Path(root)
+        self.base_interval = base_interval
+        self.base_interval_minutes = int(base_interval[:-1]) if base_interval.endswith("m") else int(base_interval)
         self._instrument_paths_cache = None
 
-    def _directory(self, source: str, symbol: str, kind: str) -> Path:
+    def _kind_directory(self, source: str, symbol: str, kind: str) -> Path:
         return self.root / source / symbol.upper() / kind
+
+    def _directory(self, source: str, symbol: str, kind: str) -> Path:
+        base = self._kind_directory(source, symbol, kind)
+        if kind == "funding":
+            return base
+        return base / self.base_interval
 
     def _data_path(self, source: str, symbol: str, kind: str, month: str) -> Path:
         return self._directory(source, symbol, kind) / f"{month}.csv.gz"
 
     def _instrument_path(self, source: str, symbol: str) -> Path:
         return self.root / source / symbol.upper() / "instrument.json"
+
+    def _candidate_directories(self, source: str, symbol: str, kind: str) -> list[Path]:
+        # 新目录（带 interval 层）优先；完全为空时只读回退旧目录（旧 5m 数据，保旧会话恢复）。
+        new_directory = self._directory(source, symbol, kind)
+        if kind == "funding" or new_directory == self._kind_directory(source, symbol, kind):
+            return [new_directory]
+        directories = [new_directory]
+        legacy = self._kind_directory(source, symbol, kind)
+        if not new_directory.exists() or not any(new_directory.iterdir()):
+            directories.append(legacy)
+        return directories
 
     @staticmethod
     def _paths_for_range(directory: Path, start: datetime | None, end: datetime | None) -> list[Path]:
@@ -225,7 +244,7 @@ class CryptoMonthlyCache:
             with gzip.open(data_temp, "wt", encoding="utf-8", newline="") as handle:
                 serial.to_csv(handle, index=False)
             metadata = {
-                "source": source, "symbol": symbol.upper(), "kind": kind, "interval": "5m",
+                "source": source, "symbol": symbol.upper(), "kind": kind, "interval": self.base_interval,
                 "first_timestamp": merged["timestamp"].min().isoformat(), "last_timestamp": merged["timestamp"].max().isoformat(),
                 "rows": int(len(merged)), "validation": "valid", "synchronized_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -260,11 +279,12 @@ class CryptoMonthlyCache:
 
     def load(self, source: str, symbol: str, kind: str, start: datetime | None = None, end: datetime | None = None, *, numeric="decimal") -> pd.DataFrame:
         pd = _load_pandas()
-        directory = self._directory(source, symbol, kind)
-        frames = [
-            self._load_path(source, symbol, kind, path, numeric=numeric)
-            for path in self._paths_for_range(directory, start, end)
-        ]
+        frames = []
+        for directory in self._candidate_directories(source, symbol, kind):
+            frames.extend(
+                self._load_path(source, symbol, kind, path, numeric=numeric)
+                for path in self._paths_for_range(directory, start, end)
+            )
         result = self.merge(pd.DataFrame(columns=CANDLE_COLUMNS), pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=CANDLE_COLUMNS))
         if result.empty:
             return result
@@ -275,20 +295,20 @@ class CryptoMonthlyCache:
         return result.reset_index(drop=True)
 
     def coverage(self, source: str, symbol: str, kind: str) -> CryptoRange | None:
-        directory = self._directory(source, symbol, kind)
-        metadata_paths = sorted(directory.glob("*.json")) if directory.exists() else []
         starts = []
         ends = []
         try:
-            for path in metadata_paths:
-                data_path = path.with_suffix(".csv.gz")
-                if not data_path.exists():
-                    continue
-                metadata = json.loads(path.read_text(encoding="utf-8"))
-                if metadata.get("validation") != "valid":
-                    continue
-                starts.append(utc_datetime(datetime.fromisoformat(metadata["first_timestamp"])))
-                ends.append(utc_datetime(datetime.fromisoformat(metadata["last_timestamp"])))
+            for directory in self._candidate_directories(source, symbol, kind):
+                metadata_paths = sorted(directory.glob("*.json")) if directory.exists() else []
+                for path in metadata_paths:
+                    data_path = path.with_suffix(".csv.gz")
+                    if not data_path.exists():
+                        continue
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    if metadata.get("validation") != "valid":
+                        continue
+                    starts.append(utc_datetime(datetime.fromisoformat(metadata["first_timestamp"])))
+                    ends.append(utc_datetime(datetime.fromisoformat(metadata["last_timestamp"])))
         except Exception as exc:
             raise CryptoCacheCorruption(f"corrupt crypto cache metadata for {source}/{symbol}/{kind}: {exc}") from exc
         if starts:
@@ -315,7 +335,7 @@ class CryptoMonthlyCache:
             elif gap_start is not None:
                 missing.append((gap_start, previous))
                 gap_start = None
-            cursor += timedelta(minutes=5)
+            cursor += timedelta(minutes=self.base_interval_minutes)
         if gap_start is not None:
             missing.append((gap_start, previous))
         return missing

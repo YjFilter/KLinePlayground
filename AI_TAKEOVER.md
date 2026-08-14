@@ -4,7 +4,7 @@
 
 ## 项目位置
 
-`E:\Desktop\01_TODO\mimo\KLinePlayground`
+`D:\AI_work\KLinePlayground`
 
 ## 推荐读取顺序
 
@@ -23,13 +23,14 @@
 
 ## 当前状态摘要
 
-- 分支：`master`。
+- 分支：`main`（另有 `backup/pre-multiperiod-20260812` 备份分支）。
 - 当前存在大量尚未提交的功能改动，不能清理、覆盖、回滚或统一格式化。
-- 最近完成币圈默认两年历史、按月离线缓存准备、5m/15m 分段加载、跨周期连续性和下一根性能优化。
-- 最新完整验证：`717 passed, 71 subtests passed`。
-- 最新交接：`.agent/handoffs/2026-07-22-crypto-two-year-history-continuity.md`。
+- 最近完成币圈默认两年历史、按月离线缓存准备、5m/15m 分段加载、跨周期连续性和下一根性能优化；随后完成 AICoin 风格 UI 多阶段改造、画图工具扩展与浮动工具条、斐波那契趋势时间（价格档位版）、基于风险的仓位计算、MACD(10,20,5)/MA(10,20,40,80,160) 默认参数。
+- 最新完整验证：`745 passed, 89 subtests passed`（2026-08-14 接手复核，全绿）。
+- 最新交接：`.agent/handoffs/2026-08-14-git-object-repair-crypto-verified.md`。
 - 本地服务应监听 `0.0.0.0:8000`；接手时必须重新检查，不能相信旧 PID。
 - 已知控制面遗留问题：`python scripts/agent_status.py .agent/tasks` 会报告 `.agent/tasks/done/TASK-023-result.md` 缺少任务元数据。它是结果报告而不是标准任务包，未获得主 Agent 审查前不要移动或改写。
+- 2026-08-14 修复过本地 git 对象库缺失（HEAD 提交 `338bb62` 的对象被整体删除，git 全命令报 `fatal: bad object HEAD`）。恢复方式：curl 走 git smart-http 下载 packfile + `git index-pack`；注意本执行环境 git 自带 TLS 直连 GitHub 会被间歇性重置（`SSL_ERROR_SYSCALL`），网络取数用 `curl.exe` 更稳。
 
 ## 绝对禁止
 
@@ -52,7 +53,7 @@
 ## 常用命令
 
 ```powershell
-cd E:\Desktop\01_TODO\mimo\KLinePlayground
+cd D:\AI_work\KLinePlayground
 git status --short
 git log -5 --oneline
 Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/
@@ -75,5 +76,5 @@ python -m flask --app backend.app_enhanced run --host 0.0.0.0 --port 8000
 - 只想继续当前项目：把下面一句发给主 AI：
 
 ```text
-请按 E:\Desktop\01_TODO\mimo\KLinePlayground\AI_TAKEOVER.md 接手项目，先完成其中的状态检查，再等待并执行我的下一项需求。不要清理现有未提交改动，不要处理 .runtime/。
+请按 D:\AI_work\KLinePlayground\AI_TAKEOVER.md 接手项目，先完成其中的状态检查，再等待并执行我的下一项需求。不要清理现有未提交改动，不要处理 .runtime/。
 ```

@@ -48,7 +48,7 @@ class UserManagerEnhanced:
                     'stamp_tax_rate': 0.001,    # 千分之1
                     'adjustment_mode': 'forward',  # 默认使用稳定前复权
                     'default_initial_capital': 100000, # 默认初始资金
-                    'ma_periods': [5, 10, 20], # 默认MA周期
+                    'ma_periods': [10, 20, 40, 80, 160], # 默认MA周期
                     'theme': 'light',
                     'crypto_theme': 'dark',
                     'default_period': 'daily'

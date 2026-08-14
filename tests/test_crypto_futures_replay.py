@@ -35,7 +35,7 @@ def make_executor(period, start, count):
     orders = FuturesOrderBook(simulator)
     engine = FuturesEngine(simulator, orders)
     funding = [FundingEvent(source="binance", symbol="BTCUSDT", timestamp=start + timedelta(minutes=10), rate=Decimal("0.0001"), mark_price=Decimal("100.2"))]
-    clock = CryptoReplayClock(trade["timestamp"], initial_time=start, active_period=period)
+    clock = CryptoReplayClock(trade["timestamp"], initial_time=start, active_period=period, base_step_minutes=5)
     executor = FuturesReplayExecutor(clock=clock, trade_bars=trade, mark_bars=mark, engine=engine, funding_events=funding, symbol="BTCUSDT", source="binance")
     executor.submit_order(action="open_long", order_type="market", margin="1000", leverage=5)
     return executor
@@ -47,7 +47,7 @@ class FuturesReplayExecutorTests(unittest.TestCase):
         trade, mark = make_frames(start, 3)
         simulator = FuturesSimulator(initial_balance="10000", quantity_step="0.001", min_quantity="0.001", min_notional="5", leverage=5)
         engine = FuturesEngine(simulator, FuturesOrderBook(simulator))
-        clock = CryptoReplayClock(trade["timestamp"], initial_time=start, active_period="5m")
+        clock = CryptoReplayClock(trade["timestamp"], initial_time=start, active_period="5m", base_step_minutes=5)
         past = FundingEvent(source="binance", symbol="BTCUSDT", timestamp=start - timedelta(hours=8), rate=Decimal("0.01"), mark_price=Decimal("100"))
         current = FundingEvent(source="binance", symbol="BTCUSDT", timestamp=start + timedelta(minutes=5), rate=Decimal("0.001"), mark_price=Decimal("100"))
         executor = FuturesReplayExecutor(
@@ -96,7 +96,7 @@ class FuturesReplayExecutorTests(unittest.TestCase):
         mark = mark.iloc[:1]
         simulator = FuturesSimulator(initial_balance="1000", quantity_step="0.001", min_quantity="0.001", min_notional="5")
         engine = FuturesEngine(simulator, FuturesOrderBook(simulator))
-        clock = CryptoReplayClock(trade["timestamp"], active_period="15m")
+        clock = CryptoReplayClock(trade["timestamp"], active_period="15m", base_step_minutes=5)
         executor = FuturesReplayExecutor(clock=clock, trade_bars=trade, mark_bars=mark, engine=engine)
         with self.assertRaisesRegex(ValueError, "mark bar"):
             executor.advance()
@@ -110,7 +110,7 @@ class FuturesReplayExecutorTests(unittest.TestCase):
         simulator = FuturesSimulator(initial_balance="1000", quantity_step="0.001", min_quantity="0.001", min_notional="5")
         orders = FuturesOrderBook(simulator)
         engine = FuturesEngine(simulator, orders)
-        clock = CryptoReplayClock(trade["timestamp"], active_period="5m")
+        clock = CryptoReplayClock(trade["timestamp"], active_period="5m", base_step_minutes=5)
         executor = FuturesReplayExecutor(clock=clock, trade_bars=trade, mark_bars=mark, engine=engine)
         executor.submit_order(action="open_long", order_type="market", margin="100", leverage=5)
         first = executor.submit_order(action="close", order_type="limit", limit_price="105")

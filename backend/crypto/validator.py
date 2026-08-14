@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 
+from .models import BASE_INTERVAL_MINUTES
+
 @dataclass(frozen=True)
 class ValidationIssue:
     code: str
@@ -41,9 +43,9 @@ def validate_crypto_frame(frame: pd.DataFrame, *, kind: str = "trade") -> Valida
             if tz is None or offset != timedelta(0):
                 issues.append(ValidationIssue("non_utc_timestamp", "timestamps must be timezone-aware UTC", timestamp.to_pydatetime()))
                 break
-        misaligned = timestamps[(timestamps.dt.minute % 5 != 0) | (timestamps.dt.second != 0) | (timestamps.dt.microsecond != 0)]
+        misaligned = timestamps[(timestamps.dt.minute % BASE_INTERVAL_MINUTES != 0) | (timestamps.dt.second != 0) | (timestamps.dt.microsecond != 0)]
         if not misaligned.empty:
-            issues.append(ValidationIssue("misaligned_timestamp", "timestamps must align to five-minute UTC boundaries", misaligned.iloc[0].to_pydatetime()))
+            issues.append(ValidationIssue("misaligned_timestamp", f"timestamps must align to {BASE_INTERVAL_MINUTES}-minute UTC boundaries", misaligned.iloc[0].to_pydatetime()))
         if timestamps.duplicated().any():
             issues.append(ValidationIssue("duplicate_timestamp", "timestamps must be unique"))
         if not timestamps.is_monotonic_increasing:

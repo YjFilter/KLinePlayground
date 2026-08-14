@@ -63,6 +63,7 @@ class BinanceSourceTests(unittest.TestCase):
         self.assertEqual(funding[0].rate, Decimal("0.00010000"))
         self.assertTrue(all(item.timestamp.tzinfo is timezone.utc for item in [*trade, *mark, *funding]))
         self.assertEqual(requester.calls[0][1]["startTime"], 1710000000000)
+        self.assertEqual(requester.calls[0][1]["interval"], "1m")
 
 class BybitSourceTests(unittest.TestCase):
     def test_candle_pagination_moves_end_cursor_backward(self):
@@ -83,6 +84,7 @@ class BybitSourceTests(unittest.TestCase):
         self.assertLess(bars[0].timestamp, bars[1].timestamp)
         self.assertEqual(bars[0].open, Decimal("3000.10"))
         self.assertEqual(requester.calls[-1][1]["start"], 1710000000000)
+        self.assertEqual(requester.calls[-1][1]["interval"], "1")
 
     def test_normalizes_mark_and_funding(self):
         requester = FixtureRequester([fixture("bybit_mark_bars.json"), fixture("bybit_funding.json")])

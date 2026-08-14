@@ -21,6 +21,31 @@
     Object.freeze({value: 2, label: '200', colorGroup: 'orange', color: '#ff9800', enabled: true}),
   ]);
 
+  // AiCoin「斐波那契趋势时间」默认档位：0~3 延伸倍数，配色对齐其顶部彩色图例条。
+  const DEFAULT_FIB_TREND_TIME_LEVELS = Object.freeze([
+    Object.freeze({value: 0, label: '0', colorGroup: 'gray', color: '#9e9e9e', enabled: true}),
+    Object.freeze({value: 0.382, label: '0.382', colorGroup: 'purple', color: '#7c4dff', enabled: true}),
+    Object.freeze({value: 0.618, label: '0.618', colorGroup: 'blue', color: '#2962ff', enabled: true}),
+    Object.freeze({value: 1, label: '1', colorGroup: 'cyan', color: '#00bcd4', enabled: true}),
+    Object.freeze({value: 1.382, label: '1.382', colorGroup: 'lightblue', color: '#4fc3f7', enabled: true}),
+    Object.freeze({value: 1.618, label: '1.618', colorGroup: 'pink', color: '#ec407a', enabled: true}),
+    Object.freeze({value: 2, label: '2', colorGroup: 'magenta', color: '#d500f9', enabled: true}),
+    Object.freeze({value: 2.382, label: '2.382', colorGroup: 'green', color: '#4caf50', enabled: true}),
+    Object.freeze({value: 2.618, label: '2.618', colorGroup: 'brightgreen', color: '#0ecb81', enabled: true}),
+    Object.freeze({value: 3, label: '3', colorGroup: 'orange', color: '#ff9800', enabled: true}),
+  ]);
+
+  const DEFAULT_LINE_WIDTH = 1;
+  const DEFAULT_LINE_STYLE = 'solid';
+  const DEFAULT_LABEL_VISIBLE = true;
+  const DEFAULT_TEXT_CONTENT = 'Text';
+  const DEFAULT_RECTANGLE_FILL = 'transparent';
+  const DEFAULT_RECTANGLE_OPACITY = 0.12;
+  // 斐波那契时间（Fibonacci Time Zones / Fibonacci Time）：
+  // 把斐波那契倍数应用到时间轴上，从起点锚点向右按倍数画垂直时间线。
+  // 参考 AiCoin：0 / 0.382 / 0.618 / 1 / 1.382 / 1.618 / 2 / 2.382 / 2.618 / 3
+  const DEFAULT_FIBONACCI_TIME_LEVELS = Object.freeze([0, 0.382, 0.618, 1, 1.382, 1.618, 2, 2.382, 2.618, 3]);
+
   let nextDrawingId = 1;
   const SNAP_DISTANCE_PX = 8;
   const DEFAULT_RISK_REWARD_RATIO = 1.5;
@@ -35,6 +60,25 @@
 
   function clone(value) {
     return value == null ? value : JSON.parse(JSON.stringify(value));
+  }
+
+  /**
+   * 把 hex 颜色 (#rgb / #rrggbb) 转 rgba，失败返回 null 让调用方回退原值。
+   * 与 main_enhanced.js 的同名函数保持一致（独立 IIFE 模块，不能跨模块共享）。
+   */
+  function hexColorWithAlpha(hex, alpha) {
+    if (typeof hex !== 'string' || !hex.startsWith('#')) return null;
+    let digits = hex.slice(1);
+    if (digits.length === 3) {
+      digits = digits.split('').map((char) => char + char).join('');
+    } else if (digits.length !== 6) {
+      return null;
+    }
+    if (!/^[0-9a-fA-F]{6}$/.test(digits)) return null;
+    const r = parseInt(digits.slice(0, 2), 16);
+    const g = parseInt(digits.slice(2, 4), 16);
+    const b = parseInt(digits.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
   function createTimeProjectionContext(bars) {
@@ -118,6 +162,7 @@
   function normalizeDrawingType(type) {
     if (type === 'long-position') return 'long';
     if (type === 'short-position') return 'short';
+    if (type === 'fibonacci-time') return 'fibonacci-time';
     return type;
   }
 
@@ -139,6 +184,77 @@
     };
   }
 
+  // 「斐波那契趋势时间」默认设置：0~3 档位 + 虚线，和回撤斐波那契区分开。
+  function defaultFibTrendTimeSettings() {
+    return {
+      levels: resetFibTrendTimeLevels(),
+      reverse: false,
+      lineWidth: 1,
+      lineStyle: 'dashed',
+      labelPosition: 'left',
+    };
+  }
+
+  function resetFibTrendTimeLevels() {
+    return clone(DEFAULT_FIB_TREND_TIME_LEVELS);
+  }
+
+  /**
+   * 归一化通用线条设置：所有画图工具（horizontal/trend/ray/rectangle/ruler/text）
+   * 的 model.options 都会经过此函数，确保字段一致。这样前端设置面板可以按统一字段读写。
+   * 注意：color 字段不在此处强制 fallback（保留 undefined 让渲染时回退到主题色 strokeColor）。
+   */
+  function normalizeLineOptions(options, defaults = {}) {
+    const config = options || {};
+    const fallback = {
+      lineWidth: DEFAULT_LINE_WIDTH,
+      lineStyle: DEFAULT_LINE_STYLE,
+      labelVisible: DEFAULT_LABEL_VISIBLE,
+      ...defaults,
+    };
+    const lineWidth = config.lineWidth == null ? fallback.lineWidth : assertFinite(config.lineWidth, 'lineWidth');
+    if (lineWidth <= 0) throw new RangeError('lineWidth must be positive');
+    const lineStyle = config.lineStyle || fallback.lineStyle;
+    if (!['solid', 'dashed', 'dotted'].includes(lineStyle)) {
+      throw new RangeError('lineStyle must be solid, dashed, or dotted');
+    }
+    return {
+      ...clone(config),
+      lineWidth,
+      lineStyle,
+      labelVisible: config.labelVisible !== false,
+    };
+  }
+
+  function normalizeRectangleOptions(options) {
+    const base = normalizeLineOptions(options);
+    const config = options || {};
+    // fillColor 缺省时保留 undefined（渲染时回退到 strokeColor 透明版）。
+    // fillOpacity 缺省时也保留 undefined（渲染时回退到 0.16 默认）。
+    let fillOpacity = config.fillOpacity;
+    if (fillOpacity != null) {
+      fillOpacity = assertFinite(fillOpacity, 'fillOpacity');
+      if (fillOpacity < 0 || fillOpacity > 1) {
+        throw new RangeError('fillOpacity must be between 0 and 1');
+      }
+    }
+    return {
+      ...base,
+      fillColor: config.fillColor,
+      fillOpacity,
+    };
+  }
+
+  function normalizeTextOptions(options) {
+    const base = normalizeLineOptions(options);
+    const config = options || {};
+    return {
+      ...base,
+      text: config.text == null || config.text === '' ? DEFAULT_TEXT_CONTENT : String(config.text),
+      fontSize: config.fontSize == null ? 14 : assertFinite(config.fontSize, 'fontSize'),
+    };
+  }
+
   function normalizeFibonacciLevel(level) {
     const definition = typeof level === 'number' ? {value: level} : clone(level || {});
     const value = assertFinite(definition.value, 'level.value');
@@ -151,8 +267,7 @@
     };
   }
 
-  function normalizeFibonacciSettings(options) {
-    const defaults = defaultFibonacciSettings();
+  function normalizeFibonacciSettings(options, defaults = defaultFibonacciSettings()) {
     const config = options || {};
     const lineWidth = config.lineWidth == null ? defaults.lineWidth : assertFinite(config.lineWidth, 'lineWidth');
     if (lineWidth <= 0) throw new RangeError('lineWidth must be positive');
@@ -273,9 +388,19 @@
     }
     const config = options || {};
     const normalizedType = normalizeDrawingType(type);
-    const modelOptions = normalizedType === 'fibonacci'
-      ? normalizeFibonacciSettings(config.options)
-      : clone(config.options || {});
+    let modelOptions;
+    if (normalizedType === 'fibonacci') {
+      modelOptions = normalizeFibonacciSettings(config.options);
+    } else if (normalizedType === 'fib-trend-time') {
+      modelOptions = normalizeFibonacciSettings(config.options, defaultFibTrendTimeSettings());
+    } else if (normalizedType === 'rectangle') {
+      modelOptions = normalizeRectangleOptions(config.options);
+    } else if (normalizedType === 'text') {
+      modelOptions = normalizeTextOptions(config.options);
+    } else {
+      // horizontal / trend / ray / ruler / long / short / risk-reward 等：通用线条字段
+      modelOptions = normalizeLineOptions(config.options);
+    }
     for (const key of [
       'accountRiskAmount', 'accountSize', 'accountRiskPercent', 'positionSize', 'quantity'
     ]) {
@@ -316,6 +441,14 @@
     serialized.anchors = model.anchors.map(normalizeAnchor);
     if (serialized.type === 'fibonacci') {
       serialized.options = normalizeFibonacciSettings(serialized.options);
+    } else if (serialized.type === 'fib-trend-time') {
+      serialized.options = normalizeFibonacciSettings(serialized.options, defaultFibTrendTimeSettings());
+    } else if (serialized.type === 'rectangle') {
+      serialized.options = normalizeRectangleOptions(serialized.options);
+    } else if (serialized.type === 'text') {
+      serialized.options = normalizeTextOptions(serialized.options);
+    } else {
+      serialized.options = normalizeLineOptions(serialized.options);
     }
     if (serialized.type === 'long' || serialized.type === 'short' || serialized.type === 'risk-reward') {
       const side = serialized.type === 'risk-reward' ? serialized.side : serialized.type;
@@ -424,6 +557,7 @@
   const createRectangleModel = (anchors, options) => createDrawingModel('rectangle', anchors, options);
   const createTextModel = (anchors, options) => createDrawingModel('text', anchors, options);
   const createFibonacciModel = (anchors, options) => createDrawingModel('fibonacci', anchors, options);
+  const createFibTrendTimeModel = (anchors, options) => createDrawingModel('fib-trend-time', anchors, options);
   const createRulerModel = (anchors, options) => createDrawingModel('ruler', anchors, options);
   const createRiskRewardModel = (side, anchors, options) => createDrawingModel(
     'risk-reward',
@@ -518,6 +652,53 @@
     ]);
   }
 
+  function colorWithAlpha(color, alpha) {
+    if (typeof color !== 'string') return color;
+    if (color.charAt(0) === '#') {
+      let hex = color.slice(1);
+      if (hex.length === 3) hex = hex.split('').map((part) => part + part).join('');
+      if (hex.length >= 6) {
+        const red = parseInt(hex.slice(0, 2), 16);
+        const green = parseInt(hex.slice(2, 4), 16);
+        const blue = parseInt(hex.slice(4, 6), 16);
+        if ([red, green, blue].every(Number.isFinite)) {
+          return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+        }
+      }
+      return color;
+    }
+    const match = color.match(/^rgba?\(([^)]+)\)$/i);
+    if (match) {
+      const parts = match[1].split(',').map((part) => Number.parseFloat(part.trim()));
+      if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) {
+        return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${alpha})`;
+      }
+    }
+    return color;
+  }
+
+  // AiCoin 风格：选中/悬停图形时，把锚点价格同步到右侧价格轴。
+  // 斐波那契自带档位标签、text 无价格含义，因此不产生轴标签。
+  function axisLabelPrices(model) {
+    if (!model || typeof model !== 'object' || !Array.isArray(model.anchors)) return [];
+    const anchors = model.anchors;
+    switch (model.type) {
+      case 'horizontal':
+        return [anchors[0].price];
+      case 'trend':
+      case 'ray':
+      case 'rectangle':
+      case 'ruler':
+        return [anchors[0].price, anchors[1].price];
+      case 'long':
+      case 'short':
+      case 'risk-reward':
+        return [anchors[0].price, anchors[1].price, anchors[2].price];
+      default:
+        return [];
+    }
+  }
+
   function drawLabel(context, text, x, top, color, ratioX, ratioY, bounds) {
     const paddingX = 6 * ratioX;
     const labelHeight = 20 * ratioY;
@@ -596,13 +777,13 @@
         const width = scope.bitmapSize.width;
         const height = scope.bitmapSize.height;
         primitive.setPaneBounds(scope.mediaSize.width, scope.mediaSize.height);
-        const strokeColor = model.options.color || '#5b8ff9';
+        const strokeColor = model.options.color || primitive.defaultStrokeColor();
         context.save();
         context.beginPath();
         context.rect(0, 0, width, height);
         context.clip();
         context.strokeStyle = strokeColor;
-        context.fillStyle = model.options.fillColor || 'rgba(91, 143, 249, 0.16)';
+        context.fillStyle = model.options.fillColor || colorWithAlpha(strokeColor, 0.16);
         context.lineWidth = (model.selected ? 2 : 1) * Math.max(ratioX, ratioY);
         context.font = `${12 * ratioY}px sans-serif`;
 
@@ -614,8 +795,18 @@
           return;
         }
         if (model.type === 'horizontal') {
+          context.strokeStyle = strokeColor;
+          context.lineWidth = model.options.lineWidth * Math.max(ratioX, ratioY);
+          applyLineStyle(context, model.options.lineStyle, ratioX);
           drawLine(context, {x: 0, y: first.y}, {x: width, y: first.y});
+          if (model.options.labelVisible !== false && Number.isFinite(first.price)) {
+            context.fillStyle = strokeColor;
+            context.fillText(first.price.toFixed(2), 4 * ratioX, first.y - (3 * ratioY));
+          }
         } else if (model.type === 'ray') {
+          context.strokeStyle = strokeColor;
+          context.lineWidth = model.options.lineWidth * Math.max(ratioX, ratioY);
+          applyLineStyle(context, model.options.lineStyle, ratioX);
           drawLine(context, first, calculateRayEndpoint(first, second, {
             left: 0,
             top: 0,
@@ -627,10 +818,24 @@
           const top = Math.min(first.y, second.y);
           const rectWidth = Math.abs(second.x - first.x);
           const rectHeight = Math.abs(second.y - first.y);
+          context.strokeStyle = strokeColor;
+          context.lineWidth = model.options.lineWidth * Math.max(ratioX, ratioY);
+          applyLineStyle(context, model.options.lineStyle, ratioX);
+          const fillColor = model.options.fillColor;
+          const fillAlpha = model.options.fillOpacity;
+          if (!fillColor || fillColor === 'transparent') {
+            // 默认：strokeColor 透明版（保持原有视觉一致）
+            context.fillStyle = colorWithAlpha(strokeColor, fillAlpha ?? 0.16);
+          } else if (fillAlpha > 0) {
+            context.fillStyle = hexColorWithAlpha(fillColor, fillAlpha) || fillColor;
+          } else {
+            context.fillStyle = fillColor;
+          }
           context.fillRect(left, top, rectWidth, rectHeight);
           context.strokeRect(left, top, rectWidth, rectHeight);
         } else if (model.type === 'text') {
           context.fillStyle = strokeColor;
+          context.font = `${model.options.fontSize * ratioY}px sans-serif`;
           context.fillText(model.options.text || 'Text', first.x, first.y);
         } else if (model.type === 'fibonacci') {
           context.save();
@@ -656,6 +861,47 @@
                 : left + (4 * ratioX);
               context.fillText(labelText, labelX, y - (3 * ratioY));
             });
+        } else if (model.type === 'fib-trend-time') {
+          // 斐波那契趋势时间（重写版）：
+          // 用户从 A→B 量取一段走势（anchors[0]=A 起点，anchors[1]=B 终点）。
+          // 0 线对齐 B（第二锚点），Δt = |B.time - A.time|（A→B 量取的走势时长），
+          // 1 线在 B 右侧 +1×Δt 处，0.382/0.618 在 B~B+Δt 之间，
+          // 1.382/1.618/2/... 继续向 B 右侧（未来）扩展。
+          // 渲染用纯像素插值（不依赖时间投影，避免 _timeProjection 不可用导致坐标错乱）：
+          //   deltaX = |B.x - A.x|（向右扩展距离）
+          //   lineX = B.x + ratio × deltaX
+          const deltaX = Math.abs(second.x - first.x);
+          // 两锚点之间的虚线参考连线（被量取的这一段走势）
+          context.save();
+          context.strokeStyle = strokeColor;
+          context.setLineDash([4 * ratioX, 4 * ratioX]);
+          context.lineWidth = Math.max(1, (Number(model.options.lineWidth) || 1) * 0.75)
+            * Math.max(ratioX, ratioY);
+          drawLine(context, first, second);
+          context.restore();
+          // 垂直时间线：位置 = B + ratio × Δt（始终从 B 向右扩展）
+          context.lineWidth = Math.max(Number(model.options.lineWidth) || 1, 1)
+            * Math.max(ratioX, ratioY);
+          applyLineStyle(context, model.options.lineStyle, ratioX);
+          const enabledLevels = (model.options.levels || [])
+            .filter((level) => level && level.enabled !== false);
+          enabledLevels.forEach((level) => {
+            const ratio = Number(level.value || 0);
+            const x = second.x + ratio * deltaX;
+            if (!Number.isFinite(x)) return;
+            context.strokeStyle = level.color || strokeColor;
+            drawLine(context, {x, y: 0}, {x, y: height});
+            if (model.options.labelVisible !== false) {
+              const labelText = level.label == null
+                ? String(level.value == null ? '' : level.value)
+                : String(level.label);
+              const labelY = model.options.labelPosition === 'bottom'
+                ? height - (6 * ratioY)
+                : (8 * ratioY) + 12 * ratioY;
+              context.fillStyle = level.color || strokeColor;
+              context.fillText(labelText, x + (3 * ratioX), labelY);
+            }
+          });
         } else if (model.type === 'ruler') {
           const left = Math.min(first.x, second.x);
           const top = Math.min(first.y, second.y);
@@ -830,6 +1076,50 @@
     }
   }
 
+  // lightweight-charts 每帧会读取 text()/coordinate()/颜色等方法，
+  // 在右侧价格轴内绘制原生高亮标签（AiCoin 选中图形时的轴价格效果）。
+  class DrawingPriceAxisView {
+    constructor(primitive, slot) {
+      this._primitive = primitive;
+      this._slot = slot;
+    }
+
+    _state() {
+      return this._primitive.axisLabelState(this._slot);
+    }
+
+    coordinate() {
+      const state = this._state();
+      return state.visible ? state.coordinate : 0;
+    }
+
+    fixedCoordinate() {
+      return null;
+    }
+
+    text() {
+      const state = this._state();
+      return state.visible ? state.text : '';
+    }
+
+    textColor() {
+      return this._state().textColor || '#131722';
+    }
+
+    backColor() {
+      const state = this._state();
+      return state.visible ? state.backColor : 'rgba(0, 0, 0, 0)';
+    }
+
+    visible() {
+      return Boolean(this._state().visible);
+    }
+
+    tickVisible() {
+      return this.visible();
+    }
+  }
+
   class DrawingPrimitive {
     constructor(model) {
       this._model = serializeDrawing(model);
@@ -839,7 +1129,12 @@
       this._series = null;
       this._requestUpdate = null;
       this._paneBounds = null;
+      this._axisColorsProvider = null;
+      this._defaultColorProvider = null;
       this._paneView = new DrawingPaneView(this);
+      // lightweight-charts 按数组引用缓存轴视图包装：池大小变化时才重建并返回新数组。
+      this._priceAxisViews = [];
+      this._axisViewsCache = null;
     }
 
     attached(parameters) {
@@ -901,6 +1196,113 @@
     priceToCoordinate(price) {
       if (!this._series) return null;
       return this._series.priceToCoordinate(price);
+    }
+
+    setAxisLabelColors(provider) {
+      this._axisColorsProvider = typeof provider === 'function' ? provider : null;
+    }
+
+    setDefaultStrokeColor(provider) {
+      this._defaultColorProvider = typeof provider === 'function' ? provider : null;
+    }
+
+    defaultStrokeColor() {
+      if (this._defaultColorProvider) {
+        try {
+          const color = this._defaultColorProvider();
+          if (typeof color === 'string' && color) return color;
+        } catch (error) {
+          // 主题提供器异常时回退到默认蓝色。
+        }
+      }
+      return '#5b8ff9';
+    }
+
+    priceAxisViews() {
+      const needed = this._axisSlotCount();
+      if (!this._axisViewsCache || this._axisViewsCache.count !== needed) {
+        this._priceAxisViews = Array.from(
+          {length: needed},
+          (unused, slot) => new DrawingPriceAxisView(this, slot)
+        );
+        this._axisViewsCache = {count: needed, views: this._priceAxisViews};
+      }
+      return this._priceAxisViews;
+    }
+
+    _axisSlotCount() {
+      const model = this._model;
+      if (model.type === 'fib-trend-time') {
+        // 垂直时间线不使用价格轴标签（倍数标签绘制在 chart 顶部/底部）。
+        return 0;
+      }
+      return 3;
+    }
+
+    // 轴标签条目：fib-trend-time 不输出价格轴标签（倍数标签绘制在 chart 顶部/底部）。
+    _axisLabelEntries() {
+      const model = this._model;
+      if (model.type === 'fib-trend-time') {
+        return [];
+      }
+      return axisLabelPrices(model).map((price) => ({price, backColor: null, textColor: null}));
+    }
+
+    formatAxisPrice(price) {
+      try {
+        const options = this._series && typeof this._series.options === 'function'
+          ? this._series.options()
+          : null;
+        const precision = options && options.priceFormat
+          ? Number(options.priceFormat.precision)
+          : NaN;
+        if (Number.isFinite(precision) && precision >= 0 && precision <= 8) {
+          return price.toFixed(precision);
+        }
+      } catch (error) {
+        // 无法读取序列精度时使用自适应精度。
+      }
+      return formatAdaptivePrice(price);
+    }
+
+    axisLabelState(slot) {
+      const inactive = {visible: false};
+      const model = this._model;
+      if (model.hidden || (!model.selected && !model.hovered)) return inactive;
+      const entries = this._axisLabelEntries();
+      if (!Number.isInteger(slot) || slot < 0 || slot >= entries.length) return inactive;
+      const entry = entries[slot];
+      const coordinate = this.priceToCoordinate(entry.price);
+      if (!Number.isFinite(coordinate)) return inactive;
+      // 超出可见区间的档位/锚点不显示轴标签，避免标签堆积在轴边缘。
+      if (this._paneBounds
+          && (coordinate < 0 || coordinate > this._paneBounds.bottom)) return inactive;
+      const text = this.formatAxisPrice(entry.price);
+      for (let index = 0; index < slot; index += 1) {
+        if (this.formatAxisPrice(entries[index].price) === text) return inactive;
+      }
+      const colors = entry.backColor
+        ? {background: entry.backColor, text: entry.textColor || '#ffffff'}
+        : this._resolveAxisLabelColors();
+      return {
+        visible: true,
+        coordinate,
+        text,
+        textColor: colors.text,
+        backColor: colors.background,
+      };
+    }
+
+    _resolveAxisLabelColors() {
+      if (this._axisColorsProvider) {
+        try {
+          const colors = this._axisColorsProvider();
+          if (colors && colors.background && colors.text) return colors;
+        } catch (error) {
+          // 主题提供器异常时使用默认高亮配色。
+        }
+      }
+      return {background: '#e8ecf1', text: '#131722'};
     }
 
     projectAnchors() {
@@ -1003,6 +1405,20 @@
         const distance = Math.min(...distances);
         return point.x >= left && point.x <= right && distance <= tolerance ? distance : null;
       }
+      if (this._model.type === 'fib-trend-time') {
+        if (!second) return null;
+        // 垂直时间线：纯像素命中（与渲染一致：x = second.x + ratio × |ΔX|）。
+        const deltaX = Math.abs(second.x - first.x);
+        const distances = (this._model.options.levels || [])
+          .filter((level) => level && level.enabled !== false)
+          .map((level) => {
+            const x = second.x + Number(level.value || 0) * deltaX;
+            return Number.isFinite(x) ? Math.abs(point.x - x) : Infinity;
+          });
+        if (!distances.length) return null;
+        const distance = Math.min(...distances);
+        return Number.isFinite(distance) && distance <= tolerance ? distance : null;
+      }
       if (!second) return null;
       const lineEnd = this._model.type === 'ray' && this._paneBounds
         ? calculateRayEndpoint(first, second, this._paneBounds)
@@ -1039,6 +1455,7 @@
     ray: 2,
     rectangle: 2,
     fibonacci: 2,
+    'fib-trend-time': 2,
     ruler: 2,
     long: 3,
     short: 3,
@@ -1063,10 +1480,13 @@
         || parameters.onInteractionChange
         || null;
       this.onToolChange = parameters.onToolChange || null;
+      this.onSelectionChange = parameters.onSelectionChange || null;
       this.accountSizeProvider = parameters.accountSizeProvider || null;
       this.accountRiskPercent = Number.isFinite(parameters.accountRiskPercent)
         ? parameters.accountRiskPercent
         : 1;
+      this.axisLabelColors = parameters.axisLabelColors || null;
+      this.defaultDrawingColor = parameters.defaultDrawingColor || null;
       const animationHost = typeof globalThis !== 'undefined' ? globalThis : null;
       this._requestAnimationFrame = parameters.requestAnimationFrame
         || (animationHost && typeof animationHost.requestAnimationFrame === 'function'
@@ -1095,6 +1515,11 @@
       this._boundPointerCancel = (event) => this._onPointerCancel(event);
       this._boundPointerLeave = () => this._onPointerLeave();
       this._boundKeyDown = (event) => this._onKeyDown(event);
+      this._emitSelectionChange = () => {
+        if (!this.onSelectionChange) return;
+        const model = this.selectedId ? this.store.get(this.selectedId) : null;
+        this.onSelectionChange(this.selectedId, model);
+      };
       this.element.addEventListener('pointerdown', this._boundPointerDown);
       this.element.addEventListener('pointermove', this._boundPointerMove);
       this.element.addEventListener('pointerup', this._boundPointerUp);
@@ -1118,6 +1543,10 @@
     select(id) {
       this.selectedId = id && this.store.get(id) ? id : null;
       this.refresh();
+      if (this.onSelectionChange) {
+        const selectedModel = this.selectedId ? this.store.get(this.selectedId) : null;
+        this.onSelectionChange(this.selectedId, selectedModel);
+      }
       return this.selectedId;
     }
 
@@ -1139,6 +1568,7 @@
         let primitive = this._primitives.get(model.id);
         if (!primitive) {
           primitive = new DrawingPrimitive(viewModel);
+          this._configurePrimitive(primitive);
           this._primitives.set(model.id, primitive);
           primitive.setBars(this._bars);
           this._attachPrimitive(primitive);
@@ -1147,6 +1577,11 @@
           primitive.setBars(this._bars);
         }
       }
+    }
+
+    _configurePrimitive(primitive) {
+      primitive.setAxisLabelColors(this.axisLabelColors);
+      primitive.setDefaultStrokeColor(this.defaultDrawingColor);
     }
 
     setBars(bars) {
@@ -1192,8 +1627,11 @@
 
     getFibonacciSettings(id) {
       const model = this.store.get(id || this.selectedId);
-      if (!model || model.type !== 'fibonacci') return null;
-      return normalizeFibonacciSettings(model.options);
+      if (!model || (model.type !== 'fibonacci' && model.type !== 'fib-trend-time')) return null;
+      const defaults = model.type === 'fib-trend-time'
+        ? defaultFibTrendTimeSettings()
+        : defaultFibonacciSettings();
+      return normalizeFibonacciSettings(model.options, defaults);
     }
 
     getSelectedFibonacciSettings() {
@@ -1203,8 +1641,21 @@
     updateFibonacciSettings(patch, id) {
       const drawingId = id || this.selectedId;
       const model = this.store.get(drawingId);
-      if (!model || model.type !== 'fibonacci' || model.locked) return null;
-      const options = normalizeFibonacciSettings({...model.options, ...(patch || {})});
+      if (!model || model.locked) return null;
+      if (model.type !== 'fibonacci' && model.type !== 'fib-trend-time') return null;
+      const defaults = model.type === 'fib-trend-time'
+        ? defaultFibTrendTimeSettings()
+        : defaultFibonacciSettings();
+      const incoming = {...(patch || {})};
+      if (model.type === 'fib-trend-time' && Array.isArray(incoming.levels)) {
+        // 面板行只带 value/color/enabled：标签补成倍数本身（如 2.618），避免百分比样式。
+        incoming.levels = incoming.levels.map((level) => (
+          level && typeof level === 'object' && level.label == null
+            ? {...level, label: `${level.value}`}
+            : level
+        ));
+      }
+      const options = normalizeFibonacciSettings({...model.options, ...incoming}, defaults);
       this.store.update(drawingId, {...model, options});
       this.refresh();
       return clone(options);
@@ -1230,10 +1681,15 @@
     addFibonacciLevel(level, index, id) {
       const settings = this.getFibonacciSettings(id);
       if (!settings) return null;
+      const model = this.store.get(id || this.selectedId);
+      const definition = typeof level === 'number' ? {value: level} : clone(level || {});
+      if (model && model.type === 'fib-trend-time' && definition.label == null) {
+        definition.label = `${definition.value}`;
+      }
       const insertionIndex = Number.isInteger(index)
         ? Math.max(0, Math.min(index, settings.levels.length))
         : settings.levels.length;
-      settings.levels.splice(insertionIndex, 0, normalizeFibonacciLevel(level));
+      settings.levels.splice(insertionIndex, 0, normalizeFibonacciLevel(definition));
       return this.updateFibonacciSettings({levels: settings.levels}, id);
     }
 
@@ -1261,7 +1717,51 @@
     }
 
     resetFibonacciSettings(id) {
-      return this.updateFibonacciSettings(defaultFibonacciSettings(), id);
+      const drawingId = id || this.selectedId;
+      const model = this.store.get(drawingId);
+      if (!model) return null;
+      const defaults = model.type === 'fib-trend-time'
+        ? defaultFibTrendTimeSettings()
+        : defaultFibonacciSettings();
+      return this.updateFibonacciSettings(defaults, drawingId);
+    }
+
+    /**
+     * 通用：获取/更新任意画图工具的线条设置（horizontal/trend/ray/rectangle/ruler/text）。
+     * 提供统一接口，前端设置面板按 model.type 分派调用。
+     */
+    getSelectedLineSettings() {
+      const model = this.selectedId ? this.store.get(this.selectedId) : null;
+      if (!model) return null;
+      const type = normalizeDrawingType(model.type);
+      const getMap = {
+        fibonacci: () => normalizeFibonacciSettings(model.options),
+        'fib-trend-time': () => normalizeFibonacciSettings(model.options, defaultFibTrendTimeSettings()),
+        rectangle: () => normalizeRectangleOptions(model.options),
+        text: () => normalizeTextOptions(model.options),
+      };
+      const getter = getMap[type] || (() => normalizeLineOptions(model.options));
+      return getter();
+    }
+
+    updateSelectedLineSettings(patch) {
+      const model = this.selectedId ? this.store.get(this.selectedId) : null;
+      if (!model || model.locked) return null;
+      const type = normalizeDrawingType(model.type);
+      const merged = {...model.options, ...(patch || {})};
+      let next;
+      try {
+        if (type === 'fibonacci') next = normalizeFibonacciSettings(merged);
+        else if (type === 'fib-trend-time') next = normalizeFibonacciSettings(merged, defaultFibTrendTimeSettings());
+        else if (type === 'rectangle') next = normalizeRectangleOptions(merged);
+        else if (type === 'text') next = normalizeTextOptions(merged);
+        else next = normalizeLineOptions(merged);
+      } catch (error) {
+        return null;
+      }
+      this.store.update(model.id, {...model, options: next});
+      this.refresh();
+      return clone(next);
     }
 
     undo() {
@@ -1269,13 +1769,17 @@
       if (changed) {
         if (this.selectedId && !this.store.get(this.selectedId)) this.selectedId = null;
         this.refresh();
+        this._emitSelectionChange();
       }
       return changed;
     }
 
     redo() {
       const changed = this.store.redo();
-      if (changed) this.refresh();
+      if (changed) {
+        this.refresh();
+        this._emitSelectionChange();
+      }
       return changed;
     }
 
@@ -1284,6 +1788,7 @@
       if (changed) {
         this.selectedId = null;
         this.refresh();
+        this._emitSelectionChange();
       }
       return changed;
     }
@@ -1419,6 +1924,7 @@
     _setDraftModel(model) {
       if (!this._draftPrimitive) {
         this._draftPrimitive = new DrawingPrimitive(model);
+        this._configurePrimitive(this._draftPrimitive);
         this._draftPrimitive.setBars(this._bars);
         this._attachPrimitive(this._draftPrimitive);
       } else {
@@ -1786,13 +2292,17 @@
 
   return {
     DEFAULT_FIBONACCI_LEVELS,
+    DEFAULT_FIB_TREND_TIME_LEVELS,
     SNAP_DISTANCE_PX,
     DEFAULT_RISK_REWARD_RATIO,
     resetFibonacciLevels,
+    resetFibTrendTimeLevels,
+    defaultFibTrendTimeSettings,
     calculateFibonacciLevels,
     calculateRulerMetrics,
     calculateRiskReward,
     calculateRayEndpoint,
+    axisLabelPrices,
     createDrawingModel,
     createTrendModel,
     createHorizontalModel,
@@ -1800,6 +2310,7 @@
     createRectangleModel,
     createTextModel,
     createFibonacciModel,
+    createFibTrendTimeModel,
     createRulerModel,
     createRiskRewardModel,
     serializeDrawing,

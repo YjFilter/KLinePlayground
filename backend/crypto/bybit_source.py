@@ -4,12 +4,13 @@ from datetime import datetime
 from decimal import Decimal
 from urllib.parse import quote
 
-from .models import CryptoBar, CryptoInstrument, FundingEvent
+from .models import BASE_INTERVAL_MINUTES, CryptoBar, CryptoInstrument, FundingEvent
 from .source import CryptoSourceError, HttpCryptoSource, from_milliseconds, milliseconds
 
 class BybitCryptoSource(HttpCryptoSource):
     name = "bybit"
     base_url = "https://api.bybit.com"
+    base_interval = str(BASE_INTERVAL_MINUTES)
     bar_page_limit = 1000
     funding_page_limit = 200
 
@@ -79,7 +80,7 @@ class BybitCryptoSource(HttpCryptoSource):
         cursor_end = end_ms
         rows = []
         for _ in range(self.max_pages):
-            result = self._result(self._get_json(f"{self.base_url}{path}", params={"category": "linear", "symbol": symbol, "interval": "5", "start": start_ms, "end": cursor_end, "limit": self.bar_page_limit}, endpoint=endpoint), endpoint)
+            result = self._result(self._get_json(f"{self.base_url}{path}", params={"category": "linear", "symbol": symbol, "interval": self.base_interval, "start": start_ms, "end": cursor_end, "limit": self.bar_page_limit}, endpoint=endpoint), endpoint)
             page = result.get("list")
             if not isinstance(page, list):
                 raise CryptoSourceError(f"bybit schema error for {endpoint}: missing list")

@@ -93,6 +93,20 @@ class CryptoHistoryAPITests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "history_years"):
                 app_module._parse_crypto_history_years({"history_years": value})
 
+    def test_prepare_candidate_rejects_window_extending_into_the_future(self):
+        now = datetime.now(timezone.utc)
+        training_start = now - timedelta(days=30)
+        fake_cache = SimpleNamespace(coverage=lambda *args, **kwargs: None)
+        fake_service = SimpleNamespace(cache=fake_cache)
+        with patch.object(app_module, "_get_crypto_data_service", return_value=fake_service):
+            with self.assertRaisesRegex(ValueError, "数据源无法提供未来行情"):
+                app_module._crypto_prepare_candidate(
+                    symbol="ETHUSDT",
+                    training_start=training_start,
+                    training_days=None,
+                    history_years=2,
+                )
+
     def test_history_prepare_routes_submit_poll_and_cancel_for_the_same_user(self):
         manager = _FakePrepareManager()
         with patch.object(app_module, "_get_crypto_history_prepare_manager", return_value=manager):

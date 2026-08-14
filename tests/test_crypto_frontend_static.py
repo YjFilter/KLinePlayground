@@ -154,8 +154,10 @@ if (elements['training-progress'].textContent !== '进度: 12.3% (3/10)') {{
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_crypto_periods_and_usdt_settings_exist(self):
-        for period in ("5m", "15m", "30m", "1h", "4h", "daily", "weekly"):
+        for period in ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "3h", "4h", "6h", "8h", "12h", "daily", "2d", "3d", "weekly"):
             self.assertIn(f'data-crypto-period="{period}"', self.html)
+        for period in ("1m", "3m", "2h", "3h", "6h", "8h", "12h", "2d", "3d"):
+            self.assertIn(f'data-period="{period}"', self.html)
         self.assertIn('id="crypto-leverage"', self.html)
         self.assertIn('id="crypto-initial-capital"', self.html)
         self.assertIn("USDT", self.html)

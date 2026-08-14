@@ -171,7 +171,7 @@ class FourPeriodsHandledTests(_StaticTestCase):
         # formatIntradayPeriodBadge 必须处理四个周期
         idx = self.js.find("function formatIntradayPeriodBadge")
         self.assertGreater(idx, 0, "缺少 formatIntradayPeriodBadge 函数")
-        func_body = self.js[idx:idx + 600]
+        func_body = self.js[idx:idx + 900]
         for period in ("'30m'", "'4h_session'", "'weekly'", "'daily'"):
             self.assertIn(period, func_body,
                           f"formatIntradayPeriodBadge 未处理周期 {period}")

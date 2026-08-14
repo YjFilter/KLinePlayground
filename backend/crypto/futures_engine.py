@@ -109,7 +109,7 @@ class FuturesEngine:
         simulator: FuturesSimulator,
         order_book: FuturesOrderBook,
         *,
-        liquidation_fee_rate: Decimal | int | float | str = "0.005",
+        liquidation_fee_rate: Decimal | int | float | str = "0",
     ) -> None:
         self.simulator = simulator
         self.order_book = order_book
@@ -120,6 +120,13 @@ class FuturesEngine:
         self.liquidation_events: list[LiquidationEvent] = []
         self.equity_snapshots: list[dict[str, Any]] = []
         self._processed_funding: set[str] = set()
+        # 资金费率事件只排序一次，用游标增量结算，避免每根 base bar 全量重排重扫。
+        self._funding_queue: list[FundingEvent] | None = None
+        self._funding_cursor = 0
+        # 最大回撤用“峰值权益 + 当前最大回撤”增量维护，与逐条扫描 _maximum_drawdown 完全等价，
+        # 因此权益快照可以按显示周期降采样，而不损失回撤精度。
+        self._peak_equity: Decimal = ZERO
+        self._max_drawdown_percent: Decimal = ZERO
         self.last_trade_price: Decimal | None = None
         self.last_mark_price: Decimal | None = None
         self._next_liquidation_id = 1
@@ -162,13 +169,16 @@ class FuturesEngine:
             return None
         quantity = position.absolute_quantity
         reserve_rate = self.simulator.maintenance_margin_rate + self.liquidation_fee_rate
+        # 全仓（Cross）：用账户余额（balance）作为仓位风险支撑，
+        # 而非单仓保证金 isolated_margin。余额充足时强平价远离现价甚至为 0（不会触发）。
+        balance = self.simulator.account.balance
         if position.quantity > ZERO:
             denominator = quantity * (Decimal("1") - reserve_rate)
             if denominator <= ZERO:
                 raise ValueError("liquidation rates leave no valid long trigger")
-            return max(ZERO, (quantity * position.entry_price - position.isolated_margin) / denominator)
+            return max(ZERO, (quantity * position.entry_price - balance) / denominator)
         denominator = quantity * (Decimal("1") + reserve_rate)
-        return max(ZERO, (position.isolated_margin + quantity * position.entry_price) / denominator)
+        return max(ZERO, (balance + quantity * position.entry_price) / denominator)
 
     def check_liquidation(self, *, timestamp: datetime, mark_low, mark_high) -> LiquidationEvent | None:
         position = self.simulator.position
@@ -183,7 +193,7 @@ class FuturesEngine:
         side = position.side
         quantity = position.absolute_quantity
         entry_price = position.entry_price
-        equity_before = self.simulator.isolated_equity(trigger)
+        equity_before = self.simulator.equity(trigger)
         maintenance = self.simulator.maintenance_margin(trigger)
         liquidation_fee = quantity * trigger * self.liquidation_fee_rate
         event_time = timestamp_value(timestamp)
@@ -223,6 +233,7 @@ class FuturesEngine:
         trade_bar: dict[str, Any] | Any,
         mark_bar: dict[str, Any] | Any,
         funding_events: Iterable[FundingEvent] = (),
+        record_equity: bool = True,
     ) -> dict[str, Any]:
         event_time = timestamp_value(timestamp)
         trade = self._bar_values(trade_bar)
@@ -232,11 +243,20 @@ class FuturesEngine:
         self.simulator.last_mark_price = mark["close"]
 
         settled = []
-        for event in sorted(funding_events, key=lambda item: timestamp_value(item.timestamp)):
+        if self._funding_queue is None:
+            # 首次结算时对资金事件排序一次并缓存；后续调用复用同一队列（回放中事件集合不变）。
+            self._funding_queue = sorted(
+                funding_events, key=lambda item: timestamp_value(item.timestamp)
+            )
+        while self._funding_cursor < len(self._funding_queue):
+            event = self._funding_queue[self._funding_cursor]
             if timestamp_value(event.timestamp) <= event_time:
+                self._funding_cursor += 1
                 result = self.settle_funding(event)
                 if result is not None:
                     settled.append(result)
+            else:
+                break
 
         liquidation = self.check_liquidation(timestamp=event_time, mark_low=mark["low"], mark_high=mark["high"])
         fills = []
@@ -256,6 +276,13 @@ class FuturesEngine:
             ))
 
         equity = self.simulator.equity(mark["close"])
+        # 增量更新最大回撤：peak 先取 max，再算 (peak - equity) / peak，与 _maximum_drawdown 一致。
+        if equity > self._peak_equity:
+            self._peak_equity = equity
+        if self._peak_equity > ZERO:
+            drawdown = (self._peak_equity - equity) / self._peak_equity * Decimal("100")
+            if drawdown > self._max_drawdown_percent:
+                self._max_drawdown_percent = drawdown
         snapshot = {
             "timestamp": event_time,
             "equity": equity,
@@ -263,7 +290,8 @@ class FuturesEngine:
             "unrealized_pnl": self.simulator.unrealized_pnl(mark["close"]),
             "mark_price": mark["close"],
         }
-        self.equity_snapshots.append(snapshot)
+        if record_equity:
+            self.equity_snapshots.append(snapshot)
         return {
             "timestamp": event_time,
             "funding": settled,
@@ -281,6 +309,9 @@ class FuturesEngine:
             return getattr(bar, name, getattr(bar, "close") if name == "open" else None)
         return {name: decimal_value(read(name)) for name in ("open", "high", "low", "close")}
 
+    def max_drawdown_percent(self) -> Decimal:
+        return self._max_drawdown_percent
+
     def to_state(self) -> dict[str, Any]:
         return {
             "liquidation_fee_rate": format(self.liquidation_fee_rate, "f"),
@@ -294,6 +325,8 @@ class FuturesEngine:
                 "mark_price": format(item["mark_price"], "f"),
             } for item in self.equity_snapshots],
             "processed_funding": sorted(self._processed_funding),
+            "peak_equity": format(self._peak_equity, "f"),
+            "max_drawdown_percent": format(self._max_drawdown_percent, "f"),
             "last_trade_price": None if self.last_trade_price is None else format(self.last_trade_price, "f"),
             "last_mark_price": None if self.last_mark_price is None else format(self.last_mark_price, "f"),
             "next_liquidation_id": self._next_liquidation_id,
@@ -310,6 +343,8 @@ class FuturesEngine:
             "unrealized_pnl": decimal_value(item["unrealized_pnl"]), "mark_price": decimal_value(item["mark_price"]),
         } for item in state.get("equity_snapshots", [])]
         engine._processed_funding = set(state.get("processed_funding", []))
+        engine._peak_equity = decimal_value(state.get("peak_equity", ZERO))
+        engine._max_drawdown_percent = decimal_value(state.get("max_drawdown_percent", ZERO))
         engine.last_trade_price = None if state.get("last_trade_price") is None else decimal_value(state["last_trade_price"])
         engine.last_mark_price = None if state.get("last_mark_price") is None else decimal_value(state["last_mark_price"])
         engine._next_liquidation_id = int(state.get("next_liquidation_id", len(engine.liquidation_events) + 1))

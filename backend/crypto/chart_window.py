@@ -8,8 +8,9 @@ from typing import Any
 import pandas as pd
 import numpy as np
 
-from .aggregator import aggregate_bars, normalize_base_bars
+from .aggregator import _bucket_start, aggregate_bars, normalize_base_bars
 from .models import CryptoPeriod, CryptoRange, utc_datetime
+from .session import _detect_base_step_minutes
 
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -62,7 +63,8 @@ class CryptoChartWindowService:
             & (normalized["timestamp"] <= pd.Timestamp(effective_end))
         ].reset_index(drop=True)
         base_bars = normalize_base_bars(base_bars)
-        aggregated = aggregate_bars(base_bars, replay_period, effective_end)
+        base_step_minutes = _detect_base_step_minutes(base_bars["timestamp"])
+        aggregated = aggregate_bars(base_bars, replay_period, effective_end, base_interval_minutes=base_step_minutes)
         visible = aggregated.loc[(pd.to_datetime(aggregated["end_time"], utc=True) >= pd.Timestamp(range_start)) & (pd.to_datetime(aggregated["end_time"], utc=True) <= pd.Timestamp(effective_end))]
         serialized = self._serialize_many(visible)
         coverage = self._coverage(resolved_source, symbol)
@@ -77,19 +79,7 @@ class CryptoChartWindowService:
 
     @staticmethod
     def _bucket_start(value: datetime, period: CryptoPeriod) -> datetime:
-        timestamp = pd.Timestamp(value)
-        if period == CryptoPeriod.WEEKLY:
-            return (timestamp.normalize() - pd.Timedelta(days=timestamp.weekday())).to_pydatetime()
-        if period == CryptoPeriod.DAILY:
-            return timestamp.normalize().to_pydatetime()
-        minutes = {
-            CryptoPeriod.MINUTE_5: 5, CryptoPeriod.MINUTE_15: 15,
-            CryptoPeriod.MINUTE_30: 30, CryptoPeriod.HOUR_1: 60,
-            CryptoPeriod.HOUR_4: 240,
-        }[period]
-        minute_of_day = timestamp.hour * 60 + timestamp.minute
-        bucket_minutes = minute_of_day - minute_of_day % minutes
-        return (timestamp.normalize() + pd.Timedelta(minutes=bucket_minutes)).to_pydatetime()
+        return _bucket_start(pd.Timestamp(value), period).to_pydatetime()
 
     def _coverage(self, source, symbol) -> CryptoRange | None:
         cache = getattr(self.data_service, "cache", None)

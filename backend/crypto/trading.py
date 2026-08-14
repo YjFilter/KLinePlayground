@@ -10,6 +10,7 @@ from .futures_engine import FuturesEngine
 from .futures_models import decimal_value, timestamp_value
 from .models import CryptoReplayAdvance, FundingEvent
 from .replay_clock import CryptoReplayClock
+from .session import _detect_base_step_minutes
 
 
 class FuturesReplayExecutor:
@@ -88,11 +89,15 @@ class FuturesReplayExecutor:
             raise ValueError(f"missing trade bar for {normalized.isoformat()}")
         if normalized not in self._mark_bars:
             raise ValueError(f"missing mark bar for {normalized.isoformat()}")
+        # 权益快照只按显示周期边界采样（每周期一根），而非每根 base bar 一根。
+        # 最大回撤已由 engine 增量精确维护，降采样不损失回撤精度，只减少快照存储/序列化。
+        record_equity = getattr(self.clock, "is_boundary_time", lambda _value: True)(normalized)
         return self.engine.process_bar(
             timestamp=normalized,
             trade_bar=self._trade_bars[normalized],
             mark_bar=self._mark_bars[normalized],
             funding_events=self._funding_events,
+            record_equity=record_equity,
         )
 
     def _validate_plan_inputs(self, plan: CryptoReplayAdvance) -> None:
@@ -196,10 +201,12 @@ class FuturesReplayExecutor:
         engine = FuturesEngine.from_state(simulator, order_book, state["engine"])
         records = trade_bars.to_dict("records") if isinstance(trade_bars, pd.DataFrame) else list(trade_bars)
         timestamps = [record["timestamp"] for record in records]
+        base_step_minutes = _detect_base_step_minutes(timestamps)
         clock = CryptoReplayClock(
             timestamps,
             initial_time=datetime.fromisoformat(state["clock"]["current_time"]),
             active_period=state["clock"]["active_period"],
+            base_step_minutes=base_step_minutes,
         )
         return cls(
             clock=clock, trade_bars=trade_bars, mark_bars=mark_bars, engine=engine,

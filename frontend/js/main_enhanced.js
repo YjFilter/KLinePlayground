@@ -17,7 +17,7 @@ let bollSeries = {}; // 用于存储BOLL指标线
 let autoSyncInterval = null;
 let lastKnownBarId = null;
 let lastKnownTradeCount = null;
-let maPeriods = [5, 10, 20]; // 默认MA周期
+let maPeriods = [10, 20, 40, 80, 160]; // 默认MA周期
 let isShiftClicked = false;
 let isShiftKeyPressed = false;
 let currentTheme = localStorage.getItem('uiTheme') || 'light';
@@ -60,7 +60,7 @@ let cryptoHistoryPrepareRetryConfig = null;
 let cryptoEarlierSegmentLoading = false;
 let cryptoEarlierSegmentGeneration = 0;
 const PERIOD_LOADING_DELAY_MS = 150;
-const CRYPTO_PERIOD_SNAPSHOT_CACHE_LIMIT = 8;
+const CRYPTO_PERIOD_SNAPSHOT_CACHE_LIMIT = 16;
 const cryptoPeriodSnapshotCache = new Map();
 const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
 const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
@@ -103,6 +103,15 @@ function clearCryptoPeriodSnapshotCache() {
     cryptoPeriodSnapshotCacheTrainingId = currentTraining?.id === undefined || currentTraining?.id === null
         ? null
         : String(currentTraining.id);
+}
+
+// 只清指定周期的快照缓存（回放推进/分段加载时保留其他周期缓存，回切秒回）。
+function clearCryptoPeriodSnapshotCacheForPeriod(period) {
+    if (!period) return;
+    const prefix = String(currentTraining?.id || '') + '|' + String(period) + '|';
+    for (const cacheKey of Array.from(cryptoPeriodSnapshotCache.keys())) {
+        if (cacheKey.startsWith(prefix)) cryptoPeriodSnapshotCache.delete(cacheKey);
+    }
 }
 
 function syncCryptoPeriodSnapshotCacheTraining(trainingId) {
@@ -171,7 +180,7 @@ const INTRADAY_DATA_MODE = 'intraday_30m';
 const INTRADAY_PERIODS = ['30m', '4h_session', 'daily', 'weekly'];
 const CRYPTO_MARKET_TYPE = 'crypto_perpetual';
 const CRYPTO_DATA_MODE = 'crypto_5m';
-const CRYPTO_PERIODS = ['5m', '15m', '30m', '1h', '4h', 'daily', 'weekly'];
+const CRYPTO_PERIODS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '3h', '4h', '6h', '8h', '12h', 'daily', '2d', '3d', 'weekly'];
 
 function isCryptoMode() {
     return !!(currentTraining && (
@@ -205,15 +214,24 @@ function getSelectedKlinePeriod() {
 // 将周期值转换为可读的徽章文字。
 function formatIntradayPeriodBadge(period) {
     switch (period) {
+        case '1m': return '1m';
+        case '3m': return '3m';
         case '5m': return '5m';
         case '15m': return '15m';
         case '30m': return '30m';
         case '1h': return '1h';
+        case '2h': return '2h';
+        case '3h': return '3h';
         case '4h': return '4h';
+        case '6h': return '6h';
+        case '8h': return '8h';
+        case '12h': return '12h';
         case '4h_session': return '4h';
-        case 'weekly': return '周K';
+        case 'weekly': return '1W';
+        case '2d': return '2D';
+        case '3d': return '3D';
         case 'daily':
-        default: return '日K';
+        default: return '1D';
     }
 }
 
@@ -265,12 +283,13 @@ function buildIntradayKlineChartData(klineData) {
 // intraday snapshot 没有独立的 volume_data，从每根 K 线的 volume 字段构造。
 function buildIntradayVolumeData(klineData) {
     if (!Array.isArray(klineData)) return [];
+    const palette = getThemePalette();
     return klineData.map(function (bar) {
         const isUp = Number(bar.close) >= Number(bar.open);
         return {
             time: intradayBarToTimestamp(bar),
             value: Number(bar.volume) || 0,
-            color: isUp ? '#ff4d4f' : '#008000',
+            color: isUp ? palette.positive : palette.negative,
         };
     });
 }
@@ -327,10 +346,12 @@ function applyIntradaySnapshot(snapshot, options) {
     replaceRenderedKlineData(chartData);
     loadTechnicalIndicator(currentIndicatorType);
 
-    // 清空均线系列，intraday 模式不计算 MA
-    maPeriods.forEach(function (p) {
-        if (maSeries[p]) maSeries[p].setData([]);
-    });
+    // 加密模式用已揭示K线本地计算 MA（replaceRenderedKlineData 中刷新）；其余 intraday 保持清空
+    if (!(isCryptoMode() && maVisible)) {
+        maPeriods.forEach(function (p) {
+            if (maSeries[p]) maSeries[p].setData([]);
+        });
+    }
     updateTradeMarkers(currentTraining?.tradeMarkers || chartWindowState.trade_markers || []);
 
     const lastBar = klineData[klineData.length - 1];
@@ -368,6 +389,8 @@ const THEME_PALETTES = {
         negative: '#0f8a52',
         neutral: '#5d6b82',
         chip: 'linear-gradient(90deg, transparent, rgba(15, 111, 255, 0.28))',
+        crosshair: '#758696',
+        crosshairLabel: '#758696',
     },
     dark: {
         chartBg: '#121d31',
@@ -379,12 +402,99 @@ const THEME_PALETTES = {
         negative: '#4fd096',
         neutral: '#9daccc',
         chip: 'linear-gradient(90deg, transparent, rgba(103, 165, 255, 0.28))',
+        crosshair: '#9598a1',
+        crosshairLabel: '#363a45',
+    },
+    // AiCoin/Binance 风格加密货币配色：绿涨红跌、近黑背景、淡化网格。
+    crypto_dark: {
+        chartBg: '#0b0e11',
+        text: '#eaecef',
+        grid: 'rgba(255, 255, 255, 0.045)',
+        border: 'rgba(255, 255, 255, 0.08)',
+        overlay: 'rgba(11, 14, 17, 0.85)',
+        positive: '#0ecb81',
+        negative: '#f6465d',
+        neutral: '#848e9c',
+        chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.22))',
+        crosshair: 'rgba(132, 142, 156, 0.6)',
+        crosshairLabel: '#2b3141',
+    },
+    crypto_light: {
+        chartBg: '#ffffff',
+        text: '#1e2329',
+        grid: 'rgba(23, 32, 51, 0.05)',
+        border: 'rgba(23, 32, 51, 0.1)',
+        overlay: 'rgba(255, 255, 255, 0.88)',
+        positive: '#0ecb81',
+        negative: '#f6465d',
+        neutral: '#68778a',
+        chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.18))',
+        crosshair: 'rgba(104, 119, 138, 0.55)',
+        crosshairLabel: '#474d57',
     }
 };
 
 function getThemePalette() {
-    const activeTheme = isCryptoMode() ? currentCryptoTheme : currentTheme;
-    return THEME_PALETTES[activeTheme] || THEME_PALETTES.light;
+    if (isCryptoMode()) {
+        return currentCryptoTheme === 'light' ? THEME_PALETTES.crypto_light : THEME_PALETTES.crypto_dark;
+    }
+    return THEME_PALETTES[currentTheme] || THEME_PALETTES.light;
+}
+
+// AiCoin 风格加密货币模式使用实心涨跌色；股票模式保留原有空心阳线风格。
+function getCandleStyleOptions(palette) {
+    if (isCryptoMode()) {
+        return {
+            upColor: palette.positive,
+            downColor: palette.negative,
+            borderUpColor: palette.positive,
+            borderDownColor: palette.negative,
+            wickUpColor: palette.positive,
+            wickDownColor: palette.negative,
+            borderVisible: false,
+        };
+    }
+    return {
+        upColor: 'rgba(255, 77, 79, 0)',
+        downColor: palette.negative,
+        borderUpColor: palette.positive,
+        borderDownColor: palette.negative,
+        wickUpColor: palette.positive,
+        wickDownColor: palette.negative,
+        borderVisible: true,
+    };
+}
+
+// 加密货币模式使用 AiCoin 风格的虚线十字光标与深色标签。
+function getCrosshairOptions(palette) {
+    const options = { mode: LightweightCharts.CrosshairMode.Normal };
+    if (!isCryptoMode() || !palette.crosshair) return options;
+    const line = {
+        color: palette.crosshair,
+        width: 1,
+        style: LightweightCharts.LineStyle.Dashed,
+        labelBackgroundColor: palette.crosshairLabel,
+    };
+    options.vertLine = { ...line };
+    options.horzLine = { ...line };
+    return options;
+}
+
+// AiCoin 风格：选中/悬停图形时，右侧价格轴用高亮标签显示锚点价格。
+// 深色主题用浅底深字（与截图一致），浅色主题用深底浅字。
+function isChartDarkTheme() {
+    return isCryptoMode() ? currentCryptoTheme === 'dark' : currentTheme === 'dark';
+}
+
+function getDrawingAxisLabelColors() {
+    return isChartDarkTheme()
+        ? { background: '#eaecef', text: '#181a1e' }
+        : { background: '#363a45', text: '#eaecef' };
+}
+
+// AiCoin 风格：画线默认颜色深色主题近白、浅色主题深灰，替代之前的固定蓝色。
+function getDrawingDefaultColor() {
+    return isChartDarkTheme() ? 'rgba(234, 236, 239, 0.92)' : '#4a5160';
 }
 
 function updateThemeButton() {
@@ -573,13 +683,97 @@ function applyChartTheme() {
 
     if (candlestickSeries) {
         candlestickSeries.applyOptions({
-            downColor: palette.negative,
-            borderUpColor: palette.positive,
-            borderDownColor: palette.negative,
-            wickUpColor: palette.positive,
-            wickDownColor: palette.negative,
+            ...getCandleStyleOptions(palette),
+            lastValueVisible: isCryptoMode(),
         });
+        applyLastPriceTagColor();
     }
+
+    // MACD 自动色（AiCoin 风格）跟随主题切换重绘
+    if (currentIndicatorType === 'MACD' && indicatorPanelVisible && macdColorsAreAuto()
+        && latestRenderedKlineData && latestRenderedKlineData.length > 0) {
+        loadTechnicalIndicator('MACD');
+    }
+}
+
+// 加密货币模式下为价格轴上的当前价标签块着色（涨绿跌红，AiCoin 风格）。
+function applyLastPriceTagColor() {
+    if (!candlestickSeries || !isCryptoMode()) return;
+    const bars = latestRenderedKlineData;
+    if (!bars || bars.length === 0) return;
+    const palette = getThemePalette();
+    const last = bars[bars.length - 1];
+    const prev = bars.length > 1 ? bars[bars.length - 2] : null;
+    const isUp = prev
+        ? Number(last.close) >= Number(prev.close)
+        : Number(last.close) >= Number(last.open);
+    candlestickSeries.applyOptions({
+        priceLineColor: isUp ? palette.positive : palette.negative,
+    });
+}
+
+// AiCoin 风格主图左上角图例：加密货币模式下常驻显示最新一根K线的
+// OHLC 与 MA/BOLL 彩色数值（跟随当前 bar，十字线移动时改由十字线数据驱动）。
+function showLatestChartInfo() {
+    const infoEl = document.getElementById('chart-info-display');
+    if (!infoEl) return;
+    if (!isCryptoMode()) return;
+    const bars = latestRenderedKlineData;
+    if (!bars || bars.length === 0) {
+        infoEl.style.display = 'none';
+        return;
+    }
+    const palette = getThemePalette();
+    const last = bars[bars.length - 1];
+    const prev = bars.length > 1 ? bars[bars.length - 2] : null;
+    const fmt = (value) => Number(value).toFixed(2);
+    const colorOf = (value, base) => {
+        if (value > base) return palette.positive;
+        if (value < base) return palette.negative;
+        return palette.neutral;
+    };
+    const base = prev ? Number(prev.close) : Number(last.open);
+    let html = '<div>'
+        + '<strong>开:</strong> <span style="color: ' + colorOf(Number(last.open), base) + ';">' + fmt(last.open) + '</span> '
+        + '<strong>高:</strong> <span style="color: ' + colorOf(Number(last.high), base) + ';">' + fmt(last.high) + '</span> '
+        + '<strong>低:</strong> <span style="color: ' + colorOf(Number(last.low), base) + ';">' + fmt(last.low) + '</span> '
+        + '<strong>收:</strong> <span style="color: ' + colorOf(Number(last.close), Number(last.open)) + ';">' + fmt(last.close) + '</span>'
+        + '</div>';
+
+    const maParts = [];
+    maPeriods.forEach((p) => {
+        const series = maSeries[p];
+        if (!series || !isMaLineVisible(p)) return;
+        let lastValue = null;
+        try {
+            const seriesData = typeof series.data === 'function' ? series.data() : [];
+            if (seriesData.length > 0) lastValue = seriesData[seriesData.length - 1].value;
+        } catch (error) {
+            lastValue = null;
+        }
+        if (lastValue === null || lastValue === undefined) return;
+        maParts.push('<span style="color: ' + series.options().color + ';">MA' + p + ':' + fmt(lastValue) + '</span>');
+    });
+    if (maParts.length > 0) html += '<div>' + maParts.join(' ') + '</div>';
+
+    if (currentIndicatorType === 'BOLL' && bollSeries.upper && bollSeries.middle && bollSeries.lower) {
+        const bollParts = [];
+        [['UP', bollSeries.upper], ['MID', bollSeries.middle], ['LOW', bollSeries.lower]].forEach(([label, series]) => {
+            let lastValue = null;
+            try {
+                const seriesData = typeof series.data === 'function' ? series.data() : [];
+                if (seriesData.length > 0) lastValue = seriesData[seriesData.length - 1].value;
+            } catch (error) {
+                lastValue = null;
+            }
+            if (lastValue === null || lastValue === undefined) return;
+            bollParts.push('<span style="color: ' + series.options().color + ';">' + label + ':' + fmt(lastValue) + '</span>');
+        });
+        if (bollParts.length > 0) html += '<div>' + bollParts.join(' ') + '</div>';
+    }
+
+    infoEl.innerHTML = html;
+    infoEl.style.display = 'block';
 }
 
 function updatePriceMode() {
@@ -882,6 +1076,12 @@ function setTrainingViewOnlyMode(viewOnly, options = {}) {
         indicatorSelect.disabled = disabled;
         indicatorSelect.style.opacity = opacity;
     }
+    const indicatorHeaderPicker = document.getElementById('indicator-header-picker');
+    if (indicatorHeaderPicker) {
+        indicatorHeaderPicker.disabled = disabled;
+        indicatorHeaderPicker.style.opacity = opacity;
+        indicatorHeaderPicker.style.cursor = cursor;
+    }
 
     ['end-training-btn', 'reset-training-btn', 'next-bar-btn', 'play-pause-btn'].forEach((id) => {
         const element = document.getElementById(id);
@@ -1000,7 +1200,7 @@ function renderChartLegend() {
     if (!container) return;
     const items = [];
     maPeriods.forEach(p => {
-        if (maSeries[p]) {
+        if (maSeries[p] && isMaLineVisible(p)) {
             items.push({ label: `MA${p}`, color: maSeries[p].options().color });
         }
     });
@@ -1041,9 +1241,9 @@ function renderIndicatorLegend() {
             });
             break;
         case 'BOLL':
-            items.push({ label: 'UP', color: '#ff6b6b' });
-            items.push({ label: 'MID', color: '#4ecdc4' });
-            items.push({ label: 'LOW', color: '#45b7d1' });
+            items.push({ label: 'UP', color: indicatorSettings.boll.upperColor });
+            items.push({ label: 'MID', color: indicatorSettings.boll.middleColor });
+            items.push({ label: 'LOW', color: indicatorSettings.boll.lowerColor });
             break;
     }
     items.forEach(it => {
@@ -1132,6 +1332,7 @@ function setupEventListeners() {
     document.getElementById('crypto-order-leverage')?.addEventListener('change', () => {
         refreshCryptoMarginFraction();
         refreshCryptoOrderPreview();
+        refreshCryptoRiskCalcResult();
     });
     document.getElementById('crypto-submit-order')?.addEventListener('click', submitCryptoOrder);
     document.getElementById('crypto-save-fee-rates')?.addEventListener('click', submitCryptoFeeRates);
@@ -1173,7 +1374,15 @@ function setupEventListeners() {
     document.getElementById('crypto-sl-price')?.addEventListener('input', () => {
         refreshCryptoTpSlPnl();
         refreshCryptoOrderPreview();
+        refreshCryptoRiskCalcResult();
     });
+
+    // 以损定仓
+    document.getElementById('crypto-riskcalc-enabled')?.addEventListener('change', toggleCryptoRiskCalcFields);
+    ['crypto-riskcalc-entry', 'crypto-riskcalc-stop', 'crypto-riskcalc-maxloss'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('input', refreshCryptoRiskCalcResult);
+    });
+    document.getElementById('crypto-riskcalc-apply')?.addEventListener('click', applyCryptoRiskCalc);
 
     // 回放控制
     document.getElementById('play-pause-btn').addEventListener('click', togglePlayback);
@@ -1235,6 +1444,33 @@ function setupEventListeners() {
 
     // 技术指标选择
     document.getElementById('indicator-select')?.addEventListener('change', changeIndicator);
+    // 副图图例行：点击指标名/参数打开指标库切换（AiCoin 风格）
+    document.getElementById('indicator-header-picker')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleIndicatorLibrary();
+    });
+    // 指标设置弹窗（AiCoin 风格）
+    syncIndicatorHiddenInputsFromSettings();
+    document.getElementById('ind-settings-close')?.addEventListener('click', closeIndicatorSettings);
+    document.getElementById('ind-settings-overlay')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeIndicatorSettings();
+    });
+    document.getElementById('ind-settings-apply')?.addEventListener('click', applyIndicatorSettingsFromForm);
+    document.getElementById('ind-settings-reset')?.addEventListener('click', resetCurrentIndicatorSettings);
+    document.getElementById('ind-settings-hide')?.addEventListener('click', toggleSettingsIndicatorDisplay);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !document.getElementById('ind-settings-overlay')?.classList.contains('hidden')) {
+            closeIndicatorSettings();
+        }
+    });
+    // 指标库面板
+    document.getElementById('indicator-library-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleIndicatorLibrary();
+    });
+    document.getElementById('ind-lib-close')?.addEventListener('click', () => hideIndicatorLibrary());
+    document.getElementById('indicator-library-panel')?.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', () => hideIndicatorLibrary());
     document.querySelectorAll('[data-crypto-action]').forEach((button) => {
         button.addEventListener('click', () => selectCryptoOrderAction(button.dataset.cryptoAction));
     });
@@ -2264,6 +2500,7 @@ function showSettings() {
 function renderMaPeriodsEditor() {
     const container = document.getElementById('ma-periods-editor');
     if (!container) return;
+    syncMaLineSettingsWithPeriods();
     container.innerHTML = '';
 
     maPeriods.forEach((p, index) => {
@@ -2348,7 +2585,7 @@ async function loadUserSettings() {
         if (settings.ma_periods && Array.isArray(settings.ma_periods)) {
             maPeriods = [...settings.ma_periods];
         } else {
-            maPeriods = [5, 10, 20];
+            maPeriods = [10, 20, 40, 80, 160];
         }
         renderMaPeriodsEditor();
 
@@ -2356,9 +2593,9 @@ async function loadUserSettings() {
         if (settings.indicators) {
             const ind = settings.indicators;
             if (ind.macd) {
-                document.getElementById('macd-fast').value = ind.macd.fast || 12;
-                document.getElementById('macd-slow').value = ind.macd.slow || 26;
-                document.getElementById('macd-signal').value = ind.macd.signal || 9;
+                document.getElementById('macd-fast').value = ind.macd.fast || 10;
+                document.getElementById('macd-slow').value = ind.macd.slow || 20;
+                document.getElementById('macd-signal').value = ind.macd.signal || 5;
             }
             if (ind.kdj) {
                 document.getElementById('kdj-n').value = ind.kdj.n || 9;
@@ -2385,9 +2622,9 @@ async function saveSettings() {
         // 收集指标参数
         const indicators = {
             macd: {
-                fast: parseInt(document.getElementById('macd-fast').value) || 12,
-                slow: parseInt(document.getElementById('macd-slow').value) || 26,
-                signal: parseInt(document.getElementById('macd-signal').value) || 9
+                fast: parseInt(document.getElementById('macd-fast').value) || 10,
+                slow: parseInt(document.getElementById('macd-slow').value) || 20,
+                signal: parseInt(document.getElementById('macd-signal').value) || 5
             },
             kdj: {
                 n: parseInt(document.getElementById('kdj-n').value) || 9,
@@ -2475,7 +2712,7 @@ function setTrainingMarketType(marketType) {
         option.disabled = !allowed;
     });
     if (periodSelect && !supportedReplayPeriods().includes(periodSelect.value)) {
-        periodSelect.value = crypto ? '5m' : 'daily';
+        periodSelect.value = crypto ? '1m' : 'daily';
     }
 
     const limitLabel = document.querySelector('label[for="max-training-bars"]');
@@ -2502,6 +2739,7 @@ function syncCryptoWorkspaceMode() {
     if (active) {
         applyCryptoTheme(currentCryptoTheme, false, false);
         applyCryptoConsoleLayout(readCryptoConsoleLayout());
+        showLatestChartInfo();
     } else {
         mainApp?.classList.remove('crypto-console-collapsed');
         mainApp?.style.removeProperty('--crypto-console-width');
@@ -2797,6 +3035,9 @@ function buildCryptoStartPayload(isRandomMode) {
 function replaceRenderedKlineData(klineData) {
     latestRenderedKlineData = Array.isArray(klineData) ? klineData.map(item => ({ ...item })) : [];
     syncDrawingToolBars();
+    if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
+    applyLastPriceTagColor();
+    showLatestChartInfo();
 }
 
 function upsertRenderedBar(bar) {
@@ -2804,6 +3045,9 @@ function upsertRenderedBar(bar) {
     if (latestRenderedKlineData.length === 0) {
         latestRenderedKlineData = [{ ...bar }];
         syncDrawingToolBars();
+        if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
+        applyLastPriceTagColor();
+        showLatestChartInfo();
         return;
     }
 
@@ -2811,11 +3055,17 @@ function upsertRenderedBar(bar) {
     if (lastBar.time === bar.time) {
         latestRenderedKlineData[latestRenderedKlineData.length - 1] = { ...bar };
         syncDrawingToolBars();
+        if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
+        applyLastPriceTagColor();
+        showLatestChartInfo();
         return;
     }
 
     latestRenderedKlineData.push({ ...bar });
     syncDrawingToolBars();
+    if (isCryptoMode() && maVisible) updateMaLinesFromRendered();
+    applyLastPriceTagColor();
+    showLatestChartInfo();
 }
 
 function syncDrawingToolBars() {
@@ -2901,8 +3151,11 @@ function renderFibonacciSettingsPanel() {
     const container = document.getElementById('drawing-fibonacci-levels');
     if (!container) return;
     const selected = drawingController?.getSelectedFibonacciSettings?.();
-    const fallback = window.KLineDrawingTools?.resetFibonacciLevels?.() || [];
-    const settings = selected || { levels: fallback, reverse: false };
+    let fallbackLevels = window.KLineDrawingTools?.resetFibonacciLevels?.() || [];
+    if (!selected && drawingController?.activeTool === 'fib-trend-time') {
+        fallbackLevels = window.KLineDrawingTools?.resetFibTrendTimeLevels?.() || fallbackLevels;
+    }
+    const settings = selected || { levels: fallbackLevels, reverse: false };
     container.replaceChildren();
     settings.levels.forEach((level, index) => {
         const row = document.createElement('div');
@@ -2954,6 +3207,159 @@ function renderFibonacciSettingsPanel() {
     if (reverse) reverse.checked = !!settings.reverse;
 }
 
+/**
+ * 渲染通用线条设置面板（horizontal/trend/ray/ruler）。
+ */
+function renderLineSettingsPanel() {
+    const settings = drawingController?.getSelectedLineSettings?.();
+    if (!settings) return;
+    const color = document.getElementById('drawing-line-color');
+    const width = document.getElementById('drawing-line-width');
+    const style = document.getElementById('drawing-line-style');
+    const label = document.getElementById('drawing-line-label-visible');
+    if (color) color.value = settings.color || '#2962ff';
+    if (width) width.value = settings.lineWidth ?? 1;
+    if (style) style.value = settings.lineStyle || 'solid';
+    if (label) label.checked = settings.labelVisible !== false;
+}
+
+/**
+ * 渲染矩形设置面板（线条字段 +填充颜色/透明度）。
+ */
+function renderRectangleSettingsPanel() {
+    const settings = drawingController?.getSelectedLineSettings?.();
+    if (!settings) return;
+    const setVal = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    };
+    const setCheck = (id, checked) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!checked;
+    };
+    setVal('drawing-rect-color', settings.color || '#2962ff');
+    setVal('drawing-rect-fill', settings.fillColor || '#2962ff');
+    setVal('drawing-rect-opacity', settings.fillOpacity ?? 0.12);
+    setVal('drawing-rect-width', settings.lineWidth ?? 1);
+    setVal('drawing-rect-style', settings.lineStyle || 'solid');
+}
+
+/**
+ * 渲染文字标注设置面板。
+ */
+function renderTextSettingsPanel() {
+    const settings = drawingController?.getSelectedLineSettings?.();
+    if (!settings) return;
+    const setVal = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    };
+    setVal('drawing-text-content', settings.text || 'Text');
+    setVal('drawing-text-color', settings.color || '#f0b90b');
+    setVal('drawing-text-size', settings.fontSize ?? 14);
+}
+
+/**
+ * 渲染持仓测算设置面板（账户风险比例）。
+ */
+function renderPositionSettingsPanel() {
+    const model = drawingController?.store?.get?.(drawingController?.selectedId);
+    if (!model) return;
+    const riskInput = document.getElementById('drawing-pos-risk');
+    if (riskInput) {
+        const current = drawingController?.accountRiskPercent ?? 1;
+        riskInput.value = current;
+    }
+}
+
+/**
+ * 绑定各类型设置面板的"应用/关闭"事件（一次性绑定）。
+ */
+let drawingSettingPanelsBound = false;
+function bindDrawingSettingPanels() {
+    if (drawingSettingPanelsBound) return;
+    drawingSettingPanelsBound = true;
+    const bind = (id, event, handler) => {
+        document.getElementById(id)?.addEventListener(event, handler);
+    };
+
+    // 通用线条
+    bind('drawing-line-color', 'input', () => {
+        drawingController?.updateSelectedLineSettings?.({ color: document.getElementById('drawing-line-color').value });
+    });
+    bind('drawing-line-width', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ lineWidth: Number(document.getElementById('drawing-line-width').value) });
+    });
+    bind('drawing-line-style', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ lineStyle: document.getElementById('drawing-line-style').value });
+    });
+    bind('drawing-line-label-visible', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ labelVisible: document.getElementById('drawing-line-label-visible').checked });
+    });
+    document.querySelectorAll('[data-line-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.lineAction === 'close') {
+                document.getElementById('drawing-line-settings')?.classList.add('hidden');
+            }
+        });
+    });
+
+    // 矩形
+    bind('drawing-rect-color', 'input', () => {
+        drawingController?.updateSelectedLineSettings?.({ color: document.getElementById('drawing-rect-color').value });
+    });
+    bind('drawing-rect-fill', 'input', () => {
+        drawingController?.updateSelectedLineSettings?.({ fillColor: document.getElementById('drawing-rect-fill').value });
+    });
+    bind('drawing-rect-opacity', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ fillOpacity: Number(document.getElementById('drawing-rect-opacity').value) });
+    });
+    bind('drawing-rect-width', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ lineWidth: Number(document.getElementById('drawing-rect-width').value) });
+    });
+    bind('drawing-rect-style', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ lineStyle: document.getElementById('drawing-rect-style').value });
+    });
+    document.querySelectorAll('[data-rect-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.rectAction === 'close') {
+                document.getElementById('drawing-rectangle-settings')?.classList.add('hidden');
+            }
+        });
+    });
+
+    // 文字标注
+    bind('drawing-text-content', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ text: document.getElementById('drawing-text-content').value });
+    });
+    bind('drawing-text-color', 'input', () => {
+        drawingController?.updateSelectedLineSettings?.({ color: document.getElementById('drawing-text-color').value });
+    });
+    bind('drawing-text-size', 'change', () => {
+        drawingController?.updateSelectedLineSettings?.({ fontSize: Number(document.getElementById('drawing-text-size').value) });
+    });
+    document.querySelectorAll('[data-text-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.textAction === 'close') {
+                document.getElementById('drawing-text-settings')?.classList.add('hidden');
+            }
+        });
+    });
+
+    // 持仓测算
+    bind('drawing-pos-risk', 'change', () => {
+        const next = Number(document.getElementById('drawing-pos-risk').value);
+        if (Number.isFinite(next) && next > 0) drawingController.accountRiskPercent = next;
+    });
+    document.querySelectorAll('[data-pos-action]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.posAction === 'close') {
+                document.getElementById('drawing-position-settings')?.classList.add('hidden');
+            }
+        });
+    });
+}
+
 function initializeDrawingTools() {
     destroyDrawingTools();
     drawingUiAbortController = new AbortController();
@@ -2967,6 +3373,8 @@ function initializeDrawingTools() {
         element: document.getElementById('chart'),
         bars: latestRenderedKlineData,
         accountSizeProvider: () => Number(currentTraining?.account?.equity ?? currentTraining?.initial_capital ?? 0),
+        axisLabelColors: getDrawingAxisLabelColors,
+        defaultDrawingColor: getDrawingDefaultColor,
         onError: (error) => {
             setDrawingStatus(error?.message || '画线失败，请在K线区域内重试。', 'error');
             setDrawingInteractionState(false);
@@ -2974,6 +3382,7 @@ function initializeDrawingTools() {
         },
         onInteractionChange: (active) => setDrawingInteractionState(active),
         onToolChange: (tool) => syncDrawingToolbarState(tool),
+        onSelectionChange: (selectedId, model) => syncDrawingFloatingToolbar(selectedId, model),
     });
 
     document.querySelectorAll('[data-drawing-tool]').forEach((button) => {
@@ -2990,10 +3399,19 @@ function initializeDrawingTools() {
                 setDrawingStatus(error?.message || '无法启用画线工具。', 'error');
                 syncDrawingToolbarState(null);
             }
-            document.getElementById('drawing-fibonacci-settings')?.classList.toggle(
-                'hidden', button.dataset.drawingTool !== 'fibonacci'
-            );
-            if (button.dataset.drawingTool === 'fibonacci') renderFibonacciSettingsPanel();
+            // 画图工具激活时不再自动弹出设置面板，避免遮挡 K 线。
+            // 设置仅在选中已有对象后通过浮动工具条的"设置"按钮进入。
+            // 例外：斐波那契趋势时间激活时弹出档位图例面板（对齐 AiCoin 顶部彩色图例条）。
+            if (tool === 'fib-trend-time') {
+                const fibPanel = document.getElementById('drawing-fibonacci-settings');
+                if (fibPanel) {
+                    fibPanel.classList.remove('hidden');
+                    renderFibonacciSettingsPanel();
+                }
+            }
+            if (button.dataset.drawingTool === 'select') {
+                // 切到"选择"工具：让浮动工具条接管显示
+            }
         });
     });
     document.querySelectorAll('[data-drawing-action]').forEach((button) => {
@@ -3015,12 +3433,9 @@ function initializeDrawingTools() {
     document.getElementById('drawing-fibonacci-reverse')?.addEventListener('change', (event) => {
         drawingController?.updateSelectedFibonacciSettings?.({ reverse: !!event.target.checked });
     }, { signal: drawingUiSignal });
-    document.getElementById('chart')?.addEventListener('pointerup', () => {
-        if (!document.getElementById('drawing-fibonacci-settings')?.classList.contains('hidden')) {
-            setTimeout(renderFibonacciSettingsPanel, 0);
-        }
-    }, { signal: drawingUiSignal });
     syncDrawingToolBars();
+    bindDrawingFloatingToolbar();
+    bindDrawingSettingPanels();
 }
 
 function shiftLogicalRange(range, delta = 1) {
@@ -3045,6 +3460,119 @@ function setVisibleTimeRangeAll(range) {
         else item.timeScale().fitContent();
     });
 }
+
+/**
+ * 同步画图浮动工具条（选中对象时显示在 chart 顶部居中）。
+ * 浮动工具条是通用模版：选中任意画图对象时出现，提供"拖动点/设置/锁定/隐藏/删除"操作。
+ * 设置按钮触发当前对象类型的设置面板（如斐波那契的档位列表）。
+ */
+function syncDrawingFloatingToolbar(selectedId, model) {
+    const toolbar = document.getElementById('drawing-floating-toolbar');
+    if (!toolbar) return;
+    if (!selectedId || !model) {
+        toolbar.classList.add('hidden');
+        // 同时收起当前打开的设置面板（避免选中取消后面板残留）
+        closeAllDrawingSettingPanels();
+        return;
+    }
+    toolbar.classList.remove('hidden');
+    toolbar.style.display = model.hidden ? 'none' : '';
+    // 同步锁定/隐藏按钮的状态高亮
+    toolbar.querySelector('[data-drawing-action="lock"]')?.classList.toggle('active', !!model.locked);
+    toolbar.querySelector('[data-drawing-action="hide"]')?.classList.toggle('active', !!model.hidden);
+}
+
+/**
+ * 关闭所有画图对象设置面板（选中取消时统一清理，避免多面板残留）。
+ */
+function closeAllDrawingSettingPanels() {
+    [
+        'drawing-fibonacci-settings',
+        'drawing-line-settings',
+        'drawing-rectangle-settings',
+        'drawing-text-settings',
+        'drawing-position-settings',
+    ].forEach((id) => document.getElementById(id)?.classList.add('hidden'));
+}
+
+/**
+ * 按选中对象类型打开对应设置面板。
+ */
+function openSelectedDrawingSettingsPanel(model) {
+    closeAllDrawingSettingPanels();
+    if (!model) return;
+    const type = model.type;
+    if (type === 'fibonacci' || type === 'fib-trend-time') {
+        const panel = document.getElementById('drawing-fibonacci-settings');
+        if (panel) {
+            panel.classList.remove('hidden');
+            renderFibonacciSettingsPanel();
+            return;
+        }
+    }
+    if (type === 'rectangle') {
+        const panel = document.getElementById('drawing-rectangle-settings');
+        if (panel) {
+            panel.classList.remove('hidden');
+            renderRectangleSettingsPanel();
+            return;
+        }
+    }
+    if (type === 'text') {
+        const panel = document.getElementById('drawing-text-settings');
+        if (panel) {
+            panel.classList.remove('hidden');
+            renderTextSettingsPanel();
+            return;
+        }
+    }
+    if (type === 'long' || type === 'short' || type === 'risk-reward') {
+        const panel = document.getElementById('drawing-position-settings');
+        if (panel) {
+            panel.classList.remove('hidden');
+            renderPositionSettingsPanel();
+            return;
+        }
+    }
+    // horizontal / trend / ray / ruler 等通用线条
+    const panel = document.getElementById('drawing-line-settings');
+    if (panel) {
+        panel.classList.remove('hidden');
+        renderLineSettingsPanel();
+    }
+}
+
+/**
+ * 绑定浮动工具条按钮事件（仅绑定一次）。
+ */
+let drawingFloatingToolbarBound = false;
+function bindDrawingFloatingToolbar() {
+    if (drawingFloatingToolbarBound) return;
+    const toolbar = document.getElementById('drawing-floating-toolbar');
+    if (!toolbar) return;
+    drawingFloatingToolbarBound = true;
+    toolbar.querySelectorAll('[data-drawing-action]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const action = button.dataset.drawingAction;
+            if (action === 'settings') {
+                const model = drawingController?.store?.get?.(drawingController?.selectedId);
+                if (!model) {
+                    setDrawingStatus('请先选中一个画图对象。', 'active');
+                    return;
+                }
+                openSelectedDrawingSettingsPanel(model);
+                return;
+            }
+            if (action === 'drag') {
+                drawingController?.activateTool?.('select');
+                return;
+            }
+            // lock / hide / delete 映射到现有方法
+            invokeDrawingAction(action);
+        });
+    });
+}
+
 function normalizeChartTime(item) {
     if (!item) return 0;
     if (typeof item.time === 'number') return item.time;
@@ -3380,10 +3908,11 @@ async function reloadChartWindowForPeriod(period, rangeEnd, options = {}) {
 function applyActiveSnapshotToChartWindow(snapshot) {
     applyIntradaySnapshot(snapshot, { fitContent: false });
     if (!chartWindowState.window_start || chartWindowState.read_only) return;
+    const windowVolumePalette = getThemePalette();
     const volumeData = (snapshot.kline_data || []).map((bar) => ({
         time: bar.end_time || bar.start_time || bar.time,
         value: Number(bar.volume) || 0,
-        color: Number(bar.close) >= Number(bar.open) ? '#ff4d4f' : '#008000',
+        color: Number(bar.close) >= Number(bar.open) ? windowVolumePalette.positive : windowVolumePalette.negative,
     }));
     applyChartWindow({
         period: snapshot.active_period || currentPeriod,
@@ -3418,10 +3947,11 @@ function applyTrainingSnapshot(data, options = {}) {
     if (data.ma_data) {
         maPeriods.forEach(p => {
             if (maSeries[p]) {
-                maSeries[p].setData(data.ma_data[p] || []);
+                maSeries[p].setData(isMaLineVisible(p) ? (data.ma_data[p] || []) : []);
             }
         });
     }
+    showLatestChartInfo();
 
     const currentBar = data.kline_data[data.kline_data.length - 1];
     updateCurrentInfo(currentBar, data.progress);
@@ -3502,13 +4032,30 @@ function applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtend
     const canRestoreRange = visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)
         && visibleRange.from >= renderedStart && visibleRange.to <= renderedEnd;
     requestAnimationFrame(() => {
-        if (canRestoreRange) setVisibleTimeRangeAll(visibleRange);
-        else setVisibleTimeRangeAll(null);
+        if (canRestoreRange) {
+            // 首选：保持原时间段（AiCoin 式，切换不丢位置）
+            setVisibleTimeRangeAll(visibleRange);
+            return;
+        }
+        // 数据不足时夹紧缩放：尽量贴住原时间段，而不是 fitContent 跳全图
+        if (visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)) {
+            const clampedFrom = Math.max(visibleRange.from, renderedStart);
+            const clampedTo = Math.min(visibleRange.to, renderedEnd);
+            if (clampedTo > clampedFrom) {
+                setVisibleTimeRangeAll({ from: clampedFrom, to: clampedTo });
+                return;
+            }
+            // 新周期窗口完全不与原时间段重叠（如从日线切到 1m 且窗口极小），
+            // 贴住新窗口末端，避免跳走太远
+            setVisibleTimeRangeAll({ from: renderedEnd, to: renderedEnd });
+            return;
+        }
+        setVisibleTimeRangeAll(null);
     });
 }
 
 function isFineCryptoPeriod(period) {
-    return period === '5m' || period === '15m';
+    return period === '1m' || period === '3m' || period === '5m' || period === '15m';
 }
 
 function cryptoVisibleTimeValue(value) {
@@ -3546,7 +4093,7 @@ async function loadEarlierCryptoSegment() {
     cryptoEarlierSegmentLoading = true;
     const requestGeneration = ++cryptoEarlierSegmentGeneration;
     const requestedPeriod = currentPeriod;
-    clearCryptoPeriodSnapshotCache();
+    clearCryptoPeriodSnapshotCacheForPeriod(requestedPeriod);
     setChartWindowStatus('正在加载更早的 ' + formatIntradayPeriodBadge(requestedPeriod) + ' 数据...', 'loading');
     try {
         const response = await fetch(API_BASE + '/training/' + currentTraining.id + '/period', {
@@ -3651,6 +4198,7 @@ async function switchCryptoViewPeriod(nextPeriod) {
         setCryptoPeriodSnapshotCache(cacheKey, snapshot);
         applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory);
         setChartWindowStatus('已切换到 ' + formatIntradayPeriodBadge(nextPeriod) + '。', 'success');
+        scheduleCryptoPeriodPrefetch(nextPeriod);
     } catch (error) {
         if (error?.name === 'AbortError') return;
         console.error('切换币圈周期失败:', error);
@@ -3658,6 +4206,90 @@ async function switchCryptoViewPeriod(nextPeriod) {
     } finally {
         if (requestGeneration === periodSwitchGeneration) endPeriodSwitchFeedback();
     }
+}
+
+// === 切换后静默预取相邻周期（丝滑切换优化）===
+let cryptoPeriodPrefetchAbortController = null;
+let cryptoPeriodPrefetchGeneration = 0;
+const CRYPTO_PERIOD_NEIGHBORS = {
+    '1m': ['3m'],
+    '3m': ['1m', '5m'],
+    '5m': ['3m', '15m'],
+    '15m': ['5m', '30m'],
+    '30m': ['15m', '1h'],
+    '1h': ['30m', '2h'],
+    '2h': ['1h', '3h'],
+    '3h': ['2h', '4h'],
+    '4h': ['3h', '6h'],
+    '6h': ['4h', '8h'],
+    '8h': ['6h', '12h'],
+    '12h': ['8h', 'daily'],
+    'daily': ['12h', '2d'],
+    '2d': ['daily', '3d'],
+    '3d': ['2d', 'weekly'],
+    'weekly': ['3d'],
+};
+
+function scheduleCryptoPeriodPrefetch(period) {
+    if (!isCryptoMode() || !currentTraining?.id) return;
+    const neighbors = CRYPTO_PERIOD_NEIGHBORS[period] || [];
+    if (!neighbors.length) return;
+    cryptoPeriodPrefetchAbortController?.abort();
+    cryptoPeriodPrefetchAbortController = new AbortController();
+    const generation = ++cryptoPeriodPrefetchGeneration;
+    const signal = cryptoPeriodPrefetchAbortController.signal;
+    const targetTrainingId = String(currentTraining.id);
+    // 延迟一小段，让主切换先完成渲染；预取失败静默忽略。
+    setTimeout(() => {
+        if (generation !== cryptoPeriodPrefetchGeneration) return;
+        void (async () => {
+            const visibleRange = chart?.timeScale().getVisibleRange?.() || null;
+            const visibleStart = cryptoVisibleTimeValue(visibleRange?.from ?? chartWindowState.render_start);
+            const visibleEnd = cryptoVisibleTimeValue(visibleRange?.to ?? chartWindowState.render_end);
+            for (const neighbor of neighbors) {
+                if (generation !== cryptoPeriodPrefetchGeneration) return;
+                if (String(currentTraining?.id || '') !== targetTrainingId) return;
+                const cacheKey = buildCryptoPeriodSnapshotCacheKey(
+                    targetTrainingId,
+                    neighbor,
+                    getCryptoReplayCacheTime(),
+                    chartWindowState,
+                );
+                if (getCryptoPeriodSnapshotCache(cacheKey)) continue;
+                const requestBody = {
+                    period: neighbor,
+                    request_id: 'prefetch-' + generation,
+                    compact_chart: true,
+                };
+                if (isFineCryptoPeriod(neighbor)) {
+                    if (visibleStart !== null) requestBody.visible_start = visibleStart;
+                    if (visibleEnd !== null) requestBody.visible_end = visibleEnd;
+                }
+                if (chartWindowState.extended_history) {
+                    const loadedWindowStart = parseChartWindowTimestamp(chartWindowState.window_start);
+                    const loadedWindowEnd = parseChartWindowTimestamp(chartWindowState.window_end);
+                    if (loadedWindowStart) requestBody.range_start = Math.floor(loadedWindowStart.getTime() / 1000);
+                    if (loadedWindowEnd) requestBody.range_end = Math.floor(loadedWindowEnd.getTime() / 1000);
+                }
+                try {
+                    const response = await fetch(API_BASE + '/training/' + targetTrainingId + '/period', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestBody),
+                        signal,
+                    });
+                    if (!response.ok) continue;
+                    const data = await response.json();
+                    if (generation !== cryptoPeriodPrefetchGeneration) return;
+                    const snapshot = extractIntradaySnapshot(data);
+                    if (snapshot) setCryptoPeriodSnapshotCache(cacheKey, snapshot);
+                } catch (error) {
+                    if (error?.name === 'AbortError') return;
+                    // 预取失败静默忽略，下次切换仍会走正常请求
+                }
+            }
+        })();
+    }, 250);
 }
 
 async function switchViewPeriod(period) {
@@ -3859,6 +4491,7 @@ function startTrainingWithConfig(trainingConfig) {
                 setChartWindowStatus(isCryptoMode() ? '已加载币圈历史走势（UTC+8）。' : '已加载训练开始前至少两年的走势。', 'success');
                 await updateAccountInfo();
                 startAutoSync();
+                renderActiveIndicatorTags();
             } else {
                 // === legacy_daily 分支 (原逻辑) ===
                 await loadInitialData();
@@ -3941,9 +4574,7 @@ function initializeChart() {
                 color: palette.grid,
             },
         },
-        crosshair: {
-            mode: LightweightCharts.CrosshairMode.Normal,
-        },
+        crosshair: getCrosshairOptions(palette),
         rightPriceScale: {
             borderColor: palette.border,
             minimumWidth: 80,
@@ -3976,21 +4607,18 @@ function initializeChart() {
     });
 
     // 添加K线系列
-    candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
-        upColor: 'rgba(255, 77, 79, 0)',
-        downColor: palette.negative,
-        borderUpColor: palette.positive,
-        borderDownColor: palette.negative,
-        wickUpColor: palette.positive,
-        wickDownColor: palette.negative,
-        borderVisible: true,
+    candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, getCandleStyleOptions(palette));
+    candlestickSeries.applyOptions({
+        lastValueVisible: isCryptoMode(),
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
     });
-    candlestickSeries.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    applyLastPriceTagColor();
 
     // 添加移动平均线
     maPeriods.forEach((p, index) => {
         maSeries[p] = chart.addSeries(LightweightCharts.LineSeries, {
-            color: maColors[index % maColors.length],
+            color: getMaLineColor(p, index),
             lineWidth: 1,
             crosshairMarkerVisible: false,
             priceLineVisible: false,
@@ -4141,7 +4769,11 @@ function initializeChart() {
     chart.subscribeCrosshairMove(param => {
         const infoEl = document.getElementById('chart-info-display');
         if (!param.time || param.point.x < 0 || param.point.y < 0) {
-            infoEl.style.display = 'none';
+            if (isCryptoMode()) {
+                showLatestChartInfo();
+            } else {
+                infoEl.style.display = 'none';
+            }
             // 同步其他图表的十字准星
             syncCrosshair(volumeChart, volumeSeries, null);
             if (currentIndicatorSeries.length > 0) {
@@ -4208,6 +4840,7 @@ function initializeChart() {
         // 获取MA数据
         let maHtml = '<div>';
         maPeriods.forEach(p => {
+            if (!isMaLineVisible(p)) return;
             const mData = param.seriesData.get(maSeries[p]);
             if (mData) {
                 maHtml += `<span style="color: ${maSeries[p].options().color};">MA${p}:${mData.value.toFixed(2)} </span>`;
@@ -4746,7 +5379,7 @@ function updatePlaybackSpeed() {
 
 function applyCryptoNextDelta(delta) {
     if (!delta) return;
-    clearCryptoPeriodSnapshotCache();
+    clearCryptoPeriodSnapshotCacheForPeriod(currentPeriod);
     if (delta.refresh_snapshot) {
         applyActiveSnapshotToChartWindow(delta.refresh_snapshot);
     } else {
@@ -4799,9 +5432,20 @@ async function nextCryptoBar() {
         const payload = await response.json().catch(() => ({}));
         if (response.status === 409 && payload.code === 'advance_in_progress') return false;
         if (!response.ok) throw new Error(payload.error || '获取下一根 K 线失败');
-        clearCryptoPeriodSnapshotCache();
+        clearCryptoPeriodSnapshotCacheForPeriod(currentPeriod);
+        const hadRefreshSnapshot = !!(payload.delta && payload.delta.refresh_snapshot);
         applyCryptoNextDelta(payload.delta);
-        if (previousLogicalRange !== null) setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+        // 推进后始终将视图锚定到数据最右端（最新 K 线），确保用户看到变化。
+        const dataLength = latestRenderedKlineData.length;
+        if (dataLength > 0 && chart) {
+            const previousWidth = previousLogicalRange
+                ? (previousLogicalRange.to - previousLogicalRange.from)
+                : Math.min(dataLength, 200);
+            const barsToShow = Math.min(previousWidth, dataLength);
+            setVisibleRangeAll({ from: dataLength - barsToShow, to: dataLength });
+        } else if (previousLogicalRange !== null) {
+            setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+        }
         if (payload.finished) {
             pausePlayback();
             if (payload.report) showReport(payload.report);
@@ -4933,22 +5577,900 @@ async function updateMovingAverages() {
             // 只更新最新的数据点
             maPeriods.forEach(p => {
                 const mData = data.ma_data[p];
-                if (maSeries[p] && mData && mData.length > 0) {
+                if (maSeries[p] && mData && mData.length > 0 && isMaLineVisible(p)) {
                     maSeries[p].update(mData[mData.length - 1]);
                 }
             });
+            showLatestChartInfo();
         }
     } catch (error) {
         console.error('更新移动平均线失败:', error);
     }
 }
 
+// ==================== 指标库系统 ====================
+let maVisible = true;
+let indicatorPanelVisible = true;
+let lastIndicatorData = null;
+
+// ==================== 指标设置（AiCoin 风格弹窗） ====================
+const INDICATOR_SETTINGS_KEY = 'indicatorSettingsV2';
+const MA_DEFAULT_COLORS = ['#7038db', '#2196f3', '#52c41a', '#26c6da', '#b85717', '#ff9800', '#e91e63', '#607d8b'];
+const DEFAULT_INDICATOR_SETTINGS = {
+    ma: {
+        lines: [
+            { period: 10, visible: false, color: '#7038db' },
+            { period: 20, visible: true, color: '#2196f3' },
+            { period: 40, visible: true, color: '#52c41a' },
+            { period: 80, visible: true, color: '#26c6da' },
+            { period: 160, visible: true, color: '#b85717' },
+        ],
+    },
+    macd: { fast: 10, slow: 20, signal: 5, difColor: null, deaColor: null },
+    kdj: { n: 9, m1: 3, m2: 3, kColor: '#ff6b6b', dColor: '#4ecdc4', jColor: '#45b7d1' },
+    rsi: { periods: [6, 12, 24], colors: ['#ff6b6b', '#4ecdc4', '#45b7d1'] },
+    boll: { period: 20, stdDev: 2, upperColor: '#ff6b6b', middleColor: '#4ecdc4', lowerColor: '#45b7d1' },
+};
+
+function cloneIndicatorSettings(source) {
+    return JSON.parse(JSON.stringify(source));
+}
+
+function loadIndicatorSettings() {
+    const merged = cloneIndicatorSettings(DEFAULT_INDICATOR_SETTINGS);
+    try {
+        const raw = localStorage.getItem(INDICATOR_SETTINGS_KEY);
+        if (!raw) {
+            const legacyRaw = localStorage.getItem('indicatorSettingsV1');
+            if (legacyRaw) {
+                const savedLegacy = JSON.parse(legacyRaw);
+                ['macd', 'kdj', 'boll'].forEach((id) => {
+                    if (savedLegacy && savedLegacy[id] && typeof savedLegacy[id] === 'object') {
+                        merged[id] = { ...merged[id], ...savedLegacy[id] };
+                    }
+                });
+                if (savedLegacy && savedLegacy.rsi && typeof savedLegacy.rsi === 'object') {
+                    if (Array.isArray(savedLegacy.rsi.periods) && savedLegacy.rsi.periods.length) merged.rsi.periods = savedLegacy.rsi.periods.slice(0, 6);
+                    if (Array.isArray(savedLegacy.rsi.colors) && savedLegacy.rsi.colors.length) merged.rsi.colors = savedLegacy.rsi.colors.slice(0, 6);
+                }
+            }
+            return merged;
+        }
+        const saved = JSON.parse(raw);
+        ['macd', 'kdj', 'boll'].forEach((id) => {
+            if (saved && saved[id] && typeof saved[id] === 'object') {
+                merged[id] = { ...merged[id], ...saved[id] };
+            }
+        });
+        if (saved && saved.rsi && typeof saved.rsi === 'object') {
+            if (Array.isArray(saved.rsi.periods) && saved.rsi.periods.length) merged.rsi.periods = saved.rsi.periods.slice(0, 6);
+            if (Array.isArray(saved.rsi.colors) && saved.rsi.colors.length) merged.rsi.colors = saved.rsi.colors.slice(0, 6);
+        }
+        if (saved && saved.ma && Array.isArray(saved.ma.lines) && saved.ma.lines.length) {
+            merged.ma.lines = saved.ma.lines.slice(0, 8).map((line, index) => ({
+                period: Math.min(999, Math.max(1, parseInt(line.period, 10) || DEFAULT_INDICATOR_SETTINGS.ma.lines[0].period)),
+                visible: line.visible !== false,
+                color: typeof line.color === 'string' ? line.color : MA_DEFAULT_COLORS[index % MA_DEFAULT_COLORS.length],
+            }));
+        }
+    } catch (error) {
+        // 配置损坏时回退默认值
+    }
+    return merged;
+}
+
+let indicatorSettings = loadIndicatorSettings();
+let currentSettingsIndicatorId = null;
+
+function saveIndicatorSettings() {
+    try {
+        localStorage.setItem(INDICATOR_SETTINGS_KEY, JSON.stringify(indicatorSettings));
+    } catch (error) {
+        // 忽略持久化失败
+    }
+}
+
+function syncMaPeriodsFromSettings() {
+    const periods = indicatorSettings.ma.lines
+        .map((line) => Number(line.period))
+        .filter((period) => Number.isFinite(period) && period > 0);
+    if (periods.length) maPeriods = periods;
+}
+
+// 当 maPeriods 被外部（用户设置/旧版编辑器）修改后，按当前周期对齐行配置。
+function syncMaLineSettingsWithPeriods() {
+    const nextLines = [];
+    maPeriods.forEach((period, index) => {
+        const existing = indicatorSettings.ma.lines.find((line) => Number(line.period) === Number(period));
+        nextLines.push(existing
+            ? { ...existing }
+            : { period: Number(period), visible: true, color: MA_DEFAULT_COLORS[index % MA_DEFAULT_COLORS.length] });
+    });
+    if (nextLines.length) indicatorSettings.ma.lines = nextLines;
+}
+
+function getMaLineConfig(period) {
+    return indicatorSettings.ma.lines.find((line) => Number(line.period) === Number(period)) || null;
+}
+
+function isMaLineVisible(period) {
+    const line = getMaLineConfig(period);
+    return maVisible && (!line || line.visible !== false);
+}
+
+function getMaLineColor(period, index) {
+    const line = getMaLineConfig(period);
+    return line?.color || MA_DEFAULT_COLORS[index % MA_DEFAULT_COLORS.length];
+}
+
+// 把弹窗保存的参数同步到既有隐藏设置框，供 getTechnicalIndicatorConfig 等旧链路读取。
+function syncIndicatorHiddenInputsFromSettings() {
+    const setValue = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    };
+    setValue('macd-fast', indicatorSettings.macd.fast);
+    setValue('macd-slow', indicatorSettings.macd.slow);
+    setValue('macd-signal', indicatorSettings.macd.signal);
+    setValue('kdj-n', indicatorSettings.kdj.n);
+    setValue('kdj-m1', indicatorSettings.kdj.m1);
+    setValue('kdj-m2', indicatorSettings.kdj.m2);
+    setValue('rsi-periods', indicatorSettings.rsi.periods.join(','));
+    setValue('boll-period', indicatorSettings.boll.period);
+    setValue('boll-std-dev', indicatorSettings.boll.stdDev);
+}
+
+// AiCoin 风格 MACD 自动色：DIF 用主题文字色（暗色下为白），DEA 用金色。
+function getAutoMacdColors() {
+    const palette = getThemePalette();
+    const isDark = (isCryptoMode() ? currentCryptoTheme : currentTheme) === 'dark';
+    return {
+        difColor: palette.text,
+        deaColor: isDark ? '#f0b90b' : '#b98700',
+    };
+}
+
+function resolveIndicatorColor(indId, field, stored) {
+    if (typeof stored === 'string' && stored) return stored;
+    if (indId === 'macd') return getAutoMacdColors()[field] || '#ffffff';
+    return '#848e9c';
+}
+
+function macdColorsAreAuto() {
+    return !indicatorSettings.macd.difColor || !indicatorSettings.macd.deaColor;
+}
+
+syncMaPeriodsFromSettings();
+
+// ==================== AiCoin 风格指标设置弹窗 ====================
+const INDICATOR_SETTINGS_FIELDS = {
+    macd: {
+        numbers: [['fast', 'Fast', 12], ['slow', 'Slow', 26], ['signal', 'Signal', 9]],
+        colors: [['difColor', 'DIF 线颜色'], ['deaColor', 'DEA 线颜色']],
+    },
+    kdj: {
+        numbers: [['n', 'N', 9], ['m1', 'M1', 3], ['m2', 'M2', 3]],
+        colors: [['kColor', 'K 线颜色'], ['dColor', 'D 线颜色'], ['jColor', 'J 线颜色']],
+    },
+    boll: {
+        numbers: [['period', '周期', 20], ['stdDev', '标准差倍数', 2]],
+        colors: [['upperColor', '上轨颜色'], ['middleColor', '中轨颜色'], ['lowerColor', '下轨颜色']],
+    },
+};
+const MA_PERIOD_SUGGESTIONS = [5, 10, 20, 30, 40, 60, 80, 120, 160, 200, 320];
+
+function openIndicatorSettings(indId) {
+    const indicator = INDICATOR_REGISTRY.find((item) => item.id === indId);
+    if (!indicator) return;
+    currentSettingsIndicatorId = indId;
+    renderIndicatorSettingsModal();
+    document.getElementById('ind-settings-overlay')?.classList.remove('hidden');
+}
+
+function closeIndicatorSettings() {
+    currentSettingsIndicatorId = null;
+    document.getElementById('ind-settings-overlay')?.classList.add('hidden');
+}
+
+function renderIndicatorSettingsModal() {
+    const indicator = INDICATOR_REGISTRY.find((item) => item.id === currentSettingsIndicatorId);
+    const titleEl = document.getElementById('ind-settings-title');
+    const descEl = document.getElementById('ind-settings-desc');
+    const bodyEl = document.getElementById('ind-settings-body');
+    const hideBtn = document.getElementById('ind-settings-hide');
+    if (!indicator || !titleEl || !bodyEl) return;
+    titleEl.textContent = indicator.name;
+    if (descEl) descEl.textContent = indicator.desc || '';
+    if (currentSettingsIndicatorId === 'ma') buildMaSettingsBody(bodyEl);
+    else if (currentSettingsIndicatorId === 'rsi') buildRsiSettingsBody(bodyEl);
+    else if (INDICATOR_SETTINGS_FIELDS[currentSettingsIndicatorId]) buildSimpleSettingsBody(bodyEl, currentSettingsIndicatorId);
+    if (hideBtn) hideBtn.textContent = isIndicatorActive(indicator) ? '取消显示' : '恢复显示';
+}
+
+function createSettingsNumberField(labelText, value, field, options = {}) {
+    const row = document.createElement('div');
+    row.className = 'ind-set-row';
+    const label = document.createElement('label');
+    label.className = 'ind-set-field';
+    label.appendChild(document.createTextNode(labelText + ' '));
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.className = 'ind-set-input';
+    input.min = String(options.min !== undefined ? options.min : 1);
+    input.max = String(options.max !== undefined ? options.max : 999);
+    if (options.step !== undefined) input.step = String(options.step);
+    input.dataset.field = field;
+    input.value = String(value);
+    label.appendChild(input);
+    row.appendChild(label);
+    return row;
+}
+
+function createSettingsColorField(labelText, value, field) {
+    const row = document.createElement('div');
+    row.className = 'ind-set-row';
+    const label = document.createElement('label');
+    label.className = 'ind-set-field';
+    label.appendChild(document.createTextNode(labelText + ' '));
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'ind-set-color';
+    input.dataset.field = field;
+    input.value = value;
+    label.appendChild(input);
+    row.appendChild(label);
+    return row;
+}
+
+function appendMaSettingsRow(list, line, index) {
+    const row = document.createElement('div');
+    row.className = 'ind-set-row ind-set-ma-row';
+
+    const check = document.createElement('label');
+    check.className = 'ind-set-check';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.dataset.field = 'visible';
+    checkbox.checked = line.visible !== false;
+    const name = document.createElement('span');
+    name.className = 'ind-set-name';
+    name.textContent = 'MA' + (index + 1);
+    check.appendChild(checkbox);
+    check.appendChild(name);
+
+    const periodLabel = document.createElement('label');
+    periodLabel.className = 'ind-set-field';
+    periodLabel.appendChild(document.createTextNode('周期数 '));
+    const periodInput = document.createElement('input');
+    periodInput.type = 'number';
+    periodInput.className = 'ind-set-input';
+    periodInput.min = '1';
+    periodInput.max = '999';
+    periodInput.dataset.field = 'period';
+    periodInput.value = String(line.period);
+    periodLabel.appendChild(periodInput);
+
+    const colorLabel = document.createElement('label');
+    colorLabel.className = 'ind-set-field';
+    colorLabel.appendChild(document.createTextNode('颜色 '));
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.className = 'ind-set-color';
+    colorInput.dataset.field = 'color';
+    colorInput.value = line.color;
+    colorLabel.appendChild(colorInput);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'ind-set-remove';
+    removeBtn.setAttribute('aria-label', '删除 MA' + (index + 1));
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => {
+        if (list.querySelectorAll('.ind-set-ma-row').length <= 1) return;
+        row.remove();
+        renumberSettingsRows(list, 'MA');
+    });
+
+    row.appendChild(check);
+    row.appendChild(periodLabel);
+    row.appendChild(colorLabel);
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+    return row;
+}
+
+function renumberSettingsRows(list, prefix) {
+    list.querySelectorAll('.ind-set-name').forEach((el, index) => {
+        el.textContent = prefix + (index + 1);
+    });
+}
+
+function readFormPeriods(list) {
+    const periods = [];
+    list.querySelectorAll('[data-field="period"]').forEach((input) => {
+        const value = parseInt(input.value, 10);
+        if (Number.isFinite(value) && value > 0) periods.push(value);
+    });
+    return periods;
+}
+
+function suggestNextMaPeriod(list) {
+    const periods = readFormPeriods(list);
+    const maxPeriod = periods.length ? Math.max(...periods) : 0;
+    const next = MA_PERIOD_SUGGESTIONS.find((candidate) => candidate > maxPeriod && !periods.includes(candidate));
+    return next || maxPeriod + 10;
+}
+
+function buildMaSettingsBody(container) {
+    container.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'ind-set-line-list';
+    indicatorSettings.ma.lines.forEach((line, index) => appendMaSettingsRow(list, line, index));
+    container.appendChild(list);
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'ind-set-add';
+    addBtn.textContent = '+ 添加均线';
+    addBtn.addEventListener('click', () => {
+        const rowCount = list.querySelectorAll('.ind-set-ma-row').length;
+        if (rowCount >= 8) return;
+        appendMaSettingsRow(list, {
+            period: suggestNextMaPeriod(list),
+            visible: true,
+            color: MA_DEFAULT_COLORS[rowCount % MA_DEFAULT_COLORS.length],
+        }, rowCount);
+        if (rowCount + 1 >= 8) addBtn.remove();
+    });
+    container.appendChild(addBtn);
+}
+
+function appendRsiSettingsRow(list, period, color, index) {
+    const row = document.createElement('div');
+    row.className = 'ind-set-row ind-set-ma-row';
+
+    const name = document.createElement('span');
+    name.className = 'ind-set-check ind-set-name';
+    name.textContent = 'RSI' + (index + 1);
+
+    const periodLabel = document.createElement('label');
+    periodLabel.className = 'ind-set-field';
+    periodLabel.appendChild(document.createTextNode('周期数 '));
+    const periodInput = document.createElement('input');
+    periodInput.type = 'number';
+    periodInput.className = 'ind-set-input';
+    periodInput.min = '1';
+    periodInput.max = '999';
+    periodInput.dataset.field = 'period';
+    periodInput.value = String(period);
+    periodLabel.appendChild(periodInput);
+
+    const colorLabel = document.createElement('label');
+    colorLabel.className = 'ind-set-field';
+    colorLabel.appendChild(document.createTextNode('颜色 '));
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.className = 'ind-set-color';
+    colorInput.dataset.field = 'color';
+    colorInput.value = color;
+    colorLabel.appendChild(colorInput);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'ind-set-remove';
+    removeBtn.setAttribute('aria-label', '删除 RSI' + (index + 1));
+    removeBtn.textContent = '×';
+    removeBtn.addEventListener('click', () => {
+        if (list.querySelectorAll('.ind-set-ma-row').length <= 1) return;
+        row.remove();
+        renumberSettingsRows(list, 'RSI');
+    });
+
+    row.appendChild(name);
+    row.appendChild(periodLabel);
+    row.appendChild(colorLabel);
+    row.appendChild(removeBtn);
+    list.appendChild(row);
+    return row;
+}
+
+function buildRsiSettingsBody(container) {
+    container.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'ind-set-line-list';
+    const { periods, colors } = indicatorSettings.rsi;
+    periods.forEach((period, index) => {
+        appendRsiSettingsRow(list, period, colors[index] || MA_DEFAULT_COLORS[index % MA_DEFAULT_COLORS.length], index);
+    });
+    container.appendChild(list);
+
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.className = 'ind-set-add';
+    addBtn.textContent = '+ 添加 RSI 周期';
+    addBtn.addEventListener('click', () => {
+        const rowCount = list.querySelectorAll('.ind-set-ma-row').length;
+        if (rowCount >= 6) return;
+        const existing = readFormPeriods(list);
+        const candidate = [6, 12, 14, 24, 36, 48].find((value) => !existing.includes(value)) || (Math.max(...existing, 0) + 6);
+        appendRsiSettingsRow(list, candidate, MA_DEFAULT_COLORS[rowCount % MA_DEFAULT_COLORS.length], rowCount);
+        if (rowCount + 1 >= 6) addBtn.remove();
+    });
+    container.appendChild(addBtn);
+}
+
+function buildSimpleSettingsBody(container, indId) {
+    container.innerHTML = '';
+    const spec = INDICATOR_SETTINGS_FIELDS[indId];
+    const values = indicatorSettings[indId];
+    if (!spec) return;
+    spec.numbers.forEach(([field, labelText, fallback]) => {
+        const options = field === 'stdDev' ? { step: 0.1, max: 10 } : {};
+        container.appendChild(createSettingsNumberField(labelText, values[field] !== undefined ? values[field] : fallback, field, options));
+    });
+    spec.colors.forEach(([field, labelText]) => {
+        container.appendChild(createSettingsColorField(labelText, resolveIndicatorColor(indId, field, values[field]), field));
+    });
+}
+
+function collectMaSettingsFromForm() {
+    const rows = document.querySelectorAll('#ind-settings-body .ind-set-ma-row');
+    const lines = [];
+    const seen = new Set();
+    rows.forEach((row, index) => {
+        const period = parseInt(row.querySelector('[data-field="period"]')?.value, 10);
+        if (!Number.isFinite(period) || period <= 0 || seen.has(period)) return;
+        seen.add(period);
+        lines.push({
+            period,
+            visible: row.querySelector('[data-field="visible"]')?.checked !== false,
+            color: row.querySelector('[data-field="color"]')?.value || MA_DEFAULT_COLORS[index % MA_DEFAULT_COLORS.length],
+        });
+    });
+    return lines.length ? lines : cloneIndicatorSettings(indicatorSettings.ma.lines);
+}
+
+function collectRsiSettingsFromForm() {
+    const rows = document.querySelectorAll('#ind-settings-body .ind-set-ma-row');
+    const periods = [];
+    const colors = [];
+    const seen = new Set();
+    rows.forEach((row, index) => {
+        const period = parseInt(row.querySelector('[data-field="period"]')?.value, 10);
+        if (!Number.isFinite(period) || period <= 0 || seen.has(period)) return;
+        seen.add(period);
+        periods.push(period);
+        colors.push(row.querySelector('[data-field="color"]')?.value || MA_DEFAULT_COLORS[index % MA_DEFAULT_COLORS.length]);
+    });
+    return periods.length
+        ? { periods, colors }
+        : cloneIndicatorSettings({ periods: indicatorSettings.rsi.periods, colors: indicatorSettings.rsi.colors });
+}
+
+function collectSimpleSettingsFromForm(indId) {
+    const spec = INDICATOR_SETTINGS_FIELDS[indId];
+    const next = { ...indicatorSettings[indId] };
+    if (!spec) return next;
+    spec.numbers.forEach(([field, , fallback]) => {
+        const input = document.querySelector('#ind-settings-body [data-field="' + field + '"]');
+        const parsed = parseFloat(input?.value);
+        next[field] = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+    });
+    spec.colors.forEach(([field]) => {
+        const input = document.querySelector('#ind-settings-body [data-field="' + field + '"]');
+        if (!input?.value) return;
+        const autoColor = indId === 'macd' ? getAutoMacdColors()[field] : null;
+        next[field] = autoColor && input.value.toLowerCase() === autoColor.toLowerCase() ? null : input.value;
+    });
+    return next;
+}
+
+function applyIndicatorSettingsEffects(indId) {
+    if (indId === 'ma') {
+        syncMaPeriodsFromSettings();
+        rebuildMaSeries();
+    } else {
+        syncIndicatorHiddenInputsFromSettings();
+        const type = indId.toUpperCase();
+        if (currentIndicatorType === type && indicatorPanelVisible) loadTechnicalIndicator(type);
+    }
+    renderIndicatorLibrary();
+    renderActiveIndicatorTags();
+    updateIndicatorHeaderLabel();
+    showLatestChartInfo();
+}
+
+function applyIndicatorSettingsFromForm() {
+    const indId = currentSettingsIndicatorId;
+    if (!indId) return;
+    if (indId === 'ma') indicatorSettings.ma.lines = collectMaSettingsFromForm();
+    else if (indId === 'rsi') indicatorSettings.rsi = collectRsiSettingsFromForm();
+    else if (INDICATOR_SETTINGS_FIELDS[indId]) indicatorSettings[indId] = collectSimpleSettingsFromForm(indId);
+    saveIndicatorSettings();
+    applyIndicatorSettingsEffects(indId);
+    closeIndicatorSettings();
+}
+
+function resetCurrentIndicatorSettings() {
+    const indId = currentSettingsIndicatorId;
+    if (!indId || !DEFAULT_INDICATOR_SETTINGS[indId]) return;
+    indicatorSettings[indId] = cloneIndicatorSettings(DEFAULT_INDICATOR_SETTINGS[indId]);
+    saveIndicatorSettings();
+    syncIndicatorHiddenInputsFromSettings();
+    applyIndicatorSettingsEffects(indId);
+    renderIndicatorSettingsModal();
+}
+
+function toggleSettingsIndicatorDisplay() {
+    const indId = currentSettingsIndicatorId;
+    if (!indId) return;
+    toggleIndicatorVisibility(indId);
+    const indicator = INDICATOR_REGISTRY.find((item) => item.id === indId);
+    const hideBtn = document.getElementById('ind-settings-hide');
+    if (hideBtn && indicator) hideBtn.textContent = isIndicatorActive(indicator) ? '取消显示' : '恢复显示';
+}
+
+const INDICATOR_REGISTRY = [
+    {
+        id: 'ma', name: 'MA', desc: '移动平均线',
+        group: 'overlay',
+        params: [{ key: 'periods', label: '周期', type: 'text', default: '10,20,40,80,160' }],
+        badge: null,
+    },
+    {
+        id: 'macd', name: 'MACD', desc: '指数平滑异同移动平均线',
+        group: 'sub',
+        params: [
+            { key: 'fast', label: 'Fast', type: 'number', default: 10 },
+            { key: 'slow', label: 'Slow', type: 'number', default: 20 },
+            { key: 'signal', label: 'Signal', type: 'number', default: 5 },
+        ],
+        badge: null,
+    },
+    {
+        id: 'kdj', name: 'KDJ', desc: '随机指标',
+        group: 'sub',
+        params: [
+            { key: 'n', label: 'N', type: 'number', default: 9 },
+            { key: 'm1', label: 'M1', type: 'number', default: 3 },
+            { key: 'm2', label: 'M2', type: 'number', default: 3 },
+        ],
+        badge: null,
+    },
+    {
+        id: 'rsi', name: 'RSI', desc: '相对强弱指标',
+        group: 'sub',
+        params: [{ key: 'periods', label: '周期', type: 'text', default: '6,12,24' }],
+        badge: null,
+    },
+    {
+        id: 'boll', name: 'BOLL', desc: '布林带指标',
+        group: 'overlay',
+        params: [
+            { key: 'period', label: '周期', type: 'number', default: 20 },
+            { key: 'stdDev', label: '标准差', type: 'number', default: 2 },
+        ],
+        badge: null,
+    },
+];
+
+function toggleIndicatorLibrary() {
+    const panel = document.getElementById('indicator-library-panel');
+    if (!panel) return;
+    if (panel.classList.contains('hidden')) {
+        renderIndicatorLibrary();
+        panel.classList.remove('hidden');
+    } else {
+        panel.classList.add('hidden');
+    }
+}
+
+function hideIndicatorLibrary() {
+    document.getElementById('indicator-library-panel')?.classList.add('hidden');
+}
+
+function renderIndicatorLibrary() {
+    const list = document.getElementById('ind-lib-list');
+    if (!list) return;
+    const favorites = JSON.parse(localStorage.getItem('indicatorFavorites') || '[]');
+    let html = '';
+    INDICATOR_REGISTRY.forEach((ind) => {
+        const isActive = isIndicatorActive(ind);
+        const isFav = favorites.includes(ind.id);
+        const paramSummary = getIndicatorParamSummary(ind);
+        html += '<div class="ind-lib-item' + (isActive ? ' active' : '') + '" data-ind-id="' + ind.id + '">'
+            + '<span class="ind-star' + (isFav ? ' favorited' : '') + '" data-star="' + ind.id + '">' + (isFav ? '\u2605' : '\u2606') + '</span>'
+            + '<div class="ind-info"><div class="ind-name">' + ind.name + (paramSummary ? '(' + paramSummary + ')' : '') + '</div>'
+            + '<div class="ind-desc">' + ind.desc + '</div></div>'
+            + '<button class="ind-gear" data-gear="' + ind.id + '" type="button" title="设置" aria-label="设置' + ind.name + '">\u2699</button>'
+            + '</div>';
+    });
+    list.innerHTML = html;
+    list.querySelectorAll('.ind-lib-item').forEach((item) => {
+        item.addEventListener('click', (e) => {
+            if (e.target.closest('.ind-star') || e.target.closest('.ind-gear')) return;
+            toggleIndicatorVisibility(item.dataset.indId);
+        });
+    });
+    list.querySelectorAll('.ind-star').forEach((star) => {
+        star.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleIndicatorFavorite(star.dataset.star);
+        });
+    });
+    list.querySelectorAll('.ind-gear').forEach((gear) => {
+        gear.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openIndicatorSettings(gear.dataset.gear);
+        });
+    });
+}
+
+function isIndicatorActive(ind) {
+    if (ind.id === 'ma') return maVisible && maPeriods.length > 0;
+    if (['macd', 'kdj', 'rsi', 'boll'].includes(ind.id)) {
+        return indicatorPanelVisible && currentIndicatorType === ind.name;
+    }
+    return false;
+}
+
+function getIndicatorParamSummary(ind) {
+    if (ind.id === 'ma') return maPeriods.join(',');
+    if (ind.id === 'macd') {
+        const f = document.getElementById('macd-fast')?.value || 10;
+        const s = document.getElementById('macd-slow')?.value || 20;
+        const sig = document.getElementById('macd-signal')?.value || 5;
+        return f + ',' + s + ',' + sig;
+    }
+    if (ind.id === 'kdj') {
+        const n = document.getElementById('kdj-n')?.value || 9;
+        const m1 = document.getElementById('kdj-m1')?.value || 3;
+        const m2 = document.getElementById('kdj-m2')?.value || 3;
+        return n + ',' + m1 + ',' + m2;
+    }
+    if (ind.id === 'rsi') {
+        return String(document.getElementById('rsi-periods')?.value || '6,12,24');
+    }
+    if (ind.id === 'boll') {
+        const p = document.getElementById('boll-period')?.value || 20;
+        const sd = document.getElementById('boll-std-dev')?.value || 2;
+        return p + ',' + sd;
+    }
+    return '';
+}
+
+function getIndicatorSettingsElement(indId, key) {
+    if (indId === 'macd') return document.getElementById('macd-' + key);
+    if (indId === 'kdj') return document.getElementById('kdj-' + key);
+    if (indId === 'rsi' && key === 'periods') return document.getElementById('rsi-periods');
+    if (indId === 'boll') return document.getElementById('boll-' + (key === 'stdDev' ? 'std-dev' : key));
+    return null;
+}
+
+function buildParamInputs(ind) {
+    let html = '';
+    ind.params.forEach((param) => {
+        let currentVal = param.default;
+        if (ind.id === 'ma' && param.key === 'periods') currentVal = maPeriods.join(',');
+        else if (['macd', 'kdj', 'rsi', 'boll'].includes(ind.id)) {
+            currentVal = getIndicatorSettingsElement(ind.id, param.key)?.value || param.default;
+        }
+        html += '<div class="ind-param-row"><label>' + param.label + '</label>'
+            + '<input type="' + param.type + '" data-ind="' + ind.id + '" data-key="' + param.key + '" value="' + currentVal + '" min="1"></div>';
+    });
+    return html;
+}
+
+function syncLibraryParamsToSettings() {
+    document.querySelectorAll('.ind-lib-params input').forEach((input) => {
+        const indId = input.dataset.ind;
+        const key = input.dataset.key;
+        if (indId === 'ma' && key === 'periods') {
+            const periods = input.value.split(',').map(s => parseInt(s.trim(), 10)).filter(n => n > 0);
+            if (periods.length) maPeriods = periods;
+        } else if (['macd', 'kdj', 'rsi', 'boll'].includes(indId)) {
+            const el = getIndicatorSettingsElement(indId, key);
+            if (el) el.value = input.value;
+        }
+    });
+}
+
+function toggleIndicatorVisibility(id) {
+    if (id === 'ma') {
+        maVisible = !maVisible;
+        if (maVisible) { updateMaLinesFromRendered(); }
+        else { maPeriods.forEach((p) => { if (maSeries[p]) maSeries[p].setData([]); }); }
+    } else if (['macd', 'kdj', 'rsi', 'boll'].includes(id)) {
+        const type = id.toUpperCase();
+        const isActive = indicatorPanelVisible && currentIndicatorType === type;
+        if (isActive && id === 'macd') {
+            // 再次点击当前副图指标时收起面板。
+            indicatorPanelVisible = false;
+        } else {
+            indicatorPanelVisible = true;
+            currentIndicatorType = type;
+            const indicatorSelect = document.getElementById('indicator-select');
+            if (indicatorSelect) indicatorSelect.value = type;
+        }
+        const indicatorChartEl = document.getElementById('indicator-chart');
+        if (indicatorChartEl) {
+            indicatorChartEl.style.display = indicatorPanelVisible ? '' : 'none';
+        }
+        if (indicatorPanelVisible) loadTechnicalIndicator(currentIndicatorType);
+    }
+    renderIndicatorLibrary();
+    renderActiveIndicatorTags();
+    updateIndicatorHeaderLabel();
+}
+
+function toggleIndicatorFavorite(id) {
+    let favorites = JSON.parse(localStorage.getItem('indicatorFavorites') || '[]');
+    if (favorites.includes(id)) favorites = favorites.filter(f => f !== id);
+    else favorites.push(id);
+    localStorage.setItem('indicatorFavorites', JSON.stringify(favorites));
+    renderIndicatorLibrary();
+}
+
+// ===== 主图左上角指标标签 =====
+function renderActiveIndicatorTags() {
+    let container = document.getElementById('active-indicator-tags');
+    if (!container) {
+        const chartEl = document.getElementById('chart');
+        if (!chartEl) return;
+        container = document.createElement('div');
+        container.id = 'active-indicator-tags';
+        chartEl.appendChild(container);
+    }
+    let html = '';
+    if (maPeriods.length > 0) {
+        html += '<div class="active-ind-tag' + (maVisible ? '' : ' disabled') + '" data-tag="ma">'
+            + '<span class="tag-dot" style="background:#ff9800"></span>MA(' + maPeriods.join(',') + ')</div>';
+    }
+    if (indicatorPanelVisible) {
+        const subInd = INDICATOR_REGISTRY.find(r => r.name === currentIndicatorType);
+        const summary = subInd ? getIndicatorParamSummary(subInd) : '';
+        const tagId = subInd ? subInd.id : 'macd';
+        html += '<div class="active-ind-tag" data-tag="' + tagId + '">'
+            + '<span class="tag-dot" style="background:#4ecdc4"></span>' + currentIndicatorType
+            + (summary ? '(' + summary + ')' : '') + '</div>';
+    }
+    container.innerHTML = html;
+    container.querySelectorAll('.active-ind-tag').forEach((tag) => {
+        tag.addEventListener('click', () => toggleIndicatorVisibility(tag.dataset.tag));
+    });
+}
+
+// 副图图例行左侧的指标名 + 参数标签（AiCoin 风格），点击后打开指标库切换。
+function updateIndicatorHeaderLabel() {
+    const nameEl = document.getElementById('indicator-type-name');
+    const paramsEl = document.getElementById('indicator-type-params');
+    const subIndicator = INDICATOR_REGISTRY.find((item) => item.name === currentIndicatorType);
+    if (nameEl) nameEl.textContent = currentIndicatorType;
+    if (paramsEl) {
+        const summary = subIndicator ? getIndicatorParamSummary(subIndicator) : '';
+        paramsEl.textContent = summary ? '(' + summary + ')' : '';
+    }
+    const indicatorSelect = document.getElementById('indicator-select');
+    if (indicatorSelect && indicatorSelect.value !== currentIndicatorType) {
+        indicatorSelect.value = currentIndicatorType;
+    }
+}
+
+// ===== 副图图例行彩色数值（AiCoin 风格，支持 MACD/KDJ/RSI/BOLL）=====
+function formatIndicatorValue(value) {
+    const num = Number(value);
+    if (value === undefined || value === null || !Number.isFinite(num)) return '--';
+    return num.toFixed(2);
+}
+
+function collectIndicatorValueItems(point) {
+    const items = [];
+    if (!point) return items;
+    const seriesColor = (index, fallback) => {
+        const series = currentIndicatorSeries[index];
+        return series ? series.options().color : fallback;
+    };
+    if (currentIndicatorType === 'MACD') {
+        const palette = getThemePalette();
+        const histogram = Number(point.histogram);
+        items.push({ label: 'DIF', value: formatIndicatorValue(point.dif), color: seriesColor(0, '#ff6b6b') });
+        items.push({ label: 'DEA', value: formatIndicatorValue(point.dea), color: seriesColor(1, '#4ecdc4') });
+        items.push({
+            label: 'MACD',
+            value: formatIndicatorValue(point.histogram),
+            color: Number.isFinite(histogram) && histogram >= 0 ? palette.positive : palette.negative,
+        });
+    } else if (currentIndicatorType === 'KDJ') {
+        items.push({ label: 'K', value: formatIndicatorValue(point.k), color: seriesColor(0, '#ff6b6b') });
+        items.push({ label: 'D', value: formatIndicatorValue(point.d), color: seriesColor(1, '#4ecdc4') });
+        items.push({ label: 'J', value: formatIndicatorValue(point.j), color: seriesColor(2, '#45b7d1') });
+    } else if (currentIndicatorType === 'RSI') {
+        const periods = getTechnicalIndicatorConfig('RSI').periods;
+        periods.forEach((period, index) => {
+            items.push({
+                label: 'RSI' + period,
+                value: formatIndicatorValue(point['rsi' + period]),
+                color: seriesColor(index, '#f9c74f'),
+            });
+        });
+    } else if (currentIndicatorType === 'BOLL') {
+        items.push({ label: 'UP', value: formatIndicatorValue(point.upper), color: seriesColor(0, '#ff6b6b') });
+        items.push({ label: 'MID', value: formatIndicatorValue(point.middle), color: seriesColor(1, '#4ecdc4') });
+        items.push({ label: 'LOW', value: formatIndicatorValue(point.lower), color: seriesColor(2, '#45b7d1') });
+    }
+    return items;
+}
+
+function renderIndicatorValuePoint(point) {
+    const el = document.getElementById('indicator-values');
+    if (!el) return;
+    if (!point) {
+        el.innerHTML = '';
+        return;
+    }
+    const subInd = INDICATOR_REGISTRY.find(r => r.name === currentIndicatorType);
+    const summary = subInd ? getIndicatorParamSummary(subInd) : '';
+    let html = '<span class="iv-label">' + currentIndicatorType + (summary ? '(' + summary + ')' : '') + '</span>';
+    collectIndicatorValueItems(point).forEach((item) => {
+        html += ' <span style="color:' + item.color + '">' + item.label + ':' + item.value + '</span>';
+    });
+    el.innerHTML = html;
+}
+
+function updateIndicatorLegendValues(data) {
+    const el = document.getElementById('indicator-values');
+    if (!data || !data.data || data.data.length === 0) {
+        lastIndicatorData = null;
+        if (el) el.innerHTML = '';
+        return;
+    }
+    lastIndicatorData = data;
+    renderIndicatorValuePoint(data.data[data.data.length - 1]);
+}
+
+function rebuildMaSeries() {
+    if (!chart) return;
+    Object.keys(maSeries).forEach((key) => {
+        try { chart.removeSeries(maSeries[key]); } catch (e) { /* ignore */ }
+        delete maSeries[key];
+    });
+    maPeriods.forEach((p, index) => {
+        maSeries[p] = chart.addSeries(LightweightCharts.LineSeries, {
+            color: getMaLineColor(p, index),
+            lineWidth: 1,
+            crosshairMarkerVisible: false,
+            priceLineVisible: false,
+            lastValueVisible: false,
+        });
+    });
+    updateMaLinesFromRendered();
+    renderChartLegend();
+}
+
+function updateMaLinesFromRendered() {
+    const data = latestRenderedKlineData;
+    maPeriods.forEach((p) => {
+        if (!maSeries[p]) return;
+        if (!isMaLineVisible(p) || !data || data.length === 0) {
+            maSeries[p].setData([]);
+            return;
+        }
+        const maData = [];
+        for (let i = p - 1; i < data.length; i++) {
+            let sum = 0;
+            for (let j = i - p + 1; j <= i; j++) sum += data[j].close;
+            maData.push({ time: data[i].time, value: sum / p });
+        }
+        maSeries[p].setData(maData);
+    });
+}
+
 function getTechnicalIndicatorConfig(indicatorType) {
     if (indicatorType === 'MACD') {
         return {
-            fast: parseInt(document.getElementById('macd-fast')?.value, 10) || 12,
-            slow: parseInt(document.getElementById('macd-slow')?.value, 10) || 26,
-            signal: parseInt(document.getElementById('macd-signal')?.value, 10) || 9,
+            fast: parseInt(document.getElementById('macd-fast')?.value, 10) || 10,
+            slow: parseInt(document.getElementById('macd-slow')?.value, 10) || 20,
+            signal: parseInt(document.getElementById('macd-signal')?.value, 10) || 5,
         };
     }
     if (indicatorType === 'KDJ') {
@@ -4984,16 +6506,45 @@ function clearTechnicalIndicatorSeries() {
     renderIndicatorLegend();
 }
 
-function createIndicatorLineSeries(color, title) {
+function createIndicatorLineSeries(color, title, lineWidth = 1) {
     const series = indicatorChart.addSeries(LightweightCharts.LineSeries, {
         color,
-        lineWidth: 1,
+        lineWidth,
         crosshairMarkerVisible: false,
         priceLineVisible: false,
         lastValueVisible: false,
     });
     if (title) series.indicatorTitle = title;
     return series;
+}
+
+// AiCoin 风格：MACD 副图在 y=0 处画一条灰色虚线零轴。
+function attachMacdZeroLine(series) {
+    try {
+        series.createPriceLine({
+            price: 0,
+            color: isCryptoMode() ? 'rgba(132, 142, 156, 0.45)' : 'rgba(93, 107, 130, 0.4)',
+            lineWidth: 1,
+            lineStyle: LightweightCharts.LineStyle.Dashed,
+            axisLabelVisible: false,
+            title: '',
+        });
+    } catch (error) {
+        // 忽略零轴线创建失败
+    }
+}
+
+// 把 #rrggbb 颜色叠加透明度（AiCoin 空心柱用半透明模拟）。
+function hexColorWithAlpha(hex, alpha) {
+    if (typeof hex !== 'string' || hex.charAt(0) !== '#') return hex;
+    let value = hex.slice(1);
+    if (value.length === 3) value = value.split('').map((c) => c + c).join('');
+    if (value.length !== 6) return hex;
+    const r = parseInt(value.slice(0, 2), 16);
+    const g = parseInt(value.slice(2, 4), 16);
+    const b = parseInt(value.slice(4, 6), 16);
+    if (![r, g, b].every((v) => Number.isFinite(v))) return hex;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 async function loadTechnicalIndicator(indicatorType) {
@@ -5009,6 +6560,7 @@ async function loadTechnicalIndicator(indicatorType) {
         indicatorCanvasElement?.style.removeProperty('display');
         indicatorChartElement?.classList.remove('indicator-collapsed');
         if (indicatorHeaderElement) indicatorHeaderElement.style.display = 'inline-flex';
+        updateIndicatorHeaderLabel();
 
         const data = window.KLineIndicatorMath.calculate(
             indicatorType,
@@ -5025,31 +6577,44 @@ async function loadTechnicalIndicator(indicatorType) {
         if (infoElement) infoElement.style.display = 'none';
 
         if (data.type === 'MACD') {
-            const difSeries = createIndicatorLineSeries('#ff6b6b', 'DIF');
-            const deaSeries = createIndicatorLineSeries('#4ecdc4', 'DEA');
+            // AiCoin 层级：柱子先创建画在底层，DIF/DEA 线后创建画在顶层
             const histogramSeries = indicatorChart.addSeries(LightweightCharts.HistogramSeries, {
                 crosshairMarkerVisible: false,
                 priceLineVisible: false,
                 lastValueVisible: false,
             });
+            const difSeries = createIndicatorLineSeries(resolveIndicatorColor('macd', 'difColor', indicatorSettings.macd.difColor), 'DIF', 2);
+            const deaSeries = createIndicatorLineSeries(resolveIndicatorColor('macd', 'deaColor', indicatorSettings.macd.deaColor), 'DEA', 2);
+            const histogramPalette = getThemePalette();
+            const solidUp = histogramPalette.positive;
+            const solidDown = histogramPalette.negative;
+            // AiCoin 风格：动能减弱的柱子用半透明（空心观感），增强的用实心
+            const hollowUp = hexColorWithAlpha(solidUp, 0.4);
+            const hollowDown = hexColorWithAlpha(solidDown, 0.4);
             difSeries.setData(data.data.map((item) => ({ time: item.time, value: item.dif })));
             deaSeries.setData(data.data.map((item) => ({ time: item.time, value: item.dea })));
-            histogramSeries.setData(data.data.map((item) => ({
-                time: item.time,
-                value: item.histogram,
-                color: item.histogram >= 0 ? '#ff4d4f' : '#008000',
-            })));
+            histogramSeries.setData(data.data.map((item, index) => {
+                const value = item.histogram;
+                const prevValue = index > 0 ? data.data[index - 1].histogram : 0;
+                const strengthening = value >= prevValue;
+                let color;
+                if (value >= 0) color = strengthening ? solidUp : hollowUp;
+                else color = strengthening ? hollowDown : solidDown;
+                return { time: item.time, value, color };
+            }));
+            attachMacdZeroLine(difSeries);
             currentIndicatorSeries.push(difSeries, deaSeries, histogramSeries);
         } else if (data.type === 'KDJ') {
-            const kSeries = createIndicatorLineSeries('#ff6b6b', 'K');
-            const dSeries = createIndicatorLineSeries('#4ecdc4', 'D');
-            const jSeries = createIndicatorLineSeries('#45b7d1', 'J');
+            const kSeries = createIndicatorLineSeries(indicatorSettings.kdj.kColor, 'K');
+            const dSeries = createIndicatorLineSeries(indicatorSettings.kdj.dColor, 'D');
+            const jSeries = createIndicatorLineSeries(indicatorSettings.kdj.jColor, 'J');
             kSeries.setData(data.data.map((item) => ({ time: item.time, value: item.k })));
             dSeries.setData(data.data.map((item) => ({ time: item.time, value: item.d })));
             jSeries.setData(data.data.map((item) => ({ time: item.time, value: item.j })));
             currentIndicatorSeries.push(kSeries, dSeries, jSeries);
         } else if (data.type === 'RSI') {
-            const colors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9c74f', '#90be6d', '#f8961e'];
+            const fallbackColors = ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f9c74f', '#90be6d', '#f8961e'];
+            const colors = (indicatorSettings.rsi.colors.length ? indicatorSettings.rsi.colors : fallbackColors);
             data.periods.forEach((period, index) => {
                 const series = createIndicatorLineSeries(colors[index % colors.length], `RSI(${period})`);
                 series.rsiTitle = `RSI(${period})`;
@@ -5057,7 +6622,11 @@ async function loadTechnicalIndicator(indicatorType) {
                 currentIndicatorSeries.push(series);
             });
         } else if (data.type === 'BOLL') {
-            const colors = { upper: '#ff6b6b', middle: '#4ecdc4', lower: '#45b7d1' };
+            const colors = {
+                upper: indicatorSettings.boll.upperColor,
+                middle: indicatorSettings.boll.middleColor,
+                lower: indicatorSettings.boll.lowerColor,
+            };
             Object.keys(colors).forEach((key) => {
                 bollSeries[key] = chart.addSeries(LightweightCharts.LineSeries, {
                     color: colors[key],
@@ -5072,9 +6641,25 @@ async function loadTechnicalIndicator(indicatorType) {
                 currentIndicatorSeries.push(indicatorLine);
             });
             renderChartLegend();
+            showLatestChartInfo();
         }
 
         renderIndicatorLegend();
+        // 副图图例行彩色数值（AiCoin 风格，支持 MACD/KDJ/RSI/BOLL）
+        updateIndicatorLegendValues(data);
+        // 十字线实时跟踪（仅绑定一次）
+        if (indicatorChart && !indicatorChart._legendValuesBound) {
+            indicatorChart._legendValuesBound = true;
+            indicatorChart.subscribeCrosshairMove((param) => {
+                if (!lastIndicatorData || !lastIndicatorData.data || lastIndicatorData.data.length === 0) return;
+                if (param && param.time) {
+                    const point = lastIndicatorData.data.find((item) => item.time === param.time);
+                    renderIndicatorValuePoint(point || lastIndicatorData.data[lastIndicatorData.data.length - 1]);
+                } else {
+                    renderIndicatorValuePoint(lastIndicatorData.data[lastIndicatorData.data.length - 1]);
+                }
+            });
+        }
     } catch (error) {
         console.error(`加载技术指标失败: ${error}`);
         if (infoElement) {
@@ -5091,6 +6676,12 @@ function changeIndicator() {
     const select = document.getElementById('indicator-select');
     currentIndicatorType = select.value;
     loadTechnicalIndicator(currentIndicatorType);
+    // 如果指标库面板打开，刷新列表
+    const panel = document.getElementById('indicator-library-panel');
+    if (panel && !panel.classList.contains('hidden')) {
+        renderIndicatorLibrary();
+    }
+    renderActiveIndicatorTags();
 }
 
 // 复权设置
@@ -5722,7 +7313,123 @@ function renderCryptoAccount(accountPayload) {
     const fundingNet = Number(account.funding_net ?? accountPayload?.funding_net ?? 0);
     document.getElementById('crypto-funding-summary').textContent = '资金费净额：' + fundingNet.toFixed(4) + ' USDT';
     renderCryptoPendingOrders(pendingOrders);
+    renderCryptoPositionCard(account, position, pendingOrders);
     refreshCryptoOrderPreview();
+}
+
+// ===== AiCoin 风格持仓卡片 =====
+function getCryptoProtectivePrices(pendingOrders) {
+    let tp = 0;
+    let sl = 0;
+    (Array.isArray(pendingOrders) ? pendingOrders : []).forEach((order) => {
+        if (!order || !order.parent_order_id) return;
+        const tpPrice = Number(order.tp_price || 0);
+        const slPrice = Number(order.sl_price || 0);
+        if (order.protection_type === 'tp' && tpPrice > 0) tp = tpPrice;
+        if (order.protection_type === 'sl' && slPrice > 0) sl = slPrice;
+    });
+    return { tp, sl };
+}
+
+function renderCryptoPositionCard(account, position, pendingOrders) {
+    const container = document.getElementById('current-positions');
+    if (!container) return;
+    const side = String(position?.side || 'flat');
+    if (side === 'flat' || !Number(position?.quantity)) {
+        container.innerHTML = '<div class="no-positions">暂无持仓</div>';
+        return;
+    }
+    const isLong = side === 'long';
+    const symbol = currentTraining?.symbol || 'USDT永续';
+    const coin = String(symbol).replace(/USDT$/i, '') || '币';
+    const leverage = Number(position?.leverage || 1);
+    const quantity = Number(position?.quantity || 0);
+    const entryPrice = Number(position?.entry_price || 0);
+    const markPrice = Number(account?.mark_price ?? position?.mark_price ?? 0);
+    const margin = Number(position?.isolated_margin || 0);
+    const unrealized = Number(position?.unrealized_pnl || 0);
+    const pnlPercent = margin > 0 ? (unrealized / margin) * 100 : null;
+    const marginRatio = account?.margin_ratio == null ? null : Number(account.margin_ratio) * 100;
+    const liquidation = Number(position?.liquidation_price || 0);
+    const protective = getCryptoProtectivePrices(pendingOrders);
+    const pnlClass = unrealized >= 0 ? 'positive' : 'negative';
+
+    container.innerHTML = '<div class="crypto-pos-card">'
+        + '<div class="crypto-pos-card-header">'
+        + '<span class="crypto-pos-symbol">' + escapeHtml(symbol) + '</span>'
+        + '<span class="crypto-pos-side ' + (isLong ? 'long' : 'short') + '">' + (isLong ? '多' : '空') + '</span>'
+        + '<span class="crypto-pos-tag">逐仓</span>'
+        + '<span class="crypto-pos-tag">' + leverage + 'x</span>'
+        + '<strong class="crypto-pos-pnl ' + pnlClass + '">' + (unrealized >= 0 ? '+' : '') + formatCryptoValue(unrealized, 4)
+        + (pnlPercent === null ? '' : ' (' + (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%)') + '</strong>'
+        + '</div>'
+        + '<div class="crypto-pos-grid">'
+        + '<div><span>持仓量(' + escapeHtml(coin) + ')</span><strong>' + formatCryptoValue(quantity) + '</strong></div>'
+        + '<div><span>开仓均价</span><strong>' + formatCryptoValue(entryPrice) + '</strong></div>'
+        + '<div><span>保证金(USDT)</span><strong>' + formatCryptoValue(margin, 4) + '</strong></div>'
+        + '<div><span>标记价格</span><strong>' + formatCryptoValue(markPrice) + '</strong></div>'
+        + '<div><span>保证金率</span><strong>' + (marginRatio === null ? '--' : marginRatio.toFixed(2) + '%') + '</strong></div>'
+        + '<div><span>预估强平价</span><strong>' + (liquidation > 0 ? formatCryptoValue(liquidation) : '--') + '</strong></div>'
+        + '<div><span>止盈</span><strong class="tp">' + (protective.tp > 0 ? formatCryptoValue(protective.tp) : '--') + '</strong></div>'
+        + '<div><span>止损</span><strong class="sl">' + (protective.sl > 0 ? formatCryptoValue(protective.sl) : '--') + '</strong></div>'
+        + '</div>'
+        + '<div class="crypto-pos-actions">'
+        + '<button type="button" data-crypto-pos-action="tpsl">止盈止损</button>'
+        + '<button type="button" data-crypto-pos-action="close">平仓</button>'
+        + '<button type="button" data-crypto-pos-action="close-all">市价全平</button>'
+        + '</div>'
+        + '</div>';
+
+    container.querySelector('[data-crypto-pos-action="tpsl"]')?.addEventListener('click', focusCryptoTpSlPanel);
+    container.querySelector('[data-crypto-pos-action="close"]')?.addEventListener('click', () => {
+        selectCryptoOrderAction('close');
+        setCryptoOrderType('market', { preservePrice: true });
+        setCryptoOrderStatus('已切换为市价平仓，可修改后提交。', 'success');
+    });
+    container.querySelector('[data-crypto-pos-action="close-all"]')?.addEventListener('click', cryptoMarketCloseAll);
+}
+
+function focusCryptoTpSlPanel() {
+    const checkbox = document.getElementById('crypto-tpsl-enabled');
+    if (checkbox && !checkbox.checked) {
+        checkbox.checked = true;
+        document.getElementById('crypto-tpsl-fields')?.classList.remove('hidden');
+    }
+    document.querySelector('.order-console-section .crypto-tpsl-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('crypto-tp-price')?.focus({ preventScroll: true });
+}
+
+async function cryptoMarketCloseAll() {
+    if (!currentTraining?.id || !isCryptoMode() || cryptoOrderSubmitting) return;
+    const side = String(currentTraining?.position?.side || 'flat');
+    if (side === 'flat') {
+        setCryptoOrderStatus('当前没有可平仓的持仓。', 'error');
+        return;
+    }
+    cryptoOrderSubmitting = true;
+    setCryptoOrderStatus('正在提交市价全平…', 'loading');
+    try {
+        const body = {
+            action: 'close',
+            order_type: 'market',
+            margin: 0,
+            leverage: Number(currentTraining?.position?.leverage || currentTraining?.leverage || 1),
+        };
+        const response = await fetch(API_BASE + '/training/' + encodeURIComponent(currentTraining.id) + '/trade', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.message || payload.error || getCryptoOrderErrorMessage(payload));
+        if (payload.trade_markers) syncActiveTradeMarkers(payload.trade_markers);
+        if (payload.account || payload.position) renderCryptoAccount(payload);
+        else await updateAccountInfo();
+        renderCryptoTradeHistory(payload.fills || []);
+        setCryptoOrderStatus('市价全平已提交。', 'success');
+    } catch (error) {
+        setCryptoOrderStatus(error.message || '市价全平失败，请重试。', 'error');
+    } finally {
+        cryptoOrderSubmitting = false;
+    }
 }
 
 function getCryptoCurrentPrice() {
@@ -6045,6 +7752,77 @@ function resetCryptoTpSl() {
     refreshCryptoTpSlPnl();
 }
 
+// ===== 以损定仓（按最大亏损反推开仓数量） =====
+function toggleCryptoRiskCalcFields() {
+    const enabled = document.getElementById('crypto-riskcalc-enabled')?.checked;
+    document.getElementById('crypto-riskcalc-fields')?.classList.toggle('hidden', !enabled);
+    if (enabled) refreshCryptoRiskCalcResult();
+}
+
+function getCryptoRiskCalcParams() {
+    const preview = getCryptoOrderPreview();
+    const entryInput = Number(document.getElementById('crypto-riskcalc-entry')?.value || 0);
+    const stopInput = Number(document.getElementById('crypto-riskcalc-stop')?.value || 0);
+    const syncedStop = Number(document.getElementById('crypto-sl-price')?.value || 0);
+    const action = preview.action === 'close' ? 'open_long' : preview.action;
+    return {
+        entryPrice: entryInput > 0 ? entryInput : preview.entryPrice,
+        stopPrice: stopInput > 0 ? stopInput : syncedStop,
+        maxLoss: Number(document.getElementById('crypto-riskcalc-maxloss')?.value || 0),
+        leverage: preview.leverage,
+        action,
+    };
+}
+
+function refreshCryptoRiskCalcResult() {
+    const resultEl = document.getElementById('crypto-riskcalc-result');
+    if (!resultEl || !window.RiskCalc) return null;
+    if (!document.getElementById('crypto-riskcalc-enabled')?.checked) return null;
+    const params = getCryptoRiskCalcParams();
+    const result = window.RiskCalc.computeRiskPosition(params);
+    if (!result.valid) {
+        resultEl.textContent = result.reason === 'stop-too-close'
+            ? '开仓价与止损价不能相同，请检查价格。'
+            : '填写开仓价（或计算价格）、止损价与最大亏损后自动计算。';
+        return null;
+    }
+    const warning = result.directionOk ? '' : (params.action === 'open_short'
+        ? '（注意：开空的止损价应高于开仓价）'
+        : '（注意：开多的止损价应低于开仓价）');
+    resultEl.textContent = '数量 ≈ ' + formatCryptoValue(result.quantity)
+        + ' · 名义 ' + formatCryptoValue(result.notional, 2) + ' USDT'
+        + ' · 保证金(' + result.leverage + 'x) ' + formatCryptoValue(result.margin, 2) + ' USDT'
+        + ' · 止损幅度 ' + (result.stopRate * 100).toFixed(2) + '%'
+        + ' · 触发止损时保证金亏损 ' + (result.marginLossRate * 100).toFixed(1) + '%'
+        + warning;
+    return result;
+}
+
+function applyCryptoRiskCalc() {
+    const result = refreshCryptoRiskCalcResult();
+    if (!result || !result.valid) return;
+    const marginInput = document.getElementById('crypto-margin');
+    if (marginInput) {
+        marginInput.value = String(Number(result.margin.toFixed(4)));
+        document.querySelectorAll('[data-crypto-margin-fraction]').forEach((button) => {
+            button.classList.remove('active');
+            button.setAttribute('aria-pressed', 'false');
+        });
+    }
+    const stopInput = document.getElementById('crypto-riskcalc-stop');
+    const slInput = document.getElementById('crypto-sl-price');
+    if (stopInput && slInput && Number(stopInput.value) > 0 && !Number(slInput.value)) {
+        slInput.value = stopInput.value;
+        const tpslEnabled = document.getElementById('crypto-tpsl-enabled');
+        if (tpslEnabled && !tpslEnabled.checked) {
+            tpslEnabled.checked = true;
+            document.getElementById('crypto-tpsl-fields')?.classList.remove('hidden');
+        }
+    }
+    refreshCryptoOrderPreview();
+    refreshCryptoTpSlPnl();
+}
+
 function getCryptoOrderErrorMessage(payload) {
     if (payload?.message) return payload.message;
     if (payload?.error) return payload.error;
@@ -6321,6 +8099,7 @@ function stopAutoSync() {
 }
 
 function updatePositionInfo(positionSummary) {
+    if (isCryptoMode()) return;
     const container = document.getElementById('current-positions');
 
     if (!positionSummary || positionSummary.total_shares === 0) {
@@ -6476,25 +8255,43 @@ async function endTraining() {
     }
 
     // 3. 所有持仓已清空，正式调用后端的 end 接口
+    let response;
     try {
         console.log("所有持仓已清空，正在生成最终报告...");
-        const response = await fetch(`${API_BASE}/training/${currentTraining.id}/end`, {
+        response = await fetch(`${API_BASE}/training/${currentTraining.id}/end`, {
             method: 'POST'
         });
+    } catch (networkError) {
+        console.error('结束训练请求失败:', networkError);
+        alert(`结束训练失败：网络请求异常（${networkError.message || '无法连接服务器'}），请检查服务是否运行。`);
+        return;
+    }
 
-        if (response.ok) {
-            const report = await response.json();
-            pausePlayback();
-            clearSessionDrawings();
-            clearCryptoPeriodSnapshotCache();
-            showReport(report);
-        } else {
-            const error = await response.json();
-            alert(`结束训练失败: ${error.message}`);
-        }
-    } catch (error) {
-        console.error('结束训练失败:', error);
-        alert('结束训练失败');
+    const rawText = await response.text();
+    let payload = null;
+    try {
+        payload = rawText ? JSON.parse(rawText) : null;
+    } catch (parseError) {
+        console.error('结束训练返回非 JSON:', rawText?.slice(0, 500));
+        alert(`结束训练失败：服务器返回异常（HTTP ${response.status}）。详细错误已输出到浏览器控制台（F12）。`);
+        return;
+    }
+
+    if (!response.ok) {
+        const message = payload?.error || payload?.message || `HTTP ${response.status}`;
+        console.error('结束训练失败:', payload);
+        alert(`结束训练失败：${message}`);
+        return;
+    }
+
+    try {
+        pausePlayback();
+        clearSessionDrawings();
+        clearCryptoPeriodSnapshotCache();
+        showReport(payload);
+    } catch (renderError) {
+        console.error('结束成功但报告渲染失败:', renderError);
+        alert(`训练已结束，但报告页面渲染失败：${renderError.message || renderError}。可刷新页面后从历史训练查看。`);
     }
 }
 

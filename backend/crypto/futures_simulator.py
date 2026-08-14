@@ -39,8 +39,8 @@ class FuturesSimulator:
 
     @staticmethod
     def _validate_leverage(leverage: int) -> None:
-        if isinstance(leverage, bool) or not isinstance(leverage, int) or not 1 <= leverage <= 20:
-            raise ValueError("leverage must be a whole number from 1 through 20")
+        if isinstance(leverage, bool) or not isinstance(leverage, int) or not 1 <= leverage <= 100:
+            raise ValueError("leverage must be a whole number from 1 through 100")
 
     def set_leverage(self, leverage: int, *, has_active_orders: bool = False) -> None:
         self._validate_leverage(leverage)
@@ -261,10 +261,12 @@ class FuturesSimulator:
         return max(ZERO, self.position.isolated_margin + self.unrealized_pnl(mark_price))
 
     def margin_ratio(self, mark_price) -> Decimal:
-        isolated_equity = self.isolated_equity(mark_price)
-        if self.position.is_flat or isolated_equity <= ZERO:
+        # 全仓（Cross）：保证金率 = 维持保证金 ÷ 账户总权益（余额+浮动盈亏），
+        # 账户剩余资金共同支撑仓位，单仓保证金不再单独决定风险。
+        account_equity = self.equity(mark_price)
+        if self.position.is_flat or account_equity <= ZERO:
             return ZERO
-        return self.maintenance_margin(mark_price) / isolated_equity * Decimal("100")
+        return self.maintenance_margin(mark_price) / account_equity * Decimal("100")
 
     def snapshot(self, mark_price=None) -> dict:
         selected_mark = self.last_mark_price if mark_price is None else decimal_value(mark_price)

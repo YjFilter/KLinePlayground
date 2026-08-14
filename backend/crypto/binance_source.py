@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from .models import CryptoBar, CryptoInstrument, FundingEvent
+from .models import BASE_INTERVAL_MINUTES, CryptoBar, CryptoInstrument, FundingEvent
 from .source import CryptoSourceError, HttpCryptoSource, from_milliseconds, milliseconds
 
 class BinanceCryptoSource(HttpCryptoSource):
     name = "binance"
     base_url = "https://fapi.binance.com"
+    base_interval = "1m"
+    _interval_ms = BASE_INTERVAL_MINUTES * 60000
 
     def list_instruments(self) -> list[CryptoInstrument]:
         info = self._get_json(f"{self.base_url}/fapi/v1/exchangeInfo", params={}, endpoint="exchangeInfo")
@@ -47,13 +49,13 @@ class BinanceCryptoSource(HttpCryptoSource):
         end_ms = milliseconds(end)
         rows = []
         for _ in range(self.max_pages):
-            payload = self._get_json(f"{self.base_url}{path}", params={"symbol": symbol, "interval": "5m", "startTime": cursor, "endTime": end_ms, "limit": 1500}, endpoint=endpoint)
+            payload = self._get_json(f"{self.base_url}{path}", params={"symbol": symbol, "interval": self.base_interval, "startTime": cursor, "endTime": end_ms, "limit": 1500}, endpoint=endpoint)
             if not isinstance(payload, list):
                 raise CryptoSourceError(f"binance schema error for {endpoint}: expected list")
             if not payload:
                 break
             rows.extend(payload)
-            next_cursor = int(payload[-1][0]) + 300000
+            next_cursor = int(payload[-1][0]) + self._interval_ms
             if next_cursor <= cursor:
                 raise CryptoSourceError(f"binance pagination stalled for {endpoint}")
             cursor = next_cursor

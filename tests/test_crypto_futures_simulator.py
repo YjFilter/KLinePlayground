@@ -46,12 +46,12 @@ class FuturesSimulatorTests(unittest.TestCase):
         json.dumps(fill.to_dict())
 
     def test_leverage_validation_and_changes_only_while_flat(self):
-        for leverage in (0, 21, Decimal("1.5")):
+        for leverage in (0, 101, Decimal("1.5")):
             with self.assertRaises(ValueError):
                 self.make_simulator(leverage=leverage)
         simulator = self.make_simulator()
-        simulator.set_leverage(20)
-        self.assertEqual(simulator.leverage, 20)
+        simulator.set_leverage(100)
+        self.assertEqual(simulator.leverage, 100)
         simulator.open_long(margin="100", price="100", timestamp=datetime(2024, 1, 1, tzinfo=UTC))
         with self.assertRaisesRegex(ValueError, "flat"):
             simulator.set_leverage(10)
@@ -71,7 +71,8 @@ class FuturesSimulatorTests(unittest.TestCase):
         self.assertEqual(simulator.unrealized_pnl("110"), Decimal("500.000"))
         self.assertEqual(simulator.equity("110"), Decimal("10500.000"))
         self.assertEqual(simulator.maintenance_margin("110"), Decimal("27.500000"))
-        self.assertEqual(simulator.margin_ratio("110").quantize(Decimal("0.0001")), Decimal("1.8333"))
+        # 全仓语义：保证金率 = 维持保证金 ÷ 账户总权益（10000 余额 + 500 浮盈）= 27.5/10500
+        self.assertEqual(simulator.margin_ratio("110").quantize(Decimal("0.0001")), Decimal("0.2619"))
 
         short = self.make_simulator()
         short.open_short(margin="1000", price="100", timestamp=datetime(2024, 1, 1, tzinfo=UTC))

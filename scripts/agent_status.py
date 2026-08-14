@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import sys
@@ -127,6 +127,8 @@ def validate_repository(task_root: Path) -> list[str]:
             errors.append(f"missing task state directory: {state_dir}")
             continue
         for path in sorted(state_dir.glob("*.md")):
+            if path.name.endswith("-result.md"):
+                continue
             errors.extend(validate_task(path, task_root))
     errors.extend(find_write_scope_conflicts(task_root))
     return errors

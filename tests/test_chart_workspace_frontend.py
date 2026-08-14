@@ -144,7 +144,7 @@ const bars = Array.from({{length: 80}}, (_, index) => ({{
   close: 10.1 + index * 0.03 + Math.sin(index / 4) * 0.2,
 }}));
 const configs = {{
-  MACD: {{fast: 12, slow: 26, signal: 9}},
+  MACD: {{fast: 10, slow: 20, signal: 5}},
   KDJ: {{n: 9, m1: 3, m2: 3}},
   RSI: {{periods: [6, 12, 24]}},
   BOLL: {{period: 20, stdDev: 2}},
@@ -169,6 +169,25 @@ for (const type of Object.keys(configs)) {{
             check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
+class MaIndicatorDefaultSettingsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_ma_default_settings_match_reference_specification(self):
+        self.assertIn("const INDICATOR_SETTINGS_KEY = 'indicatorSettingsV2'", self.js)
+        self.assertIn("{ period: 10, visible: false, color: '#7038db' }", self.js)
+        self.assertIn("{ period: 20, visible: true, color: '#2196f3' }", self.js)
+        self.assertIn("{ period: 40, visible: true, color: '#52c41a' }", self.js)
+        self.assertIn("{ period: 80, visible: true, color: '#26c6da' }", self.js)
+        self.assertIn("{ period: 160, visible: true, color: '#b85717' }", self.js)
+
+    def test_ma_visibility_guards_legend_info_and_tooltip(self):
+        self.assertIn("if (maSeries[p] && isMaLineVisible(p))", self.js)
+        self.assertIn("if (!series || !isMaLineVisible(p)) return;", self.js)
+        self.assertIn("if (!isMaLineVisible(p)) return;", self.js)
 
 
 if __name__ == "__main__":

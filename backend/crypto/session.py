@@ -10,11 +10,37 @@ from .aggregator import _bucket_start, aggregate_bars, normalize_base_bars
 from .models import CryptoPeriod, utc_datetime
 from .replay_clock import CryptoReplayClock
 
-AVAILABLE_PERIODS = ("5m", "15m", "30m", "1h", "4h", "daily", "weekly")
+AVAILABLE_PERIODS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "3h", "4h", "6h", "8h", "12h", "daily", "2d", "3d", "weekly")
 TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+def _detect_base_step_minutes(timestamps) -> int:
+    """从底座时间戳前 ~20 根的差值探测分钟步长（旧 5m 会话→5；新 1m→1）。
+
+    向量化实现：取前 20 根计算相邻秒差，用最小差判断。仅 2 根以上即可。
+    """
+    try:
+        sample_iter = timestamps.iloc if hasattr(timestamps, "iloc") else None
+        if sample_iter is not None:
+            sample = list(timestamps.iloc[:20])
+        elif hasattr(timestamps, "__getitem__"):
+            sample = list(timestamps[:20])
+        else:
+            sample = list(timestamps)[:20]
+    except Exception:
+        sample = list(timestamps)[:20]
+    if len(sample) < 2:
+        return 1
+    try:
+        diffs = pd.Series(pd.to_datetime(pd.Index(sample), utc=True)).diff().dt.total_seconds().dropna()
+    except Exception:
+        return 1
+    if diffs.empty:
+        return 1
+    min_diff = float(diffs.min())
+    return 5 if min_diff >= 240 else 1
+
 class CryptoReplaySession:
-    def __init__(self, base_bars: pd.DataFrame, initial_time: datetime | None = None, *, symbol: str = "", source: str = "", active_period: CryptoPeriod | str = "5m", max_training_days: int | None = None, on_bar=None):
+    def __init__(self, base_bars: pd.DataFrame, initial_time: datetime | None = None, *, symbol: str = "", source: str = "", active_period: CryptoPeriod | str = "1m", max_training_days: int | None = None, on_bar=None):
         required = {"timestamp", "open", "high", "low", "close", "volume", "turnover"}
         missing = sorted(required - set(base_bars.columns))
         if missing:
@@ -27,19 +53,17 @@ class CryptoReplaySession:
             if max_training_days <= 0:
                 raise ValueError("max_training_days must be positive")
             cutoff_date = selected.date() + timedelta(days=max_training_days - 1)
-            cutoff = datetime.combine(cutoff_date, time(23, 55), tzinfo=timezone.utc)
+            cutoff = datetime.combine(cutoff_date, time(23, 59), tzinfo=timezone.utc)
             frame = frame.loc[frame["timestamp"] <= pd.Timestamp(cutoff)].reset_index(drop=True)
         if frame.empty or pd.Timestamp(selected) not in set(frame["timestamp"]):
             raise ValueError("initial_time must exist within the crypto replay range")
         self._base_bars = frame
-        self._base_bar_index = {
-            value.to_pydatetime(): index for index, value in enumerate(frame["timestamp"])
-        }
         self._initial_time = selected
         self._symbol = symbol.upper()
         self._source = source
         self._on_bar = on_bar
-        self._clock = CryptoReplayClock(frame["timestamp"], initial_time=selected, active_period=active_period)
+        self._base_step_minutes = _detect_base_step_minutes(frame["timestamp"])
+        self._clock = CryptoReplayClock(frame["timestamp"], initial_time=selected, active_period=active_period, base_step_minutes=self._base_step_minutes)
         self._aggregation_cache: dict[tuple[datetime, str], pd.DataFrame] = {}
         self._snapshot_cache: dict[tuple[datetime, str, int | None, datetime | None, datetime | None], dict[str, Any]] = {}
 
@@ -68,7 +92,7 @@ class CryptoReplaySession:
         aggregation_key = (current_time, period)
         aggregated = self._aggregation_cache.get(aggregation_key)
         if aggregated is None:
-            aggregated = aggregate_bars(self._base_bars, self._clock.active_period, current_time)
+            aggregated = aggregate_bars(self._base_bars, self._clock.active_period, current_time, base_interval_minutes=self._base_step_minutes)
             self._aggregation_cache[aggregation_key] = aggregated
         plan = self._clock.plan_next()
         visible = aggregated
@@ -103,7 +127,7 @@ class CryptoReplaySession:
             "current_time": current_time.strftime(TIME_FORMAT),
             "active_period": self._clock.active_period.value,
             "period": self._clock.active_period.value,
-            "base_interval": "5m",
+            "base_interval": "1m",
             "available_periods": list(AVAILABLE_PERIODS),
             "current_bar_complete": current_complete,
             "next_boundary": plan.target_time.strftime(TIME_FORMAT) if plan.target_time is not None else None,
@@ -131,9 +155,11 @@ class CryptoReplaySession:
             return snapshot
         completed = []
         for timestamp in plan.base_bar_times:
-            row = self._base_bars.iloc[self._base_bar_index[timestamp]]
             if self._on_bar is not None:
-                self._on_bar(timestamp, row.copy())
+                # _on_bar 的第二参是历史遗留的 base bar 行；生产回调 FuturesReplayExecutor.on_bar
+                # 会按 timestamp 自建索引，不使用该行。逐根 iloc 取行是高周期推进的主要开销之一，
+                # 因此这里不再取行（传 None），仅保留逐根推进的语义。
+                self._on_bar(timestamp, None)
             completed.append(timestamp)
         self._clock.advance(plan)
         self._invalidate_cache()
@@ -154,15 +180,17 @@ class CryptoReplaySession:
         requires_full_refresh = previous_bucket == target_bucket and plan.current_time != plan.target_time
         completed = []
         for timestamp in plan.base_bar_times:
-            row = self._base_bars.iloc[self._base_bar_index[timestamp]]
             if self._on_bar is not None:
-                self._on_bar(timestamp, row.copy())
+                # _on_bar 的第二参是历史遗留的 base bar 行；生产回调 FuturesReplayExecutor.on_bar
+                # 会按 timestamp 自建索引，不使用该行。逐根 iloc 取行是高周期推进的主要开销之一，
+                # 因此这里不再取行（传 None），仅保留逐根推进的语义。
+                self._on_bar(timestamp, None)
             completed.append(timestamp)
         self._clock.advance(plan)
         self._invalidate_cache()
         bucket_start_index = int(self._base_bars["timestamp"].searchsorted(target_bucket, side="left"))
         bucket_bars = self._base_bars.iloc[bucket_start_index:self._clock.current_index + 1]
-        aggregated = aggregate_bars(bucket_bars, period, self._clock.current_time)
+        aggregated = aggregate_bars(bucket_bars, period, self._clock.current_time, base_interval_minutes=self._base_step_minutes)
         new_bar = None if aggregated.empty else self._serialize_aggregated(aggregated.iloc[-1])
         payload = self._delta_payload(new_bar, completed, requires_full_refresh=requires_full_refresh)
         if requires_full_refresh:
@@ -180,7 +208,7 @@ class CryptoReplaySession:
             "current_time": self._clock.current_time.strftime(TIME_FORMAT),
             "active_period": self._clock.active_period.value,
             "period": self._clock.active_period.value,
-            "base_interval": "5m",
+            "base_interval": "1m",
             "current_bar_complete": False if new_bar is None else bool(new_bar["complete"]),
             "next_boundary": plan.target_time.strftime(TIME_FORMAT) if plan.target_time is not None else None,
             "current_base_bar": current_base_bar,

@@ -139,8 +139,8 @@ class FuturesOrderBook:
         self,
         simulator: FuturesSimulator,
         *,
-        maker_fee_rate: Decimal | int | float | str = "0.0002",
-        taker_fee_rate: Decimal | int | float | str = "0.0005",
+        maker_fee_rate: Decimal | int | float | str = "0",
+        taker_fee_rate: Decimal | int | float | str = "0",
     ) -> None:
         self.simulator = simulator
         self.maker_fee_rate = decimal_value(maker_fee_rate)

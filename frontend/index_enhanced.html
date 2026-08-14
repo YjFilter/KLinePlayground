@@ -140,9 +140,9 @@
                         <div class="form-group">
                             <label>MACD (快 / 慢 / 信号)</label>
                             <div class="inline-inputs">
-                                <input type="number" id="macd-fast" value="12" min="1" max="100">
-                                <input type="number" id="macd-slow" value="26" min="1" max="200">
-                                <input type="number" id="macd-signal" value="9" min="1" max="100">
+                                <input type="number" id="macd-fast" value="10" min="1" max="100">
+                                <input type="number" id="macd-slow" value="20" min="1" max="200">
+                                <input type="number" id="macd-signal" value="5" min="1" max="100">
                             </div>
                         </div>
                         <div class="form-group">
@@ -247,13 +247,22 @@
                     <div class="form-group">
                         <label>K线周期</label>
                         <select id="kline-period">
+                            <option value="1m" data-crypto-period="1m" hidden>1分钟</option>
+                            <option value="3m" data-crypto-period="3m" hidden>3分钟</option>
                             <option value="5m" data-crypto-period="5m" hidden>5分钟</option>
                             <option value="15m" data-crypto-period="15m" hidden>15分钟</option>
                             <option value="30m" data-a-share-period="30m" data-crypto-period="30m">30分钟</option>
                             <option value="1h" data-crypto-period="1h" hidden>1小时</option>
+                            <option value="2h" data-crypto-period="2h" hidden>2小时</option>
+                            <option value="3h" data-crypto-period="3h" hidden>3小时</option>
                             <option value="4h_session" data-a-share-period="4h_session">4小时（A股交易时段）</option>
                             <option value="4h" data-crypto-period="4h" hidden>4小时</option>
+                            <option value="6h" data-crypto-period="6h" hidden>6小时</option>
+                            <option value="8h" data-crypto-period="8h" hidden>8小时</option>
+                            <option value="12h" data-crypto-period="12h" hidden>12小时</option>
                             <option value="daily" data-a-share-period="daily" data-crypto-period="daily" selected>日线</option>
+                            <option value="2d" data-crypto-period="2d" hidden>2日线</option>
+                            <option value="3d" data-crypto-period="3d" hidden>3日线</option>
                             <option value="weekly" data-a-share-period="weekly" data-crypto-period="weekly">周线</option>
                         </select>
                     </div>
@@ -276,6 +285,7 @@
                             <option value="1">1x</option><option value="2">2x</option>
                             <option value="3">3x</option><option value="5" selected>5x</option>
                             <option value="10">10x</option><option value="20">20x</option>
+                            <option value="50">50x</option><option value="100">100x</option>
                         </select>
                     </div>
                 </div>
@@ -465,18 +475,55 @@
                         </div>
                         <div class="chart-actions">
                             <div class="view-period-switch">
-                                <button class="view-period-btn crypto-view-period hidden" data-period="5m">5分钟</button>
-                                <button class="view-period-btn crypto-view-period hidden" data-period="15m">15分钟</button>
-                                <button class="view-period-btn shared-view-period" data-period="30m">30分钟</button>
-                                <button class="view-period-btn crypto-view-period hidden" data-period="1h">1小时</button>
-                                <button class="view-period-btn a-share-view-period" data-period="4h_session">4小时</button>
-                                <button class="view-period-btn crypto-view-period hidden" data-period="4h">4小时</button>
-                                <button class="view-period-btn shared-view-period active" data-period="daily">日线</button>
-                                <button class="view-period-btn shared-view-period" data-period="weekly">周线</button>
+                                <!-- 分钟组 -->
+                                <button class="view-period-btn crypto-view-period hidden" data-period="1m">1m</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="3m">3m</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="5m">5m</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="15m">15m</button>
+                                <button class="view-period-btn shared-view-period" data-period="30m">30m</button>
+                                <span class="toolbar-group-separator"></span>
+                                <!-- 小时组 -->
+                                <button class="view-period-btn crypto-view-period hidden" data-period="1h">1h</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="2h">2h</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="3h">3h</button>
+                                <button class="view-period-btn a-share-view-period" data-period="4h_session">4h</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="4h">4h</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="6h">6h</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="8h">8h</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="12h">12h</button>
+                                <span class="toolbar-group-separator"></span>
+                                <!-- 日周组 -->
+                                <button class="view-period-btn shared-view-period active" data-period="daily">1D</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="2d">2D</button>
+                                <button class="view-period-btn crypto-view-period hidden" data-period="3d">3D</button>
+                                <button class="view-period-btn shared-view-period" data-period="weekly">1W</button>
                             </div>
+                            <div class="toolbar-group-separator"></div>
+                            <div id="drawing-toolbar" class="drawing-toolbar" role="toolbar" aria-label="画线工具">
+                                <button type="button" data-drawing-tool="select" aria-label="选择绘图" aria-pressed="false" title="选择"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.8v9.4l2.4-2.2 1.5 3.2 1.6-.7-1.5-3.2 3.2-.5z" fill="currentColor"/></svg></button>
+                                <button type="button" data-drawing-tool="trend" aria-label="趋势线" aria-pressed="false" title="趋势线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="4.2" y1="11.8" x2="11.8" y2="4.2"/><circle cx="4.2" cy="11.8" r="1.2" fill="currentColor" stroke="none"/><circle cx="11.8" cy="4.2" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+                                <button type="button" data-drawing-tool="horizontal" aria-label="水平线" aria-pressed="false" title="水平线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/><circle cx="3" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="13" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+                                <button type="button" data-drawing-tool="ray" aria-label="射线" aria-pressed="false" title="射线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="12" x2="11.4" y2="5.4"/><path d="M11.4 5.4l-3 .4M11.4 5.4l-.4 3"/></svg></button>
+                                <button type="button" data-drawing-tool="rectangle" aria-label="矩形区间" aria-pressed="false" title="矩形区间"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.6" width="10" height="6.8" rx="0.8"/></svg></button>
+                                <button type="button" data-drawing-tool="text" aria-label="文字标注" aria-pressed="false" title="文字标注"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4.2 4.4h7.6M8 4.4v7.6"/></svg></button>
+<button type="button" data-drawing-tool="fibonacci" aria-label="斐波那契回撤" aria-pressed="false" title="斐波那契"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M3.2 12.6 12.8 3.4" stroke-width="1.3"/><path d="M3.2 6.4h6M3.2 9.2h7.6" stroke-width="1.2"/></svg></button>
+<button type="button" data-drawing-tool="fib-trend-time" aria-label="斐波那契趋势时间" aria-pressed="false" title="斐波那契趋势时间"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M2.6 3.6h10.8M2.6 6.9h8.2M2.6 10.2h5.6M2.6 13.4h3.2" stroke-width="1.2" stroke-dasharray="2.2 1.8"/></svg></button>
+<button type="button" data-drawing-tool="ruler" aria-label="量尺" aria-pressed="false" title="量尺"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 8h8.8"/><path d="M5.6 5.9 3.4 8l2.2 2.1M10.4 5.9 12.6 8l-2.2 2.1"/></svg></button>
+                                <button type="button" data-drawing-tool="long-position" aria-label="做多测算" aria-pressed="false" title="做多测算"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 12.6h8.8"/><path d="M8 10.8V4.2M8 4.2 5.7 6.5M8 4.2l2.3 2.3"/></svg></button>
+                                <button type="button" data-drawing-tool="short-position" aria-label="做空测算" aria-pressed="false" title="做空测算"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 3.4h8.8"/><path d="M8 5.2v6.6M8 11.8 5.7 9.5M8 11.8l2.3-2.3"/></svg></button>
+                                <span class="drawing-toolbar-divider"></span>
+                                <button type="button" data-drawing-action="lock" aria-label="锁定或解锁选中图形" title="锁定"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="8" height="5.6" rx="1"/><path d="M5.6 7V5.6a2.4 2.4 0 0 1 4.8 0V7" stroke-linecap="round"/></svg></button>
+                                <button type="button" data-drawing-action="hide" aria-label="隐藏或显示选中图形" title="隐藏"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8S4.9 4.6 8 4.6 13.4 8 13.4 8 11.1 11.4 8 11.4 2.6 8 2.6 8z"/><circle cx="8" cy="8" r="1.6"/></svg></button>
+                                <button type="button" data-drawing-action="delete" aria-label="删除选中图形" title="删除"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 4.8h8.8"/><path d="M6.4 4.8V3.6h3.2v1.2"/><path d="M5 4.8l.4 7.6h5.2l.4-7.6"/><path d="M6.9 7v3.4M9.1 7v3.4"/></svg></button>
+                                <button type="button" data-drawing-action="undo" aria-label="撤销绘图操作" title="撤销"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.6 4.6 4.2 7l2.4 2.4"/><path d="M4.2 7h5.2a3.3 3.3 0 0 1 0 6.6H6.6"/></svg></button>
+                                <button type="button" data-drawing-action="redo" aria-label="重做绘图操作" title="重做"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.4 4.6 11.8 7 9.4 9.4"/><path d="M11.8 7H6.6a3.3 3.3 0 0 0 0 6.6h2.8"/></svg></button>
+                                <button type="button" data-drawing-action="clear" aria-label="清空全部图形" title="清空全部"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="5.2"/><path d="M6.2 6.2l3.6 3.6M9.8 6.2l-3.6 3.6"/></svg></button>
+                            </div>
+                            <div class="toolbar-group-separator"></div>
                             <div class="chart-panel-controls" role="group" aria-label="图表面板控制">
                                 <button id="toggle-volume-panel-btn" type="button" aria-controls="volume-chart" aria-expanded="true">成交量</button>
                                 <button id="toggle-indicator-panel-btn" type="button" aria-controls="indicator-chart" aria-expanded="true">指标</button>
+                                <button id="indicator-library-btn" type="button" title="指标库">指标库</button>
                                 <button id="crypto-theme-toggle-btn" type="button" class="hidden" data-crypto-workspace-only aria-label="切换币圈明暗主题" aria-pressed="false" title="切换为浅色主题">☀</button>
                                 <button id="chart-fullscreen-btn" type="button" aria-controls="chart-panels" aria-label="全屏图表">全屏</button>
                             </div>
@@ -513,28 +560,9 @@
                     </div>
                 </div>
                 <div id="chart-panels" class="chart-panels">
-                    <div id="drawing-toolbar" class="drawing-toolbar" role="toolbar" aria-label="画线工具">
-                        <button type="button" data-drawing-tool="select" aria-label="选择绘图" aria-pressed="false" title="选择">↖</button>
-                        <button type="button" data-drawing-tool="trend" aria-label="趋势线" aria-pressed="false" title="趋势线">╱</button>
-                        <button type="button" data-drawing-tool="horizontal" aria-label="水平线" aria-pressed="false" title="水平线">—</button>
-                        <button type="button" data-drawing-tool="ray" aria-label="射线" aria-pressed="false" title="射线">➜</button>
-                        <button type="button" data-drawing-tool="rectangle" aria-label="矩形区间" aria-pressed="false" title="矩形区间">▭</button>
-                        <button type="button" data-drawing-tool="text" aria-label="文字标注" aria-pressed="false" title="文字标注">T</button>
-                        <button type="button" data-drawing-tool="fibonacci" aria-label="斐波那契回撤" aria-pressed="false" title="斐波那契">Fib</button>
-                        <button type="button" data-drawing-tool="ruler" aria-label="量尺" aria-pressed="false" title="量尺">↔</button>
-                        <button type="button" data-drawing-tool="long-position" aria-label="做多测算" aria-pressed="false" title="做多测算">L</button>
-                        <button type="button" data-drawing-tool="short-position" aria-label="做空测算" aria-pressed="false" title="做空测算">S</button>
-                        <span class="drawing-toolbar-divider"></span>
-                        <button type="button" data-drawing-action="lock" aria-label="锁定或解锁选中图形" title="锁定">🔒</button>
-                        <button type="button" data-drawing-action="hide" aria-label="隐藏或显示选中图形" title="隐藏">◉</button>
-                        <button type="button" data-drawing-action="delete" aria-label="删除选中图形" title="删除">⌫</button>
-                        <button type="button" data-drawing-action="undo" aria-label="撤销绘图操作" title="撤销">↶</button>
-                        <button type="button" data-drawing-action="redo" aria-label="重做绘图操作" title="重做">↷</button>
-                        <button type="button" data-drawing-action="clear" aria-label="清空全部图形" title="清空全部">×</button>
-                        <button id="chart-focus-exit-btn" type="button" class="hidden" aria-label="退出全屏图表" title="退出全屏">退出全屏</button>
-                    </div>
+                    <button id="chart-focus-exit-btn" type="button" class="hidden" aria-label="退出全屏图表" title="退出全屏">退出全屏</button>
                     <span id="drawing-status" class="drawing-status" aria-live="polite"></span>
-                    <div id="drawing-fibonacci-settings" class="drawing-settings hidden" aria-label="斐波那契设置">
+                    <div id="drawing-fibonacci-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="斐波那契设置">
                         <div class="drawing-settings-header"><strong>斐波那契档位</strong><button type="button" data-fibonacci-action="close" aria-label="关闭斐波那契设置">×</button></div>
                         <div id="drawing-fibonacci-levels"></div>
                         <label><input type="checkbox" id="drawing-fibonacci-reverse"> 反向显示</label>
@@ -543,21 +571,103 @@
                             <button type="button" data-fibonacci-action="reset">恢复默认</button>
                         </div>
                     </div>
+                    <!-- 通用线条设置：horizontal/trend/ray/ruler -->
+                    <div id="drawing-line-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="线条设置">
+                        <div class="drawing-settings-header"><strong>线条设置</strong><button type="button" data-line-action="close" aria-label="关闭线条设置">×</button></div>
+                        <label>颜色<input type="color" id="drawing-line-color" value="#2962ff"></label>
+                        <label>线宽<input type="number" id="drawing-line-width" min="0.5" max="6" step="0.5" value="1"></label>
+                        <label>线型
+                            <select id="drawing-line-style">
+                                <option value="solid">实线</option>
+                                <option value="dashed">虚线</option>
+                                <option value="dotted">点线</option>
+                            </select>
+                        </label>
+                        <label><input type="checkbox" id="drawing-line-label-visible" checked> 显示价格标签</label>
+                    </div>
+                    <!-- 矩形设置（比线条多一项填充） -->
+                    <div id="drawing-rectangle-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="矩形设置">
+                        <div class="drawing-settings-header"><strong>矩形设置</strong><button type="button" data-rect-action="close" aria-label="关闭矩形设置">×</button></div>
+                        <label>边框颜色<input type="color" id="drawing-rect-color" value="#2962ff"></label>
+                        <label>填充颜色<input type="color" id="drawing-rect-fill" value="#2962ff"></label>
+                        <label>填充透明度<input type="number" id="drawing-rect-opacity" min="0" max="1" step="0.05" value="0.12"></label>
+                        <label>线宽<input type="number" id="drawing-rect-width" min="0.5" max="6" step="0.5" value="1"></label>
+                        <label>线型
+                            <select id="drawing-rect-style">
+                                <option value="solid">实线</option>
+                                <option value="dashed">虚线</option>
+                                <option value="dotted">点线</option>
+                            </select>
+                        </label>
+                    </div>
+                    <!-- 文字标注设置 -->
+                    <div id="drawing-text-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="文字标注设置">
+                        <div class="drawing-settings-header"><strong>文字标注设置</strong><button type="button" data-text-action="close" aria-label="关闭文字标注设置">×</button></div>
+                        <label>文字内容<input type="text" id="drawing-text-content" value="Text"></label>
+                        <label>颜色<input type="color" id="drawing-text-color" value="#f0b90b"></label>
+                        <label>字号<input type="number" id="drawing-text-size" min="8" max="48" step="1" value="14"></label>
+                    </div>
+                    <!-- 做多/做空/盈亏比 通用设置 -->
+                    <div id="drawing-position-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="持仓测算设置">
+                        <div class="drawing-settings-header"><strong>持仓测算</strong><button type="button" data-pos-action="close" aria-label="关闭持仓测算设置">×</button></div>
+                        <label>账户风险比例（%）
+                            <input type="number" id="drawing-pos-risk" min="0.1" max="20" step="0.1" value="1">
+                        </label>
+                        <p class="drawing-settings-hint">基于上方账户权益 × 风险比例计算建议仓位大小。</p>
+                    </div>
+                    <!-- 画图对象浮动工具条（选中对象时显示，参考 AiCoin 风格） -->
+                    <div id="drawing-floating-toolbar" class="drawing-floating-toolbar hidden" role="toolbar" aria-label="画图对象操作">
+                        <button type="button" data-drawing-action="drag" aria-label="拖动对象" title="拖动"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 4v6m0 0V4m0 6h6m-6 0H9m6 0v6m0-6v6m6-6h-6m6 0h-6"/></svg></button>
+                        <button type="button" data-drawing-action="settings" aria-label="对象设置" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+                        <button type="button" data-drawing-action="lock" aria-label="锁定/解锁" title="锁定/解锁"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></button>
+                        <button type="button" data-drawing-action="hide" aria-label="隐藏/显示" title="隐藏/显示"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+                        <button type="button" data-drawing-action="delete" aria-label="删除对象" title="删除"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+                    </div>
                     <div id="chart" class="chart" data-panel="main"></div>
                     <div class="chart-panel-splitter" data-before-panel="chart" data-after-panel="volume-chart" role="separator" aria-orientation="horizontal" aria-label="调整K线图和成交量图高度" tabindex="0"></div>
                     <div id="volume-chart" class="volume-chart" data-panel="volume"></div>
                     <div class="chart-panel-splitter" data-before-panel="volume-chart" data-after-panel="indicator-chart" role="separator" aria-orientation="horizontal" aria-label="调整成交量图和技术指标图高度" tabindex="0"></div>
                     <div id="indicator-chart" class="indicator-chart" data-panel="indicator">
                         <div id="indicator-header" class="indicator-header">
-                            <label>技术指标</label>
-                            <select id="indicator-select">
+                            <select id="indicator-select" class="hidden" aria-hidden="true" tabindex="-1" title="技术指标">
                                 <option value="MACD">MACD</option>
                                 <option value="KDJ">KDJ</option>
                                 <option value="RSI">RSI</option>
                                 <option value="BOLL">BOLL</option>
                             </select>
+                            <button id="indicator-header-picker" type="button" class="indicator-header-picker" title="切换技术指标" aria-haspopup="dialog" aria-label="切换技术指标">
+                                <span id="indicator-type-name" class="indicator-type-name">MACD</span>
+                                <span id="indicator-type-params" class="indicator-type-params">(10,20,5)</span>
+                                <span class="indicator-header-caret" aria-hidden="true">▾</span>
+                            </button>
+                            <span id="indicator-values" class="indicator-values"></span>
                         </div>
                         <div id="indicator-canvas" class="indicator-canvas"></div>
+                    </div>
+                    <div id="indicator-library-panel" class="ind-lib-panel hidden">
+                        <div class="ind-lib-header">
+                            <span>指标库</span>
+                            <button id="ind-lib-close" type="button">&times;</button>
+                        </div>
+                        <div class="ind-lib-category">技术指标</div>
+                        <div id="ind-lib-list" class="ind-lib-list"></div>
+                    </div>
+                    <div id="ind-settings-overlay" class="ind-settings-overlay hidden">
+                        <div class="ind-settings-modal" role="dialog" aria-modal="true" aria-labelledby="ind-settings-title">
+                            <div class="ind-settings-header">
+                                <div class="ind-settings-heading">
+                                    <span id="ind-settings-title" class="ind-settings-title">MA</span>
+                                    <span id="ind-settings-desc" class="ind-settings-desc"></span>
+                                </div>
+                                <button id="ind-settings-reset" type="button" class="ind-settings-reset" title="恢复默认设置">↻ 恢复默认</button>
+                                <button id="ind-settings-close" type="button" class="ind-settings-close" aria-label="关闭设置">&times;</button>
+                            </div>
+                            <div id="ind-settings-body" class="ind-settings-body"></div>
+                            <div class="ind-settings-footer">
+                                <button id="ind-settings-hide" type="button" class="ind-settings-btn">取消显示</button>
+                                <button id="ind-settings-apply" type="button" class="ind-settings-btn primary">应用</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </main>
@@ -688,8 +798,8 @@
                     <div class="crypto-fee-settings">
                         <div class="crypto-fee-settings-header"><span>手续费率</span><small>按成交额计算</small></div>
                         <div class="crypto-fee-grid">
-                            <label>Maker (%)<input id="crypto-maker-fee-rate" type="number" min="0" max="1" step="0.001" value="0.02" inputmode="decimal"></label>
-                            <label>Taker (%)<input id="crypto-taker-fee-rate" type="number" min="0" max="1" step="0.001" value="0.05" inputmode="decimal"></label>
+                            <label>Maker (%)<input id="crypto-maker-fee-rate" type="number" min="0" max="1" step="0.001" value="0" inputmode="decimal"></label>
+                            <label>Taker (%)<input id="crypto-taker-fee-rate" type="number" min="0" max="1" step="0.001" value="0" inputmode="decimal"></label>
                             <button id="crypto-save-fee-rates" type="button">应用费率</button>
                         </div>
                         <div id="crypto-fee-status" class="crypto-fee-status" aria-live="polite">仅影响后续成交；空仓且无挂单时可修改。</div>
@@ -720,6 +830,7 @@
                             <select id="crypto-order-leverage">
                                 <option value="1">1x</option><option value="2">2x</option><option value="3">3x</option>
                                 <option value="5" selected>5x</option><option value="10">10x</option><option value="20">20x</option>
+                                <option value="50">50x</option><option value="100">100x</option>
                             </select>
                         </label>
                         <label>保证金（USDT）<input type="number" id="crypto-margin" min="0" step="1" value="100"></label>
@@ -758,6 +869,23 @@
                                 <span id="crypto-sl-pnl" class="crypto-tpsl-pnl sl"></span>
                             </div>
                             <p class="crypto-tpsl-note">按标记价触发，触发后以市价平仓；止盈止损仅随开仓单生效。</p>
+                        </div>
+                    </div>
+                    <div class="crypto-tpsl-section crypto-riskcalc-section" data-crypto-workspace-only>
+                        <label class="crypto-tpsl-toggle">
+                            <input type="checkbox" id="crypto-riskcalc-enabled">
+                            <span>以损定仓</span>
+                        </label>
+                        <div id="crypto-riskcalc-fields" class="crypto-tpsl-fields hidden">
+                            <div class="crypto-tpsl-row">
+                                <label class="crypto-tpsl-input">开仓价<input type="number" id="crypto-riskcalc-entry" min="0" step="0.01" placeholder="留空用计算价格"></label>
+                                <label class="crypto-tpsl-input sl">止损价<input type="number" id="crypto-riskcalc-stop" min="0" step="0.01" placeholder="留空同步上方止损价"></label>
+                            </div>
+                            <div class="crypto-tpsl-row">
+                                <label class="crypto-tpsl-input">最大亏损(USDT)<input type="number" id="crypto-riskcalc-maxloss" min="0" step="1" placeholder="如 100"></label>
+                                <button id="crypto-riskcalc-apply" type="button" class="crypto-riskcalc-apply">计算并填入</button>
+                            </div>
+                            <p id="crypto-riskcalc-result" class="crypto-tpsl-note crypto-riskcalc-note" aria-live="polite">按 数量=最大亏损÷|开仓价-止损价| 反推，保证金=数量×开仓价÷杠杆。</p>
                         </div>
                     </div>
                     <div class="fraction-buttons crypto-margin-fractions">
@@ -830,6 +958,7 @@
 
     <script src="js/marked.min.js"></script>
     <script src="js/indicator_math.js"></script>
+    <script src="js/risk_calc.js"></script>
     <script src="js/drawing_tools.js"></script>
     <script src="js/main_enhanced.js"></script>
 </body>

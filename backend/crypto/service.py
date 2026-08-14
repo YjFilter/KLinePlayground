@@ -7,7 +7,7 @@ from decimal import Decimal
 import pandas as pd
 
 from .cache import CANDLE_COLUMNS, CryptoMonthlyCache
-from .models import CryptoBar, CryptoInstrument, FundingEvent, utc_datetime
+from .models import BASE_INTERVAL_MINUTES, CryptoBar, CryptoInstrument, FundingEvent, utc_datetime
 from .validator import validate_crypto_frame
 
 class CryptoDataUnavailable(RuntimeError):
@@ -83,16 +83,17 @@ class CryptoDataService:
                 frame = self.cache.load(candidate.name, symbol, "trade", start, end, numeric="float")
                 missing = self._missing_ranges(frame, start, end)
                 for range_start, range_end in missing:
-                    incoming = self._bars_frame(candidate.fetch_trade_bars(symbol, range_start, range_end))
-                    validation = validate_crypto_frame(incoming, kind="trade")
-                    if not validation.is_valid:
-                        codes = ", ".join(sorted({issue.code for issue in validation.issues}))
-                        raise CryptoDataUnavailable(f"{candidate.name} invalid trade data: {codes}")
-                    if not incoming.empty:
-                        self.cache.save(candidate.name, symbol, "trade", incoming)
+                    for chunk_start, chunk_end in self._natural_month_chunks(range_start, range_end):
+                        incoming = self._bars_frame(candidate.fetch_trade_bars(symbol, chunk_start, chunk_end))
+                        validation = validate_crypto_frame(incoming, kind="trade")
+                        if not validation.is_valid:
+                            codes = ", ".join(sorted({issue.code for issue in validation.issues}))
+                            raise CryptoDataUnavailable(f"{candidate.name} invalid trade data: {codes}")
+                        if not incoming.empty:
+                            self.cache.save(candidate.name, symbol, "trade", incoming)
                 if missing:
                     frame = self.cache.load(candidate.name, symbol, "trade", start, end, numeric="float")
-                expected = pd.date_range(start=start, end=end, freq="5min", tz="UTC")
+                expected = pd.date_range(start=start, end=end, freq=f"{BASE_INTERVAL_MINUTES}min", tz="UTC")
                 actual = pd.DatetimeIndex(frame["timestamp"]) if not frame.empty else pd.DatetimeIndex([])
                 if not actual.equals(expected):
                     raise CryptoDataUnavailable(f"{candidate.name} lacks complete trade coverage for {symbol}")
@@ -120,10 +121,10 @@ class CryptoDataService:
         if start > end:
             raise ValueError("crypto data start must not be after end")
         if any(
-            value.minute % 5 or value.second or value.microsecond
+            value.minute % BASE_INTERVAL_MINUTES or value.second or value.microsecond
             for value in (start, end)
         ):
-            raise ValueError("crypto chart preparation requires aligned 5-minute boundaries")
+            raise ValueError(f"crypto chart preparation requires aligned {BASE_INTERVAL_MINUTES}-minute boundaries")
 
         chunks = self._natural_month_chunks(start, end)
         frames = []
@@ -185,11 +186,11 @@ class CryptoDataService:
             .sort_values("timestamp")
             .reset_index(drop=True)
         )
-        expected = pd.date_range(start=start, end=end, freq="5min", tz="UTC")
+        expected = pd.date_range(start=start, end=end, freq=f"{BASE_INTERVAL_MINUTES}min", tz="UTC")
         actual = pd.DatetimeIndex(combined["timestamp"])
         if not actual.equals(expected):
             raise CryptoDataUnavailable(
-                f"{resolved_source} lacks continuous 5-minute chart coverage for "
+                f"{resolved_source} lacks continuous {BASE_INTERVAL_MINUTES}-minute chart coverage for "
                 f"{symbol} {start.isoformat()}..{end.isoformat()}"
             )
         actual_sources = set(combined["source"].dropna())
@@ -224,9 +225,9 @@ class CryptoDataService:
                     second=0,
                     microsecond=0,
                 )
-            chunk_end = min(end, next_month - timedelta(minutes=5))
+            chunk_end = min(end, next_month - timedelta(minutes=BASE_INTERVAL_MINUTES))
             chunks.append((cursor, chunk_end))
-            cursor = chunk_end + timedelta(minutes=5)
+            cursor = chunk_end + timedelta(minutes=BASE_INTERVAL_MINUTES)
         return chunks
 
     def _has_complete_cache(self, source, symbol, start, end):
@@ -258,7 +259,7 @@ class CryptoDataService:
             elif gap_start is not None:
                 missing.append((gap_start, previous))
                 gap_start = None
-            cursor += timedelta(minutes=5)
+            cursor += timedelta(minutes=BASE_INTERVAL_MINUTES)
         if gap_start is not None:
             missing.append((gap_start, previous))
         return missing
@@ -280,16 +281,17 @@ class CryptoDataService:
             raise CryptoDataUnavailable(f"{symbol} is not listed by {source.name}")
         for kind, fetcher in (("trade", source.fetch_trade_bars), ("mark", source.fetch_mark_bars)):
             for range_start, range_end in self.cache.missing_ranges(source.name, symbol, kind, start, end):
-                incoming = self._bars_frame(fetcher(symbol, range_start, range_end))
-                validation = validate_crypto_frame(incoming, kind=kind)
-                if not validation.is_valid:
-                    codes = ", ".join(sorted({issue.code for issue in validation.issues}))
-                    raise CryptoDataUnavailable(f"{source.name} invalid {kind} data: {codes}")
-                if not incoming.empty:
-                    self.cache.save(source.name, symbol, kind, incoming)
+                for chunk_start, chunk_end in self._natural_month_chunks(range_start, range_end):
+                    incoming = self._bars_frame(fetcher(symbol, chunk_start, chunk_end))
+                    validation = validate_crypto_frame(incoming, kind=kind)
+                    if not validation.is_valid:
+                        codes = ", ".join(sorted({issue.code for issue in validation.issues}))
+                        raise CryptoDataUnavailable(f"{source.name} invalid {kind} data: {codes}")
+                    if not incoming.empty:
+                        self.cache.save(source.name, symbol, kind, incoming)
         trade = self.cache.load(source.name, symbol, "trade", start, end)
         mark = self.cache.load(source.name, symbol, "mark", start, end)
-        expected = pd.date_range(start=start, end=end, freq="5min", tz="UTC")
+        expected = pd.date_range(start=start, end=end, freq=f"{BASE_INTERVAL_MINUTES}min", tz="UTC")
         trade_index = pd.DatetimeIndex(trade["timestamp"]) if not trade.empty else pd.DatetimeIndex([])
         mark_index = pd.DatetimeIndex(mark["timestamp"]) if not mark.empty else pd.DatetimeIndex([])
         if not trade_index.equals(expected) or not mark_index.equals(expected) or not trade_index.equals(mark_index):

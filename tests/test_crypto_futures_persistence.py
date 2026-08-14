@@ -101,7 +101,7 @@ class CryptoFuturesPersistenceTests(unittest.TestCase):
         simulator = FuturesSimulator(initial_balance="1000", quantity_step="0.001", min_quantity="0.001", min_notional="5")
         orders = FuturesOrderBook(simulator)
         engine = FuturesEngine(simulator, orders)
-        executor = FuturesReplayExecutor(clock=CryptoReplayClock(trade["timestamp"], active_period="5m"), trade_bars=trade, mark_bars=mark, engine=engine, funding_events=funding, symbol="BTCUSDT", source="binance")
+        executor = FuturesReplayExecutor(clock=CryptoReplayClock(trade["timestamp"], active_period="5m", base_step_minutes=5), trade_bars=trade, mark_bars=mark, engine=engine, funding_events=funding, symbol="BTCUSDT", source="binance")
         executor.submit_order(action="open_long", order_type="market", margin="100", leverage=5)
         pending = executor.submit_order(action="open_long", order_type="limit", margin="50", leverage=5, limit_price="90")
         executor.advance()

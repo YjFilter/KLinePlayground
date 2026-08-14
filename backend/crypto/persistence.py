@@ -154,6 +154,26 @@ class CryptoFuturesRepository:
         selected.setdefault("snapshot_id", selected.get("timestamp"))
         self._record("crypto_equity_snapshots", session_id, selected)
 
+    def record_orders(self, session_id: str, payloads: Iterable[dict[str, Any]]) -> None:
+        self._record_many("crypto_futures_orders", session_id, payloads)
+
+    def record_fills(self, session_id: str, payloads: Iterable[dict[str, Any]]) -> None:
+        self._record_many("crypto_futures_fills", session_id, payloads)
+
+    def record_funding_events(self, session_id: str, payloads: Iterable[dict[str, Any]]) -> None:
+        self._record_many("crypto_funding_events", session_id, payloads)
+
+    def record_liquidations(self, session_id: str, payloads: Iterable[dict[str, Any]]) -> None:
+        self._record_many("crypto_liquidation_events", session_id, payloads)
+
+    def record_equities(self, session_id: str, payloads: Iterable[dict[str, Any]]) -> None:
+        normalized = []
+        for payload in payloads:
+            item = dict(payload)
+            item.setdefault("snapshot_id", item.get("timestamp"))
+            normalized.append(item)
+        self._record_many("crypto_equity_snapshots", session_id, normalized)
+
     def _record(self, table: str, session_id: str, payload: dict[str, Any]) -> None:
         identifier, timestamp_column = EVENT_TABLES[table]
         if identifier not in payload:
@@ -169,6 +189,29 @@ class CryptoFuturesRepository:
                     {timestamp_column}=excluded.{timestamp_column}, payload=excluded.payload
                 """,
                 (session_id, str(payload[identifier]), payload.get(timestamp_column), encoded),
+            )
+            connection.commit()
+
+    def _record_many(self, table: str, session_id: str, payloads: Iterable[dict[str, Any]]) -> None:
+        rows = []
+        identifier, timestamp_column = EVENT_TABLES[table]
+        for payload in payloads:
+            if identifier not in payload:
+                raise ValueError(f"{identifier} is required")
+            encoded_payload = _encode_event_payload(table, payload)
+            encoded = json.dumps(encoded_payload, ensure_ascii=False, sort_keys=True, default=_json_default)
+            rows.append((session_id, str(payload[identifier]), payload.get(timestamp_column), encoded))
+        if not rows:
+            return
+        with _connection(self.target) as (connection, _owned):
+            connection.executemany(
+                f"""
+                INSERT INTO {table}(session_id, {identifier}, {timestamp_column}, payload)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(session_id, {identifier}) DO UPDATE SET
+                    {timestamp_column}=excluded.{timestamp_column}, payload=excluded.payload
+                """,
+                rows,
             )
             connection.commit()
 
@@ -255,6 +298,7 @@ def build_crypto_futures_report(
     funding_events: Iterable[dict[str, Any]] = (),
     liquidation_events: Iterable[dict[str, Any]] = (),
     equity_snapshots: Iterable[dict[str, Any]] = (),
+    max_drawdown_percent=None,
     leverage: int = 5,
     source: str = "",
     symbol: str = "",
@@ -281,7 +325,10 @@ def build_crypto_futures_report(
     wins = sum(1 for fill in closed_fills if decimal_value(fill.get("realized_pnl", ZERO)) > ZERO)
     win_rate = Decimal(wins) / Decimal(len(closed_fills)) * Decimal("100") if closed_fills else ZERO
     total_return = (final - initial) / initial * Decimal("100") if initial else ZERO
-    drawdown = _maximum_drawdown([decimal_value(item["equity"]) for item in snapshots])
+    if max_drawdown_percent is not None:
+        drawdown = decimal_value(max_drawdown_percent)
+    else:
+        drawdown = _maximum_drawdown([decimal_value(item["equity"]) for item in snapshots])
     return {
         "initial_equity": float(initial),
         "final_equity": float(final),

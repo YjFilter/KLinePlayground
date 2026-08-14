@@ -140,14 +140,14 @@ class CryptoFuturesAPITests(unittest.TestCase):
         response = self.client.get(f"/api/training/{self.training_id}/account")
         self.assertEqual(response.status_code, 200, response.get_json())
         constraints = response.get_json()["order_constraints"]
-        self.assertEqual(constraints["maker_fee_rate"], 0.0002)
-        self.assertEqual(constraints["taker_fee_rate"], 0.0005)
+        self.assertEqual(constraints["maker_fee_rate"], 0.0)
+        self.assertEqual(constraints["taker_fee_rate"], 0.0)
         self.assertEqual(constraints["leverage"], 5)
         self.assertEqual(constraints["quantity_step"], 0.001)
         self.assertEqual(constraints["min_quantity"], 0.001)
         self.assertEqual(constraints["min_notional"], 5.0)
         self.assertGreater(constraints["current_price"], 0)
-        self.assertLess(constraints["max_market_margin"], 10000)
+        self.assertLessEqual(constraints["max_market_margin"], 10000)
         self.assertLessEqual(constraints["max_limit_margin"], 10000)
 
         order = self.client.post(
@@ -329,9 +329,10 @@ class CryptoFuturesAPITests(unittest.TestCase):
         self.assertIn("空仓", response.get_json()["error"])
 
     def test_unaffordable_crypto_order_returns_localized_400_error(self):
+        # 手续费默认 0：margin=10000 恰好等于可用余额可成交，超过（10001）才会被拒
         response = self.client.post(
             f"/api/training/{self.training_id}/trade",
-            json={"action": "open_long", "order_type": "market", "margin": 10000, "leverage": 5},
+            json={"action": "open_long", "order_type": "market", "margin": 10001, "leverage": 5},
         )
         self.assertEqual(response.status_code, 400, response.get_json())
         self.assertEqual(response.get_json()["code"], "insufficient_margin")

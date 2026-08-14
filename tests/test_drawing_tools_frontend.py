@@ -284,6 +284,7 @@ class PrimitiveRenderingRuntimeTests(unittest.TestCase):
           ['rectangle', [{{time: 20, price: 20}}, {{time: 100, price: 80}}]],
           ['text', [{{time: 30, price: 30}}]],
           ['fibonacci', [{{time: 20, price: 20}}, {{time: 120, price: 100}}]],
+          ['fib-trend-time', [{{time: 20, price: 30}}, {{time: 120, price: 90}}]],
           ['ruler', [{{time: 40, price: 30}}, {{time: 140, price: 90}}]],
           ['long', [{{time: 60, price: 100}}, {{time: 140, price: 80}}, {{time: 140, price: 140}}]],
           ['short', [{{time: 60, price: 100}}, {{time: 140, price: 120}}, {{time: 140, price: 60}}]],
@@ -1293,6 +1294,417 @@ class DrawingControllerRuntimeTests(unittest.TestCase):
         assert.deepEqual(store.get('risk').anchors, [
           {{time: 10, price: 100}}, {{time: 20, price: 95}}, {{time: 20, price: 115}}
         ]);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
+class PriceAxisLabelRuntimeTests(unittest.TestCase):
+    def test_axis_label_prices_mapping_covers_every_tool_type(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const anchors2 = [{{price: 1}}, {{price: 2}}];
+        const anchors3 = [{{price: 1}}, {{price: 2}}, {{price: 3}}];
+        assert.deepEqual(drawing.axisLabelPrices({{type: 'horizontal', anchors: [{{price: 1.5}}]}}), [1.5]);
+        for (const type of ['trend', 'ray', 'rectangle', 'ruler']) {{
+          assert.deepEqual(drawing.axisLabelPrices({{type, anchors: anchors2}}), [1, 2], type);
+        }}
+        for (const type of ['long', 'short', 'risk-reward']) {{
+          assert.deepEqual(drawing.axisLabelPrices({{type, anchors: anchors3}}), [1, 2, 3], type);
+        }}
+        assert.deepEqual(drawing.axisLabelPrices({{type: 'fibonacci', anchors: anchors2}}), []);
+        assert.deepEqual(drawing.axisLabelPrices({{type: 'text', anchors: [{{price: 1}}]}}), []);
+        assert.deepEqual(drawing.axisLabelPrices(null), []);
+        assert.deepEqual(drawing.axisLabelPrices({{type: 'trend'}}), []);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_price_axis_views_follow_selection_hover_and_hidden_state(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const model = drawing.createTrendModel([
+          {{time: 10, price: 100.5}}, {{time: 20, price: 102.25}}
+        ], {{id: 'axis'}});
+        const primitive = new drawing.DrawingPrimitive(model);
+        primitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{
+            priceToCoordinate: price => 500 - price * 2,
+            options: () => ({{priceFormat: {{precision: 2}}}}),
+          }},
+          requestUpdate() {{}},
+        }});
+        const views = primitive.priceAxisViews();
+        assert.equal(views.length, 3);
+        assert.equal(primitive.priceAxisViews(), views);
+        assert.deepEqual(views.map(view => view.visible()), [false, false, false]);
+
+        primitive.setModel({{...model, selected: true}});
+        assert.deepEqual(views.map(view => view.visible()), [true, true, false]);
+        assert.equal(views[0].coordinate(), 299);
+        assert.equal(views[1].coordinate(), 295.5);
+        assert.equal(views[0].text(), '100.50');
+        assert.equal(views[1].text(), '102.25');
+        assert.equal(views[0].fixedCoordinate(), null);
+        assert.equal(views[0].tickVisible(), true);
+
+        primitive.setAxisLabelColors(() => ({{background: '#111111', text: '#222222'}}));
+        assert.equal(views[0].backColor(), '#111111');
+        assert.equal(views[0].textColor(), '#222222');
+
+        primitive.setModel({{...model, selected: true, hidden: true}});
+        assert.deepEqual(views.map(view => view.visible()), [false, false, false]);
+        assert.equal(views[0].text(), '');
+        assert.equal(views[0].backColor(), 'rgba(0, 0, 0, 0)');
+
+        primitive.setModel({{...model, hovered: true}});
+        assert.equal(views[0].visible(), true);
+
+        const fib = drawing.createFibonacciModel(
+          [{{time: 1, price: 10}}, {{time: 2, price: 20}}], {{selected: true}}
+        );
+        const fibPrimitive = new drawing.DrawingPrimitive(fib);
+        fibPrimitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{priceToCoordinate: price => price}},
+          requestUpdate() {{}},
+        }});
+        assert.deepEqual(
+          fibPrimitive.priceAxisViews().map(view => view.visible()),
+          [false, false, false]
+        );
+
+        const risk = drawing.createDrawingModel('long', [
+          {{time: 1, price: 100}}, {{time: 2, price: 90}}, {{time: 2, price: 115}}
+        ], {{selected: true}});
+        const riskPrimitive = new drawing.DrawingPrimitive(risk);
+        riskPrimitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{priceToCoordinate: price => price}},
+          requestUpdate() {{}},
+        }});
+        assert.deepEqual(
+          riskPrimitive.priceAxisViews().map(view => view.visible()),
+          [true, true, true]
+        );
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_duplicate_anchor_prices_render_single_axis_label(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const model = drawing.createTrendModel([
+          {{time: 1, price: 50}}, {{time: 2, price: 50}}
+        ], {{selected: true}});
+        const primitive = new drawing.DrawingPrimitive(model);
+        primitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{priceToCoordinate: price => price}},
+          requestUpdate() {{}},
+        }});
+        const views = primitive.priceAxisViews();
+        assert.equal(views[0].visible(), true);
+        assert.equal(views[1].visible(), false);
+        assert.equal(views[0].text(), '50');
+
+        const operations = [];
+        const context = new Proxy({{measureText: text => ({{width: text.length * 6}})}}, {{
+          get(target, key) {{
+            if (key in target) return target[key];
+            return (...args) => operations.push([key, ...args]);
+          }},
+          set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
+        }});
+        const rectangle = drawing.createRectangleModel(
+          [{{time: 0, price: 10}}, {{time: 50, price: 30}}], {{selected: true}}
+        );
+        const rectPrimitive = new drawing.DrawingPrimitive(rectangle);
+        rectPrimitive.setDefaultStrokeColor(() => 'rgba(234, 236, 239, 0.92)');
+        rectPrimitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{priceToCoordinate: price => price}},
+          requestUpdate() {{}},
+        }});
+        rectPrimitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
+          callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
+            bitmapSize: {{width: 200, height: 200}}, mediaSize: {{width: 200, height: 200}}}});
+        }}}});
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'strokeStyle'
+          && op[2] === 'rgba(234, 236, 239, 0.92)'));
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'fillStyle'
+          && op[2] === 'rgba(234, 236, 239, 0.16)'));
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_controller_propagates_theme_providers_to_primitives_and_drafts(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event = {{}}) {{ this.listeners.get(type)?.({{pointerId: 3, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{
+          priceToCoordinate: v => v, coordinateToPrice: v => v,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }},
+          detachPrimitive() {{}},
+        }};
+        const store = new drawing.DrawingStore([
+          drawing.createTrendModel([{{time: 10, price: 20}}, {{time: 30, price: 40}}], {{id: 'line'}})
+        ]);
+        const controller = new drawing.DrawingController({{
+          chart, series, element, keyTarget: new Target(), store,
+          axisLabelColors: () => ({{background: '#010203', text: '#040506'}}),
+          defaultDrawingColor: () => '#fefefe',
+        }});
+        controller.select('line');
+        const primitive = controller._primitives.get('line');
+        const views = primitive.priceAxisViews();
+        assert.deepEqual(views.map(view => view.visible()), [true, true, false]);
+        assert.equal(views[0].backColor(), '#010203');
+        assert.equal(views[0].textColor(), '#040506');
+        assert.equal(views[0].coordinate(), 20);
+        assert.equal(views[1].coordinate(), 40);
+
+        const operations = [];
+        const context = new Proxy({{measureText: text => ({{width: text.length * 6}})}}, {{
+          get(target, key) {{
+            if (key in target) return target[key];
+            return (...args) => operations.push([key, ...args]);
+          }},
+          set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
+        }});
+        primitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
+          callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
+            bitmapSize: {{width: 200, height: 200}}, mediaSize: {{width: 200, height: 200}}}});
+        }}}});
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'strokeStyle'
+          && op[2] === '#fefefe'));
+
+        controller.activateTool('trend');
+        element.dispatch('pointerdown', {{clientX: 15, clientY: 25}});
+        assert.ok(controller._draftPrimitive);
+        assert.equal(controller._draftPrimitive.defaultStrokeColor(), '#fefefe');
+        const draftViews = controller._draftPrimitive.priceAxisViews();
+        assert.equal(draftViews[0].backColor(), '#010203');
+        assert.equal(draftViews[0].visible(), true);
+        element.dispatch('pointerup', {{clientX: 15, clientY: 25}});
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
+class FibTrendTimeRuntimeTests(unittest.TestCase):
+    def test_fib_trend_time_defaults_model_and_serialization(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        assert.deepEqual(
+          drawing.DEFAULT_FIB_TREND_TIME_LEVELS.map(level => level.value),
+          [0, 0.382, 0.618, 1, 1.382, 1.618, 2, 2.382, 2.618, 3]
+        );
+        assert.deepEqual(
+          drawing.DEFAULT_FIB_TREND_TIME_LEVELS.map(level => level.label),
+          ['0', '0.382', '0.618', '1', '1.382', '1.618', '2', '2.382', '2.618', '3']
+        );
+        assert.ok(drawing.DEFAULT_FIB_TREND_TIME_LEVELS.every(
+          level => /^#[0-9a-f]{{6}}$/i.test(level.color) && level.enabled
+        ));
+        const settings = drawing.defaultFibTrendTimeSettings();
+        assert.equal(settings.lineStyle, 'dashed');
+        assert.equal(settings.levels.length, 10);
+        const model = drawing.createDrawingModel('fib-trend-time', [
+          {{time: 1, price: 100}}, {{time: 2, price: 90}}
+        ], {{id: 'ft'}});
+        assert.equal(model.type, 'fib-trend-time');
+        assert.equal(model.options.levels.length, 10);
+        assert.equal(model.options.lineStyle, 'dashed');
+        const serialized = drawing.serializeDrawing(model);
+        assert.equal(serialized.type, 'fib-trend-time');
+        assert.equal(serialized.options.levels.length, 10);
+        const levels = drawing.calculateFibonacciLevels(100, 90, model.options);
+        assert.equal(levels.find(level => level.value === 0).price, 100);
+        assert.equal(levels.find(level => level.value === 1).price, 90);
+        assert.equal(levels.find(level => level.value === 2).price, 80);
+        assert.equal(levels.find(level => level.value === 3).price, 70);
+        const reversed = drawing.calculateFibonacciLevels(100, 90, {{...model.options, reverse: true}});
+        assert.equal(reversed.find(level => level.value === 0).price, 90);
+        assert.equal(reversed.find(level => level.value === 1).price, 100);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fib_trend_time_renderer_draws_vertical_time_lines(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const operations = [];
+        const context = new Proxy({{measureText: text => ({{width: text.length * 6}})}}, {{
+          get(target, key) {{
+            if (key in target) return target[key];
+            return (...args) => operations.push([key, ...args]);
+          }},
+          set(target, key, value) {{ operations.push(['set', key, value]); target[key] = value; return true; }}
+        }});
+        const model = drawing.createFibTrendTimeModel([
+          {{time: 10, price: 100}}, {{time: 20, price: 90}}
+        ], {{id: 'ft', selected: true}});
+        const primitive = new drawing.DrawingPrimitive(model);
+        primitive.attached({{
+          chart: {{timeScale: () => ({{timeToCoordinate: value => value}})}},
+          series: {{priceToCoordinate: price => 300 - price}},
+          requestUpdate() {{}},
+        }});
+        primitive.paneViews()[0].renderer().draw({{useBitmapCoordinateSpace(callback) {{
+          callback({{context, horizontalPixelRatio: 1, verticalPixelRatio: 1,
+            bitmapSize: {{width: 200, height: 300}}, mediaSize: {{width: 200, height: 300}}}});
+        }}}});
+        assert.ok(operations.some(op => op[0] === 'setLineDash'));
+        // 垂直线使用各档位颜色
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'strokeStyle' && op[2] === '#9e9e9e'));
+        assert.ok(operations.some(op => op[0] === 'set' && op[1] === 'strokeStyle' && op[2] === '#ff9800'));
+        // 0 线对齐 B 锚点（x=20），1 线 → x=20+1*10=30，档位 3 → x=20+3*10=50，
+        // 垂直贯穿整个高度 300；全部向 B 右侧（未来）扩展
+        assert.ok(operations.some(op => op[0] === 'lineTo' && op[1] === 20 && op[2] === 300));
+        assert.ok(operations.some(op => op[0] === 'lineTo' && op[1] === 30 && op[2] === 300));
+        assert.ok(operations.some(op => op[0] === 'lineTo' && op[1] === 50 && op[2] === 300));
+        // 顶部倍数标签
+        assert.ok(operations.some(op => op[0] === 'fillText' && String(op[1]).includes('0.382')));
+        assert.ok(operations.some(op => op[0] === 'fillText' && String(op[1]).includes('2.618')));
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fib_trend_time_has_no_price_axis_views(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const chart = {{timeScale: () => ({{timeToCoordinate: value => value}})}};
+        const series = {{priceToCoordinate: price => 300 - price}};
+        const model = drawing.createFibTrendTimeModel([
+          {{time: 10, price: 100}}, {{time: 20, price: 90}}
+        ], {{id: 'ft', selected: true}});
+        const primitive = new drawing.DrawingPrimitive(model);
+        primitive.attached({{chart, series, requestUpdate() {{}}}});
+        // 垂直时间线的倍数标签绘制在 chart 顶部/底部，不占用价格轴
+        const views = primitive.priceAxisViews();
+        assert.equal(views.length, 0);
+        primitive.setModel({{...model, selected: true, options: {{
+          ...model.options,
+          levels: model.options.levels.map(level => (
+            level.value === 3 ? {{...level, enabled: false}} : level
+          )),
+        }}}});
+        assert.equal(primitive.priceAxisViews().length, 0);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fib_trend_time_controller_creation_and_settings_workflow(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event = {{}}) {{ this.listeners.get(type)?.({{pointerId: 11, preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{
+          priceToCoordinate: v => 200 - v, coordinateToPrice: v => 200 - v,
+          attachPrimitive(primitive) {{ primitive.attached({{chart, series, requestUpdate() {{}}}}); }},
+          detachPrimitive() {{}},
+        }};
+        const controller = new drawing.DrawingController({{chart, series, element, keyTarget: new Target()}});
+        controller.activateTool('fib-trend-time');
+        element.dispatch('pointerdown', {{clientX: 10, clientY: 100}});
+        element.dispatch('pointermove', {{clientX: 60, clientY: 110}});
+        element.dispatch('pointerup', {{clientX: 60, clientY: 110}});
+        assert.equal(controller.store.size, 1);
+        const model = controller.store.snapshot()[0];
+        assert.equal(model.type, 'fib-trend-time');
+        assert.deepEqual(model.anchors, [{{time: 10, price: 100}}, {{time: 60, price: 90}}]);
+        assert.equal(controller.activeTool, null);
+
+        controller.select(model.id);
+        const settings = controller.getFibonacciSettings();
+        assert.equal(settings.levels.length, 10);
+        assert.equal(settings.lineStyle, 'dashed');
+
+        controller.updateFibonacciSettings({{reverse: true}});
+        assert.equal(controller.store.get(model.id).options.reverse, true);
+
+        controller.setFibonacciLevelEnabled(2.382, false);
+        const disabled = controller.store.get(model.id).options.levels
+          .find(level => level.value === 2.382);
+        assert.equal(disabled.enabled, false);
+        const primitive = controller._primitives.get(model.id);
+        assert.equal(primitive.priceAxisViews().length, 0);
+
+        controller.resetFibonacciSettings();
+        const resetModel = controller.store.get(model.id);
+        assert.equal(resetModel.options.levels.length, 10);
+        assert.ok(resetModel.options.levels.every(level => level.enabled));
+        assert.equal(resetModel.options.reverse, false);
+
+        controller.addFibonacciLevel({{value: 3.618, color: '#ffffff', enabled: true}});
+        const added = controller.store.get(model.id).options.levels;
+        assert.equal(added.length, 11);
+        assert.equal(added[10].label, '3.618');
+        assert.ok(Array.isArray(controller.getSelectedLineSettings().levels));
+
+        // 普通斐波那契回撤不受趋势时间默认档位影响
+        controller.store.add(drawing.createFibonacciModel(
+          [{{time: 1, price: 10}}, {{time: 2, price: 20}}], {{id: 'fib'}}
+        ));
+        controller.refresh();
+        controller.select('fib');
+        const fibSettings = controller.getFibonacciSettings();
+        assert.ok(fibSettings.levels.some(level => level.value === 0.236));
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_fib_trend_time_hit_test_matches_vertical_time_lines(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        const chart = {{timeScale: () => ({{timeToCoordinate: time => time}})}};
+        const series = {{priceToCoordinate: price => 300 - price}};
+        const model = drawing.createFibTrendTimeModel([
+          {{time: 10, price: 100}}, {{time: 20, price: 90}}
+        ], {{id: 'ft', selected: true}});
+        const primitive = new drawing.DrawingPrimitive(model);
+        primitive.attached({{chart, series, requestUpdate() {{}}}});
+        // 0 线对齐 B（x=20），1 线 → x=30；档位 2 → x=40；档位 3 → x=50
+        const directHit = primitive.hitTest(40, 200);
+        assert.equal(directHit.drawingId, 'ft');
+        assert.equal(directHit.hitKind, 'body');
+        assert.equal(directHit.distance, 0);
+        // 档位 3 的线在 x=50，点 x=49 距离 1 命中
+        const nearHit = primitive.hitTest(49, 200);
+        assert.equal(nearHit.drawingId, 'ft');
+        assert.equal(nearHit.distance, 1);
+        // 远离所有时间线（x=100）不命中
+        assert.equal(primitive.hitTest(100, 200), null);
         """
         completed = run_node(script)
         self.assertEqual(completed.returncode, 0, completed.stderr)

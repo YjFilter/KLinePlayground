@@ -27,8 +27,8 @@ def frame(times):
 class CryptoValidationTests(unittest.TestCase):
     def test_reports_required_columns_alignment_order_duplicates_and_ohlc(self):
         invalid = pd.DataFrame([
-            {"timestamp": datetime(2024, 1, 1, 0, 7, tzinfo=UTC), "open": 10, "high": 8, "low": 11, "close": float("nan"), "volume": -1},
-            {"timestamp": datetime(2024, 1, 1, 0, 7, tzinfo=UTC), "open": 10, "high": 12, "low": 9, "close": 11, "volume": 1},
+            {"timestamp": datetime(2024, 1, 1, 0, 0, 30, tzinfo=UTC), "open": 10, "high": 8, "low": 11, "close": float("nan"), "volume": -1},
+            {"timestamp": datetime(2024, 1, 1, 0, 0, 30, tzinfo=UTC), "open": 10, "high": 12, "low": 9, "close": 11, "volume": 1},
         ])
         codes = {issue.code for issue in validate_crypto_frame(invalid, kind="trade").issues}
         self.assertTrue({"missing_columns", "misaligned_timestamp", "duplicate_timestamp", "invalid_ohlc", "non_finite", "negative_volume"} <= codes)
@@ -89,31 +89,55 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
         self.assertEqual(scan_paths.call_count, 1)
 
     def test_save_segments_months_compresses_and_writes_metadata(self):
-        data = frame([datetime(2024, 1, 31, 23, 55, tzinfo=UTC), datetime(2024, 2, 1, 0, 0, tzinfo=UTC)])
+        data = frame([datetime(2024, 1, 31, 23, 59, tzinfo=UTC), datetime(2024, 2, 1, 0, 0, tzinfo=UTC)])
         self.cache.save("binance", "BTCUSDT", "trade", data)
-        january = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade" / "2024-01.csv.gz"
+        january = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade" / "1m" / "2024-01.csv.gz"
         february = january.with_name("2024-02.csv.gz")
         self.assertTrue(january.exists() and february.exists())
         with gzip.open(january, "rt", encoding="utf-8") as handle:
-            self.assertIn("2024-01-31T23:55:00+00:00", handle.read())
+            self.assertIn("2024-01-31T23:59:00+00:00", handle.read())
         metadata = json.loads(january.with_name("2024-01.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["source"], "binance")
+        self.assertEqual(metadata["interval"], "1m")
         self.assertEqual(metadata["rows"], 1)
         self.assertFalse(list(january.parent.glob("*.tmp")))
 
     def test_merge_load_coverage_source_isolation_and_missing_ranges(self):
-        first = frame([datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 1, 1, 0, 5, tzinfo=UTC)])
-        newer = frame([datetime(2024, 1, 1, 0, 5, tzinfo=UTC), datetime(2024, 1, 1, 0, 10, tzinfo=UTC)])
+        first = frame([datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 1, 1, 0, 1, tzinfo=UTC)])
+        newer = frame([datetime(2024, 1, 1, 0, 1, tzinfo=UTC), datetime(2024, 1, 1, 0, 2, tzinfo=UTC)])
         newer.loc[0, "close"] = Decimal("11.5")
         self.cache.save("binance", "BTCUSDT", "trade", first)
         self.cache.save("binance", "BTCUSDT", "trade", newer)
         loaded = self.cache.load("binance", "BTCUSDT", "trade")
         self.assertEqual(len(loaded), 3)
         self.assertEqual(loaded.iloc[1]["close"], Decimal("11.5"))
-        self.assertTrue(self.cache.coverage("binance", "BTCUSDT", "trade").covers(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 1, 1, 0, 10, tzinfo=UTC)))
+        self.assertTrue(self.cache.coverage("binance", "BTCUSDT", "trade").covers(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 1, 1, 0, 2, tzinfo=UTC)))
         self.assertTrue(self.cache.load("bybit", "BTCUSDT", "trade").empty)
-        gaps = self.cache.missing_ranges("binance", "BTCUSDT", "trade", datetime(2023, 12, 31, 23, 55, tzinfo=UTC), datetime(2024, 1, 1, 0, 15, tzinfo=UTC))
-        self.assertEqual(gaps, [(datetime(2023, 12, 31, 23, 55, tzinfo=UTC), datetime(2023, 12, 31, 23, 55, tzinfo=UTC)), (datetime(2024, 1, 1, 0, 15, tzinfo=UTC), datetime(2024, 1, 1, 0, 15, tzinfo=UTC))])
+        gaps = self.cache.missing_ranges("binance", "BTCUSDT", "trade", datetime(2023, 12, 31, 23, 59, tzinfo=UTC), datetime(2024, 1, 1, 0, 3, tzinfo=UTC))
+        self.assertEqual(gaps, [(datetime(2023, 12, 31, 23, 59, tzinfo=UTC), datetime(2023, 12, 31, 23, 59, tzinfo=UTC)), (datetime(2024, 1, 1, 0, 3, tzinfo=UTC), datetime(2024, 1, 1, 0, 3, tzinfo=UTC))])
+
+    def test_reads_legacy_five_minute_directory_as_read_only_fallback(self):
+        # 旧 5m 缓存目录（无 interval 层）在新 1m 目录为空时应可读（旧会话恢复）
+        legacy_data = frame([datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 1, 1, 0, 5, tzinfo=UTC)])
+        legacy_dir = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade"
+        legacy_dir.mkdir(parents=True)
+        legacy_path = legacy_dir / "2024-01.csv.gz"
+        with gzip.open(legacy_path, "wt", encoding="utf-8", newline="") as handle:
+            legacy_data.to_csv(handle, index=False)
+        (legacy_dir / "2024-01.json").write_text(json.dumps({
+            "source": "binance", "symbol": "BTCUSDT", "kind": "trade", "interval": "5m",
+            "first_timestamp": "2024-01-01T00:00:00+00:00", "last_timestamp": "2024-01-01T00:05:00+00:00",
+            "rows": 2, "validation": "valid", "synchronized_at": "2024-01-01T00:00:00+00:00",
+        }), encoding="utf-8")
+
+        loaded = self.cache.load("binance", "BTCUSDT", "trade")
+        self.assertEqual(len(loaded), 2)
+        coverage = self.cache.coverage("binance", "BTCUSDT", "trade")
+        self.assertTrue(coverage.covers(datetime(2024, 1, 1, 0, 0, tzinfo=UTC), datetime(2024, 1, 1, 0, 5, tzinfo=UTC)))
+        # 新 1m 目录写入后不再回退旧目录
+        self.cache.save("binance", "BTCUSDT", "trade", frame([datetime(2024, 1, 1, 0, 6, tzinfo=UTC)]))
+        new_path = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade" / "1m" / "2024-01.csv.gz"
+        self.assertTrue(new_path.exists())
 
     def test_chart_load_can_use_float_numeric_columns(self):
         data = frame([datetime(2024, 1, 1, 0, 0, tzinfo=UTC)])
@@ -134,7 +158,7 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
 
     def test_range_load_only_reads_intersecting_month_files(self):
         data = frame([
-            datetime(2024, 1, 31, 23, 55, tzinfo=UTC),
+            datetime(2024, 1, 31, 23, 59, tzinfo=UTC),
             datetime(2024, 2, 1, 0, 0, tzinfo=UTC),
             datetime(2024, 3, 1, 0, 0, tzinfo=UTC),
         ])
@@ -143,14 +167,14 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
             loaded = self.cache.load(
                 "binance", "BTCUSDT", "trade",
                 datetime(2024, 2, 1, 0, 0, tzinfo=UTC),
-                datetime(2024, 2, 29, 23, 55, tzinfo=UTC),
+                datetime(2024, 2, 29, 23, 59, tzinfo=UTC),
             )
         self.assertEqual(len(loaded), 1)
         self.assertEqual(load_path.call_count, 1)
         self.assertEqual(load_path.call_args.args[-1].name, "2024-02.csv.gz")
 
     def test_corrupt_month_raises_actionable_error(self):
-        path = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade" / "2024-01.csv.gz"
+        path = Path(self.temp.name) / "binance" / "BTCUSDT" / "trade" / "1m" / "2024-01.csv.gz"
         path.parent.mkdir(parents=True)
         path.write_bytes(b"not-gzip")
         with self.assertRaisesRegex(CryptoCacheCorruption, "BTCUSDT.*2024-01"):
@@ -163,11 +187,11 @@ class CryptoMonthlyCacheTests(unittest.TestCase):
             FundingEvent("binance", "BTCUSDT", datetime(2024, 2, 1, 0, 0, tzinfo=UTC), Decimal("-0.002"), Decimal("11")),
         ]
         self.cache.save_instrument(instrument)
-        self.cache.save_funding("binance", "BTCUSDT", events, datetime(2024, 1, 31, 0, 0, tzinfo=UTC), datetime(2024, 2, 1, 23, 55, tzinfo=UTC))
+        self.cache.save_funding("binance", "BTCUSDT", events, datetime(2024, 1, 31, 0, 0, tzinfo=UTC), datetime(2024, 2, 1, 23, 59, tzinfo=UTC))
         restarted = CryptoMonthlyCache(Path(self.temp.name))
         self.assertEqual(restarted.load_instrument("binance", "BTCUSDT"), instrument)
         self.assertEqual(restarted.load_funding("binance", "BTCUSDT"), events)
-        self.assertTrue(restarted.funding_covers("binance", "BTCUSDT", datetime(2024, 1, 31, 0, 0, tzinfo=UTC), datetime(2024, 2, 1, 23, 55, tzinfo=UTC)))
+        self.assertTrue(restarted.funding_covers("binance", "BTCUSDT", datetime(2024, 1, 31, 0, 0, tzinfo=UTC), datetime(2024, 2, 1, 23, 59, tzinfo=UTC)))
         self.assertTrue((Path(self.temp.name) / "binance" / "BTCUSDT" / "funding" / "2024-01.csv.gz").exists())
         self.assertTrue((Path(self.temp.name) / "binance" / "BTCUSDT" / "funding" / "2024-02.csv.gz").exists())
 

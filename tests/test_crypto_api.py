@@ -102,7 +102,7 @@ class CryptoAPITests(unittest.TestCase):
         self.assertEqual(app_module.DATA_MODE_CRYPTO_5M, "crypto_5m")
         self.assertEqual(
             app_module.VALID_CRYPTO_PERIODS,
-            ("5m", "15m", "30m", "1h", "4h", "daily", "weekly"),
+            ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "3h", "4h", "6h", "8h", "12h", "daily", "2d", "3d", "weekly"),
         )
 
     def test_crypto_universe_prefers_persisted_instruments_before_network(self):
@@ -296,7 +296,7 @@ class CryptoAPITests(unittest.TestCase):
                 )
         self.assertEqual(attempts, ["BADUSDT", "BTCUSDT"])
         self.assertEqual(selections[0]["start"], datetime(2024, 12, 2, tzinfo=timezone.utc))
-        self.assertEqual(selections[0]["end"], datetime(2025, 1, 1, 23, 55, tzinfo=timezone.utc))
+        self.assertEqual(selections[0]["end"], datetime(2025, 1, 1, 23, 59, tzinfo=timezone.utc))
         self.assertEqual(response.get_json()["symbol"], "BTCUSDT")
         app_module.active_trainings.pop("retry-test", None)
 

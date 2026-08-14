@@ -6,6 +6,7 @@ import sys
 import json
 import base64
 import random
+import traceback
 import requests
 from threading import Lock, Timer
 from datetime import datetime, timedelta, timezone
@@ -91,14 +92,14 @@ VALID_INTRADAY_PERIODS = ("30m", "4h_session", "daily", "weekly")
 MARKET_TYPE_A_SHARE = "a_share"
 MARKET_TYPE_CRYPTO_PERPETUAL = "crypto_perpetual"
 DATA_MODE_CRYPTO_5M = "crypto_5m"
-VALID_CRYPTO_PERIODS = ("5m", "15m", "30m", "1h", "4h", "daily", "weekly")
+VALID_CRYPTO_PERIODS = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "3h", "4h", "6h", "8h", "12h", "daily", "2d", "3d", "weekly")
 CRYPTO_HISTORY_DEFAULT_YEARS = 2
 CRYPTO_HISTORY_MIN_YEARS = 2
 CRYPTO_HISTORY_MAX_YEARS = 5
 CRYPTO_FINE_RENDER_LIMIT = 12000
-CRYPTO_FINE_PERIOD_SECONDS = {"5m": 300, "15m": 900}
-DEFAULT_CRYPTO_MAKER_FEE_RATE = "0.0002"
-DEFAULT_CRYPTO_TAKER_FEE_RATE = "0.0005"
+CRYPTO_FINE_PERIOD_SECONDS = {"1m": 60, "3m": 180, "5m": 300, "15m": 900}
+DEFAULT_CRYPTO_MAKER_FEE_RATE = "0"
+DEFAULT_CRYPTO_TAKER_FEE_RATE = "0"
 MAX_CRYPTO_FEE_RATE = "0.01"
 CRYPTO_REPLAY_CHECKPOINT_DELAY_SECONDS = 0.0 if is_vercel_runtime else 0.75
 # 懒加载的 IntradayDataService 单例；legacy_daily 路径不会触发其创建，
@@ -675,6 +676,9 @@ def _crypto_next(training):
         return jsonify({'error': '下一根 K 线正在推进，请稍候。', 'code': 'advance_in_progress'}), 409
     try:
         delta = training['crypto_session'].advance_delta(max_bars=CRYPTO_PERIOD_SNAPSHOT_BAR_LIMIT)
+        # 训练自然结束时，生成报告（复用 _crypto_end 逻辑）
+        if delta.get('finished'):
+            return _crypto_end(training, training['id'])
         if training.get('_crypto_chart_window_start') is not None and delta.get('current_time'):
             previous_window_end = training.get('_crypto_chart_window_end')
             current_window_end = datetime.fromisoformat(delta['current_time']).replace(tzinfo=timezone.utc)
@@ -683,6 +687,9 @@ def _crypto_next(training):
                 delta['current_time']
             ).replace(tzinfo=timezone.utc)
             training['_crypto_history_end'] = training['_crypto_chart_window_end']
+            # 完全失效窗口缓存：next 推进后 current_time/visible 范围变化，多数 cache_key 失配。
+            # 未来优化：把缓存结构改为 {period: {cache_key: payload}} 后可按周期失效，
+            # 保留其他周期的窗口缓存（提升回放中切换便利性）。
             training.pop('_crypto_period_window_cache', None)
         _schedule_crypto_checkpoint(training)
         payload = _crypto_futures_payload(training, compact=True)
@@ -826,7 +833,7 @@ def _crypto_extended_period_snapshot(
         'current_base_bar': snapshot.get('current_base_bar'),
         'finished': snapshot.get('finished', False),
         'available_periods': snapshot.get('available_periods', list(VALID_CRYPTO_PERIODS)),
-        'base_interval': snapshot.get('base_interval', '5m'),
+        'base_interval': snapshot.get('base_interval', '1m'),
         'market_type': MARKET_TYPE_CRYPTO_PERPETUAL,
         'data_mode': DATA_MODE_CRYPTO_5M,
     })
@@ -1107,6 +1114,7 @@ def _crypto_end(training, training_id):
         funding_events=payload['funding_events'],
         liquidation_events=payload['liquidation_events'],
         equity_snapshots=payload['equity_snapshots'],
+        max_drawdown_percent=training['futures_executor'].engine.max_drawdown_percent(),
         leverage=training.get('leverage', 5),
         source=training['source'],
         symbol=training['symbol'],
@@ -1164,6 +1172,7 @@ def _crypto_end(training, training_id):
     _clear_crypto_chart_window(training)
     training['status'] = 'ended'
     _update_api_info(user=training['user'])
+    report['finished'] = True
     return jsonify(report)
 
 
@@ -1186,16 +1195,21 @@ def _persist_crypto_futures_state(training, training_id, payload):
         source=training['source'],
         simulator_type='isolated_futures',
     )
-    for order in payload.get('orders', []):
-        repository.record_order(training_id, order)
-    for fill in payload.get('fills', []):
-        repository.record_fill(training_id, fill)
-    for event in payload.get('funding_events', []):
-        repository.record_funding(training_id, event)
-    for event in payload.get('liquidation_events', []):
-        repository.record_liquidation(training_id, event)
-    for snapshot in payload.get('equity_snapshots', []):
-        repository.record_equity(training_id, snapshot)
+    orders = list(payload.get('orders', []))
+    fills = list(payload.get('fills', []))
+    funding = list(payload.get('funding_events', []))
+    liquidations = list(payload.get('liquidation_events', []))
+    snapshots = list(payload.get('equity_snapshots', []))
+    if orders:
+        repository.record_orders(training_id, orders)
+    if fills:
+        repository.record_fills(training_id, fills)
+    if funding:
+        repository.record_funding_events(training_id, funding)
+    if liquidations:
+        repository.record_liquidations(training_id, liquidations)
+    if snapshots:
+        repository.record_equities(training_id, snapshots)
 
 
 def _crypto_runtime_state(training, *, status=None):
@@ -1870,6 +1884,12 @@ def prepare_crypto_history():
             return jsonify({'error': 'user is required'}), 400
         payload = dict(payload)
         payload['history_years'] = _parse_crypto_history_years(payload)
+        # 临时诊断日志：打印完整 payload，便于排查"start must not be after end"
+        try:
+            with open('_history_prepare_debug.log', 'a', encoding='utf-8') as debug_handle:
+                debug_handle.write(f"[{datetime.now(timezone.utc).isoformat()}] POST payload={payload}\n")
+        except Exception:
+            pass
         job = _get_crypto_history_prepare_manager().create(user, payload)
         _crypto_history_prepare_users[job['job_id']] = user
         return jsonify(_crypto_history_prepare_payload(job)), 202
@@ -2361,7 +2381,8 @@ def _parse_crypto_timestamp(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
     parsed = parsed.astimezone(timezone.utc)
-    return parsed.replace(minute=(parsed.minute // 5) * 5, second=0, microsecond=0)
+    # 新底座 1m 对齐：保持原分钟（向后兼容 5m 倍数边界）
+    return parsed.replace(second=0, microsecond=0)
 
 
 def _normalize_crypto_symbol(value):
@@ -2408,8 +2429,10 @@ def _crypto_training_days(payload, explicit_days=None):
     if explicit_days is None:
         max_bars = (payload or {}).get('max_bars', 0) or 0
         explicit_days = (payload or {}).get('max_training_days', max_bars) or 0
-    training_days = int(explicit_days or 30)
-    if training_days < 1:
+    training_days = int(explicit_days)
+    if training_days == 0:
+        return None  # 不限制，由可用数据决定训练长度
+    if training_days < 0:
         training_days = 30
     if training_days > 365:
         raise ValueError('crypto training is limited to 365 calendar days per session')
@@ -2421,8 +2444,45 @@ def _crypto_prepare_candidate(
     preferred_source=None, progress_callback=None, cancel_check=None,
 ):
     service = _get_crypto_data_service()
+    prepare_days = training_days if training_days is not None else 365
     context_start = training_start - timedelta(days=30)
-    range_end = training_start + timedelta(days=training_days, minutes=-5)
+    range_end = training_start + timedelta(days=prepare_days, minutes=-1)
+    # 临时诊断日志：打印边界，排查"start must not be after end"
+    try:
+        with open('_history_prepare_debug.log', 'a', encoding='utf-8') as debug_handle:
+            debug_handle.write(
+                f"[{datetime.now(timezone.utc).isoformat()}] candidate symbol={symbol} "
+                f"training_start={training_start} training_days={training_days} "
+                f"prepare_days={prepare_days} context_start={context_start} "
+                f"range_end={range_end} start_after_end={context_start > range_end}\n"
+            )
+    except Exception:
+        pass
+    # 不限制天数时，检查离线缓存覆盖范围，避免尝试下载不存在的数据
+    if training_days is None:
+        try:
+            cache = service.cache
+            for kind in ('trade',):
+                for src in ('binance', 'bybit'):
+                    cov = cache.coverage(src, symbol, kind)
+                    # 仅当缓存覆盖到训练窗口内才裁剪 range_end，
+                    # 否则（缓存早于训练开始日）保留原 range_end，避免 start > end。
+                    if cov and training_start <= cov.end < range_end:
+                        range_end = cov.end
+                        break
+        except Exception:
+            pass
+    # 防护：训练窗口结束时间不得晚于当前时间，否则实时数据源无法提供未来行情，
+    # 只会报出误导性的 "lacks complete aligned trade/mark coverage"。
+    now_utc = datetime.now(timezone.utc)
+    if range_end > now_utc:
+        available_days = max((now_utc - training_start).days, 0)
+        raise ValueError(
+            f'crypto 训练窗口结束于 {range_end.strftime("%Y-%m-%d %H:%M")}（UTC），'
+            f'晚于当前时间 {now_utc.strftime("%Y-%m-%d %H:%M")}（UTC），数据源无法提供未来行情。'
+            f'起始时间 {training_start.strftime("%Y-%m-%d %H:%M")} 距今不足 {prepare_days} 天，'
+            f'请将起始时间提前，或将"训练交易日限制"设为不超过 {available_days} 天。'
+        )
     history_start = _subtract_calendar_years(training_start, history_years)
     candidate_sources = []
     if preferred_source:
@@ -2517,13 +2577,14 @@ def _prepare_crypto_history_job(user, payload, progress_callback, cancel_check):
     for _ in range(10):
         if cancel_check is not None and cancel_check():
             raise ValueError('crypto history preparation cancelled')
+        prepare_days = training_days if training_days is not None else 365
         training_start = _random_crypto_timestamp(
             (payload or {}).get('date_start', '2024-01-01'),
             (payload or {}).get('date_end', datetime.now(timezone.utc).date().isoformat()),
-            training_days,
+            prepare_days,
         )
         context_start = training_start - timedelta(days=30)
-        range_end = training_start + timedelta(days=training_days, minutes=-5)
+        range_end = training_start + timedelta(days=prepare_days, minutes=-1)
         try:
             instrument = _get_crypto_universe().select_random(
                 start=context_start,
@@ -2548,12 +2609,13 @@ def _prepare_crypto_history_job(user, payload, progress_callback, cancel_check):
 
 def _random_crypto_timestamp(date_start, date_end, training_days):
     start = datetime.fromisoformat(str(date_start)).replace(tzinfo=timezone.utc)
-    end = datetime.fromisoformat(str(date_end)).replace(tzinfo=timezone.utc, hour=23, minute=55)
-    latest = end - timedelta(days=max(training_days, 1) - 1)
+    end = datetime.fromisoformat(str(date_end)).replace(tzinfo=timezone.utc, hour=23, minute=59)
+    effective_days = training_days if training_days is not None else 365
+    latest = end - timedelta(days=max(effective_days, 1) - 1)
     if latest < start:
         raise ValueError('crypto random date range is shorter than the requested training days')
-    slots = int((latest - start).total_seconds() // 300)
-    return start + timedelta(minutes=5 * random.randint(0, max(slots, 0)))
+    slots = int((latest - start).total_seconds() // 60)
+    return start + timedelta(minutes=1 * random.randint(0, max(slots, 0)))
 
 
 def _start_crypto_training(*, user, mode, period, initial_capital, training_id, payload, max_training_days):
@@ -2861,11 +2923,11 @@ def get_training_data(training_id):
         volume_data = kline_processor.get_volume_data(view_period=view_period)
         
         # 获取均线周期参数
-        ma_periods_str = request.args.get('ma_periods', '5,10,20')
+        ma_periods_str = request.args.get('ma_periods', '10,20,40,80,160')
         try:
             ma_periods = [int(p) for p in ma_periods_str.split(',') if p.strip()]
         except ValueError:
-            ma_periods = [5, 10, 20]
+            ma_periods = [10, 20, 40, 80, 160]
             
         ma_data = kline_processor.get_ma_data(ma_periods, view_period=view_period)
         
@@ -2992,7 +3054,11 @@ def switch_period(training_id):
         if _is_crypto_session(training):
             request_id = data.get('request_id')
             if request_id is not None:
-                request_id = int(request_id)
+                # 容错：前端预取会用 'prefetch-<n>' 字符串 ID，视为预取请求不参与主计数器
+                try:
+                    request_id = int(request_id)
+                except (TypeError, ValueError):
+                    request_id = None
             range_start = data.get('range_start')
             range_end = data.get('range_end')
             visible_start = data.get('visible_start')
@@ -3142,11 +3208,11 @@ def update_adjustment(training_id):
         kline_processor.set_adjustment(adjustment)
         
         # 获取均线周期参数
-        ma_periods_str = request.args.get('ma_periods', '5,10,20')
+        ma_periods_str = request.args.get('ma_periods', '10,20,40,80,160')
         try:
             ma_periods = [int(p) for p in ma_periods_str.split(',') if p.strip()]
         except ValueError:
-            ma_periods = [5, 10, 20]
+            ma_periods = [10, 20, 40, 80, 160]
             
         # 重新获取数据
         kline_data = kline_processor.get_visible_data(view_period=view_period)
@@ -3177,11 +3243,11 @@ def get_full_data(training_id):
         kline_data = kline_processor.get_full_data(view_period=view_period)
         
         # 获取均线周期参数
-        ma_periods_str = request.args.get('ma_periods', '5,10,20')
+        ma_periods_str = request.args.get('ma_periods', '10,20,40,80,160')
         try:
             ma_periods = [int(p) for p in ma_periods_str.split(',') if p.strip()]
         except ValueError:
-            ma_periods = [5, 10, 20]
+            ma_periods = [10, 20, 40, 80, 160]
             
         # We also need volume data for the full range
         volume_data = []
@@ -3540,6 +3606,8 @@ def end_training(training_id):
         
         return jsonify(report)
     except Exception as e:
+        print(f"[end_training] 结束训练失败 training_id={training_id}", file=sys.stderr)
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/training/<training_id>/cleanup', methods=['POST'])
