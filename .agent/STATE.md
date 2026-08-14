@@ -738,8 +738,31 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **753 passed, 89 subtests passed in 24.62s（100% 全绿）**。
   - Commit ID: `c62e900`。
 
+## On-Chart Risk Box to Order Panel Sync & Offline Data Dashboard (2026-08-14)
+- **以损定仓与图表做多/做空工具双向打通**：
+  1. 在画图浮动工具条 `#drawing-floating-toolbar` 中增加高亮「⚡ 同步下单」按钮。
+  2. 当选中图表上的「做多 / 做空 / 风险回报测算框」时自动显示该按钮。
+  3. 点击后触发 `syncDrawingToOrderPanel(model)`：
+     - 提取入场价（Entry）、止损价（Stop）、止盈价（Target）。
+     - 自动判断多空方向，切换下单方向按钮（`open_long` / `open_short`）。
+     - 设置为限价单并填入入场价；开启止盈止损并填入止盈价与止损价。
+     - 开启以损定仓，填入开仓价、止损价与风险金额（USDT），自动调用 `applyCryptoRiskCalc()` 计算推荐保证金与数量。
+     - 给出状态提示并将下单区平滑滚动至视口，实现秒级挂单。
+- **前端离线数据管理面板与一键下载**：
+  1. **后端**：新增 `backend/crypto/data_manager.py`，提供 `scan_crypto_offline_status()` 与 `sync_crypto_offline_data()`；暴露 `GET /api/crypto/data/offline_status` 与 `POST /api/crypto/data/download`。
+  2. **前端**：在「设置」弹窗内增加 **📦 币圈离线数据看板与管理**：
+     - 状态表格：展示本地已缓存币种（BTCUSDT, ETHUSDT 等）、月份跨度、1m/标记/费率文件数、占用磁盘体积与完整性标识。
+     - 下载工具：支持输入币种（例如 SOLUSDT, DOGEUSDT）与年份（2024, 2025, 2026, 全部），点击「开始增量下载」即可从 Binance 官方归档一键补齐，并实时显示进度与刷新看板。
+- **质量门禁**：
+  - `node --check frontend/js/main_enhanced.js` 通过。
+  - `python scripts/agent_status.py .agent/tasks` 通过。
+  - 新增测试：`tests/test_drawing_order_sync.py`（4 个测试全过），`tests/test_crypto_offline_data_manager.py`（5 个测试全过）。
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **762 passed, 89 subtests passed in 40.31s（100% 全绿）**。
+  - Commit ID: `f51840d`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
