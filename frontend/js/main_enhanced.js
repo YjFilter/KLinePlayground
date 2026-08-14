@@ -3017,6 +3017,8 @@ async function startCryptoTrainingWithHistoryPreparation(trainingConfig) {
 function buildCryptoStartPayload(isRandomMode) {
     const symbolInput = document.getElementById('crypto-symbol-search');
     const startTimeInput = document.getElementById('crypto-start-time');
+    const makerRate = parseFloat(document.getElementById('modal-crypto-maker-fee-rate')?.value ?? document.getElementById('crypto-maker-fee-rate')?.value ?? '0');
+    const takerRate = parseFloat(document.getElementById('modal-crypto-taker-fee-rate')?.value ?? document.getElementById('crypto-taker-fee-rate')?.value ?? '0');
     const payload = {
         user: currentUser,
         market_type: CRYPTO_MARKET_TYPE,
@@ -3028,6 +3030,8 @@ function buildCryptoStartPayload(isRandomMode) {
         initial_capital: parseFloat(document.getElementById('crypto-initial-capital')?.value) || 10000,
         leverage: parseInt(document.getElementById('crypto-leverage')?.value) || 5,
         history_years: getCryptoHistoryYears(),
+        maker_fee_rate: Number.isFinite(makerRate) && makerRate >= 0 ? makerRate / 100 : 0,
+        taker_fee_rate: Number.isFinite(takerRate) && takerRate >= 0 ? takerRate / 100 : 0,
     };
     if (isRandomMode) {
         payload.date_start = document.getElementById('random-start-date').value.trim();
@@ -8145,26 +8149,27 @@ function renderCryptoPositionCard(account, position, pendingOrders) {
 
     container.innerHTML = '<div class="crypto-pos-card">'
         + '<div class="crypto-pos-card-header">'
+        + '<div class="crypto-pos-tags-wrap">'
         + '<span class="crypto-pos-symbol">' + escapeHtml(symbol) + '</span>'
-        + '<span class="crypto-pos-side ' + (isLong ? 'long' : 'short') + '">' + (isLong ? '多' : '空') + '</span>'
+        + '<span class="crypto-pos-side ' + (isLong ? 'long' : 'short') + '">' + (isLong ? '做多' : '做空') + '</span>'
         + '<span class="crypto-pos-tag">' + marginModeText + '</span>'
         + '<span class="crypto-pos-tag">' + leverage + 'x</span>'
-        + '<strong class="crypto-pos-pnl ' + pnlClass + '">' + (unrealized >= 0 ? '+' : '') + formatCryptoValue(unrealized, 4)
+        + '</div>'
+        + '<strong class="crypto-pos-pnl ' + pnlClass + '">' + (unrealized >= 0 ? '+' : '') + formatCryptoValue(unrealized, 2) + ' USDT'
         + (pnlPercent === null ? '' : ' (' + (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%)') + '</strong>'
         + '</div>'
         + '<div class="crypto-pos-grid">'
-        + '<div><span>持仓量(' + escapeHtml(coin) + ')</span><strong>' + formatCryptoValue(quantity) + '</strong></div>'
-        + '<div><span>开仓均价</span><strong>' + formatCryptoValue(entryPrice) + '</strong></div>'
-        + '<div><span>保证金(USDT)</span><strong>' + formatCryptoValue(margin, 4) + '</strong></div>'
-        + '<div><span>标记价格</span><strong>' + formatCryptoValue(markPrice) + '</strong></div>'
-        + '<div><span>保证金率</span><strong>' + (marginRatio === null ? '--' : marginRatio.toFixed(2) + '%') + '</strong></div>'
-        + '<div><span>预估强平价</span><strong style="color: #ff3b30;">' + (liquidation > 0 ? formatCryptoValue(liquidation) : '0.00 (全仓安全)') + '</strong></div>'
+        + '<div><span>均价/现价</span><strong>' + formatCryptoValue(entryPrice) + ' / ' + formatCryptoValue(markPrice) + '</strong></div>'
+        + '<div><span>持仓量</span><strong>' + formatCryptoValue(quantity) + ' ' + escapeHtml(coin) + '</strong></div>'
+        + '<div><span>保证金</span><strong>' + formatCryptoValue(margin, 2) + ' USDT</strong></div>'
+        + '<div><span>预估强平价</span><strong style="color: #ff3b30; font-weight: 700;">' + (liquidation > 0 ? formatCryptoValue(liquidation) : '0.00 (全仓安全)') + '</strong></div>'
         + '<div><span>止盈</span><strong class="tp">' + (protective.tp > 0 ? formatCryptoValue(protective.tp) : '--') + '</strong></div>'
         + '<div><span>止损</span><strong class="sl">' + (protective.sl > 0 ? formatCryptoValue(protective.sl) : '--') + '</strong></div>'
+        + '</div>'
         + '<div class="crypto-pos-actions">'
-        + '<button type="button" data-crypto-pos-action="tpsl">止盈止损</button>'
-        + '<button type="button" data-crypto-pos-action="close">平仓</button>'
-        + '<button type="button" data-crypto-pos-action="close-all">市价全平</button>'
+        + '<button type="button" data-crypto-pos-action="tpsl" class="btn-pos-action">止盈止损</button>'
+        + '<button type="button" data-crypto-pos-action="close" class="btn-pos-action">平仓</button>'
+        + '<button type="button" data-crypto-pos-action="close-all" class="btn-pos-action btn-pos-close-all">市价全平</button>'
         + '</div>'
         + '</div>';
 

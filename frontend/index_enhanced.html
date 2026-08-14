@@ -339,6 +339,14 @@
                             <option value="50">50x</option><option value="100">100x</option>
                         </select>
                     </div>
+                    <div class="form-group crypto-market-field hidden">
+                        <label>Maker 手续费率 (%)</label>
+                        <input id="modal-crypto-maker-fee-rate" type="number" value="0.02" min="0" max="1" step="0.001" placeholder="0.02">
+                    </div>
+                    <div class="form-group crypto-market-field hidden">
+                        <label>Taker 手续费率 (%)</label>
+                        <input id="modal-crypto-taker-fee-rate" type="number" value="0.05" min="0" max="1" step="0.001" placeholder="0.05">
+                    </div>
                 </div>
 
                 <div class="modal-actions">
@@ -844,21 +852,23 @@
 
                 <div id="crypto-trading-panel" class="control-section order-console-section hidden">
                     <h3>USDT 永续合约</h3>
-                    <div class="crypto-position-grid">
-                        <div><span>方向</span><strong id="crypto-position-side">空仓</strong></div>
-                        <div><span>标记价格</span><strong id="crypto-mark-price">--</strong></div>
-                        <div><span>强平价格</span><strong id="crypto-liquidation-price">--</strong></div>
-                        <div><span>保证金率</span><strong id="crypto-margin-ratio">--</strong></div>
-                    </div>
-                    <div id="crypto-funding-summary" class="crypto-funding-summary">资金费：--</div>
-                    <div class="crypto-fee-settings">
-                        <div class="crypto-fee-settings-header"><span>手续费率</span><small>按成交额计算</small></div>
-                        <div class="crypto-fee-grid">
-                            <label>Maker (%)<input id="crypto-maker-fee-rate" type="number" min="0" max="1" step="0.001" value="0" inputmode="decimal"></label>
-                            <label>Taker (%)<input id="crypto-taker-fee-rate" type="number" min="0" max="1" step="0.001" value="0" inputmode="decimal"></label>
-                            <button id="crypto-save-fee-rates" type="button">应用费率</button>
+                    <div class="crypto-hidden-state-elements hidden" aria-hidden="true" style="display: none;">
+                        <div class="crypto-position-grid">
+                            <div><span>方向</span><strong id="crypto-position-side">空仓</strong></div>
+                            <div><span>标记价格</span><strong id="crypto-mark-price">--</strong></div>
+                            <div><span>强平价格</span><strong id="crypto-liquidation-price">--</strong></div>
+                            <div><span>保证金率</span><strong id="crypto-margin-ratio">--</strong></div>
                         </div>
-                        <div id="crypto-fee-status" class="crypto-fee-status" aria-live="polite">仅影响后续成交；空仓且无挂单时可修改。</div>
+                        <div id="crypto-funding-summary" class="crypto-funding-summary">资金费：--</div>
+                        <div class="crypto-fee-settings">
+                            <div class="crypto-fee-settings-header"><span>手续费率</span><small>按成交额计算</small></div>
+                            <div class="crypto-fee-grid">
+                                <label>Maker (%)<input id="crypto-maker-fee-rate" type="number" min="0" max="1" step="0.001" value="0" inputmode="decimal"></label>
+                                <label>Taker (%)<input id="crypto-taker-fee-rate" type="number" min="0" max="1" step="0.001" value="0" inputmode="decimal"></label>
+                                <button id="crypto-save-fee-rates" type="button">应用费率</button>
+                            </div>
+                            <div id="crypto-fee-status" class="crypto-fee-status" aria-live="polite">仅影响后续成交；空仓且无挂单时可修改。</div>
+                        </div>
                     </div>
                     <div class="crypto-direction-buttons" role="group" aria-label="合约方向">
                         <button type="button" data-crypto-action="open_long" class="crypto-direction-long">开多</button>
