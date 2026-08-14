@@ -699,7 +699,28 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 完整 2 年历史数据包离线秒级加载测试通过。
   - 全量测试套件：`.venv\Scripts\python.exe -m pytest -q` -> `747 passed, 89 subtests passed`（全绿）。
 
+## Accumulated Workspace Changes Committed (2026-08-14)
+- **提交内容**：工作区累积的 63 项有效源码与文档变更。
+  - 修复 `.agent/tasks/done/TASK-024-zindex-fix-batch1.md` 任务状态（review -> done）及结果报告兼容。
+  - 排除 `.runtime/`、`data/`、`users/` 与临时日志文件。
+  - Commit ID: `282e0f9`。
+
+## On-Chart Position & TP/SL/Pending Order Lines (2026-08-14)
+- **功能落地**：在 Lightweight Charts 主图上实现了 TradingView / AICoin 风格的实时交易价格线（`candlestickSeries.createPriceLine`）：
+  - **持仓均价线**：多单亮蓝（`#2196f3`）/ 空单亮红（`#f6465d`），带实时方向、数量、开仓均价、浮动盈亏（USDT）与收益率（%）。
+  - **止盈线 (TP)**：翠绿虚线（`#0ecb81`），带价格标签。
+  - **止损线 (SL)**：亮红虚线（`#f6465d`），带价格标签。
+  - **限价/突破开仓挂单线**：蓝色/金色虚线，标注动作、触发价格与委托数量。
+  - **动态联动**：下单、撤单、单步推演 K 线、切换周期（快照重载）及平仓时毫秒级自动重绘与更新收益。
+- **质量门禁**：
+  - `node --check frontend/js/main_enhanced.js` 通过。
+  - `python scripts/agent_status.py .agent/tasks` 通过。
+  - 新增测试：`tests/test_chart_workspace_frontend.py` 增加 `ChartTradePriceLinesTests`。
+  - 全量测试套件：`.venv\Scripts\python.exe -m pytest -q` -> `750 passed, 89 subtests passed in 26.14s`（100% 全绿）。
+  - Commit ID: `0bf0395`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
