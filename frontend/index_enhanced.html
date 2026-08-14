@@ -168,6 +168,49 @@
                     </div>
                 </div>
 
+                <div class="settings-section crypto-offline-data-section">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <label class="section-title" style="margin: 0;">📦 币圈离线数据看板与管理</label>
+                        <button id="refresh-offline-data-btn" type="button" class="btn btn-secondary" style="padding: 3px 8px; font-size: 12px;">刷新状态</button>
+                    </div>
+                    <div id="crypto-offline-status-summary" style="font-size: 13px; color: var(--text-muted, #848e9c); margin-bottom: 10px;">
+                        已缓存 <strong id="offline-total-symbols" style="color: var(--text-color, #e0e6ed);">--</strong> 个币种，占用磁盘 <strong id="offline-total-size" style="color: #f0b90b;">-- MB</strong>
+                    </div>
+                    
+                    <div class="offline-data-table-wrap" style="max-height: 180px; overflow-y: auto; border: 1px solid var(--border-color, #2b313a); border-radius: 6px; margin-bottom: 12px;">
+                        <table class="offline-data-table" style="width: 100%; border-collapse: collapse; font-size: 12px;">
+                            <thead>
+                                <tr style="background: rgba(255, 255, 255, 0.04); text-align: left; border-bottom: 1px solid var(--border-color, #2b313a);">
+                                    <th style="padding: 6px 10px;">币种</th>
+                                    <th style="padding: 6px 10px;">源</th>
+                                    <th style="padding: 6px 10px;">K线月份范围</th>
+                                    <th style="padding: 6px 10px;">标记/费率</th>
+                                    <th style="padding: 6px 10px;">体积</th>
+                                    <th style="padding: 6px 10px;">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody id="offline-data-table-body">
+                                <tr><td colspan="6" style="padding: 12px; text-align: center; color: #848e9c;">点击设置自动加载或点击刷新...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="offline-download-box" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color, #2b313a); border-radius: 6px; padding: 10px 12px;">
+                        <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-color, #e0e6ed);">一键补齐 / 增量下载离线数据（Binance 官方归档）</div>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <input type="text" id="offline-download-symbol" value="BTCUSDT" placeholder="例如 BTCUSDT, ETHUSDT, SOLUSDT" style="flex: 1; min-width: 130px; padding: 5px 8px; font-size: 12px; text-transform: uppercase;">
+                            <select id="offline-download-year" style="padding: 5px 8px; font-size: 12px;">
+                                <option value="all">全部年份 (2024~2026)</option>
+                                <option value="2024">2024 年</option>
+                                <option value="2025">2025 年</option>
+                                <option value="2026">2026 年</option>
+                            </select>
+                            <button id="start-offline-download-btn" type="button" class="btn btn-warning" style="background: #f0b90b; color: #1e2329; font-weight: 600; padding: 5px 14px; font-size: 12px; border: none; white-space: nowrap; cursor: pointer;">开始增量下载</button>
+                        </div>
+                        <div id="offline-download-status" style="margin-top: 6px; font-size: 12px; color: #848e9c; display: none;" aria-live="polite"></div>
+                    </div>
+                </div>
+
                 <div class="modal-actions">
                     <button id="save-settings-btn" class="btn btn-primary">保存</button>
                     <button id="cancel-settings-btn" class="btn btn-secondary">取消</button>
@@ -625,6 +668,10 @@
                     </div>
                     <!-- 画图对象浮动工具条（选中对象时显示，参考 AiCoin 风格） -->
                     <div id="drawing-floating-toolbar" class="drawing-floating-toolbar hidden" role="toolbar" aria-label="画图对象操作">
+                        <button type="button" data-drawing-action="sync-order" class="drawing-sync-order-btn hidden" aria-label="一键同步到下单面板" title="一键同步到下单面板 (入场/止损/金额)" style="background: rgba(240, 185, 11, 0.15); color: #f0b90b; font-weight: 600; padding: 0 10px; display: inline-flex; align-items: center; gap: 4px; border: 1px solid rgba(240, 185, 11, 0.4); border-radius: 4px;">
+                            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></svg>
+                            <span>⚡ 同步下单</span>
+                        </button>
                         <button type="button" data-drawing-action="drag" aria-label="拖动对象" title="拖动"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 4v6m0 0V4m0 6h6m-6 0H9m6 0v6m0-6v6m6-6h-6m6 0h-6"/></svg></button>
                         <button type="button" data-drawing-action="settings" aria-label="对象设置" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
                         <button type="button" data-drawing-action="lock" aria-label="锁定/解锁" title="锁定/解锁"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></button>

@@ -1289,6 +1289,8 @@ function setupEventListeners() {
     document.getElementById('settings-btn')?.addEventListener('click', showSettings);
     document.getElementById('save-settings-btn')?.addEventListener('click', saveSettings);
     document.getElementById('cancel-settings-btn')?.addEventListener('click', hideSettings);
+    document.getElementById('refresh-offline-data-btn')?.addEventListener('click', loadCryptoOfflineStatus);
+    document.getElementById('start-offline-download-btn')?.addEventListener('click', triggerCryptoOfflineDownload);
     document.getElementById('theme-toggle-btn')?.addEventListener('click', () => {
         applyTheme(currentTheme === 'dark' ? 'light' : 'dark', true, true);
     });
@@ -2498,6 +2500,7 @@ async function syncOfflineData() {
 function showSettings() {
     document.getElementById('settings-modal').classList.remove('hidden');
     loadUserSettings();
+    loadCryptoOfflineStatus();
 }
 
 function renderMaPeriodsEditor() {
@@ -3488,6 +3491,10 @@ function syncDrawingFloatingToolbar(selectedId, model) {
     // 同步锁定/隐藏按钮的状态高亮
     toolbar.querySelector('[data-drawing-action="lock"]')?.classList.toggle('active', !!model.locked);
     toolbar.querySelector('[data-drawing-action="hide"]')?.classList.toggle('active', !!model.hidden);
+
+    // 如果是做多/做空/风险回报测算框，显示「⚡ 同步下单」按钮
+    const isRiskDrawing = model.type === 'long' || model.type === 'short' || model.type === 'risk-reward';
+    toolbar.querySelector('[data-drawing-action="sync-order"]')?.classList.toggle('hidden', !isRiskDrawing);
 }
 
 /**
@@ -3571,6 +3578,15 @@ function bindDrawingFloatingToolbar() {
                 openSelectedDrawingSettingsPanel(model);
                 return;
             }
+            if (action === 'sync-order') {
+                const model = drawingController?.store?.get?.(drawingController?.selectedId);
+                if (!model) {
+                    setDrawingStatus('请先选中一个做多/做空测算框。', 'active');
+                    return;
+                }
+                syncDrawingToOrderPanel(model);
+                return;
+            }
             if (action === 'drag') {
                 drawingController?.activateTool?.('select');
                 return;
@@ -3579,6 +3595,195 @@ function bindDrawingFloatingToolbar() {
             invokeDrawingAction(action);
         });
     });
+}
+
+/**
+ * 将图表做多/做空风险测算框的入场、止损、止盈与风险金额一键同步到下单面板。
+ */
+function syncDrawingToOrderPanel(model) {
+    if (!model) return;
+    const isCrypto = selectedTrainingMarketType === CRYPTO_MARKET_TYPE;
+    const anchors = Array.isArray(model.anchors) ? model.anchors : [];
+    if (anchors.length < 2) {
+        alert('该测算框尚未绘制完成，缺少入场或止损价');
+        return;
+    }
+    const entryPrice = Number(anchors[0]?.price);
+    const stopPrice = Number(anchors[1]?.price);
+    const targetPrice = anchors.length >= 3 && Number.isFinite(Number(anchors[2]?.price)) ? Number(anchors[2]?.price) : null;
+
+    if (!Number.isFinite(entryPrice) || !Number.isFinite(stopPrice)) {
+        alert('测算框价格数据无效');
+        return;
+    }
+
+    // 判断方向
+    let isLong = true;
+    if (model.type === 'short') {
+        isLong = false;
+    } else if (model.type === 'long') {
+        isLong = true;
+    } else if (model.type === 'risk-reward') {
+        isLong = stopPrice < entryPrice;
+    }
+
+    // 计算风险金额 (USDT)
+    let riskAmount = 100;
+    if (Number.isFinite(model.accountRiskAmount) && model.accountRiskAmount > 0) {
+        riskAmount = model.accountRiskAmount;
+    } else {
+        const riskPct = Number(drawingController?.accountRiskPercent || document.getElementById('drawing-pos-risk')?.value || 1);
+        const equity = Number(currentCryptoSummary?.account_equity || currentCryptoSummary?.balance || 10000);
+        riskAmount = Math.max(1, Math.round(equity * (riskPct / 100)));
+    }
+
+    if (isCrypto) {
+        // A. 切换做多/做空
+        const action = isLong ? 'open_long' : 'open_short';
+        selectCryptoOrderAction(action);
+
+        // B. 设置为限价单并填入入场价
+        setCryptoOrderType('limit', { preservePrice: true });
+        const limitPriceInput = document.getElementById('crypto-limit-price');
+        if (limitPriceInput) limitPriceInput.value = String(Number(entryPrice.toFixed(4)));
+
+        // C. 开启止盈止损并填入
+        const tpslCheckbox = document.getElementById('crypto-tpsl-enabled');
+        if (tpslCheckbox) {
+            tpslCheckbox.checked = true;
+            document.getElementById('crypto-tpsl-fields')?.classList.remove('hidden');
+        }
+        const slInput = document.getElementById('crypto-sl-price');
+        if (slInput) slInput.value = String(Number(stopPrice.toFixed(4)));
+        const tpInput = document.getElementById('crypto-tp-price');
+        if (tpInput && targetPrice !== null) {
+            tpInput.value = String(Number(targetPrice.toFixed(4)));
+        }
+
+        // D. 开启以损定仓并填入
+        const riskcalcCheckbox = document.getElementById('crypto-riskcalc-enabled');
+        if (riskcalcCheckbox) {
+            riskcalcCheckbox.checked = true;
+            document.getElementById('crypto-riskcalc-fields')?.classList.remove('hidden');
+        }
+        const riskcalcEntry = document.getElementById('crypto-riskcalc-entry');
+        if (riskcalcEntry) riskcalcEntry.value = String(Number(entryPrice.toFixed(4)));
+        const riskcalcStop = document.getElementById('crypto-riskcalc-stop');
+        if (riskcalcStop) riskcalcStop.value = String(Number(stopPrice.toFixed(4)));
+        const riskcalcMaxLoss = document.getElementById('crypto-riskcalc-maxloss');
+        if (riskcalcMaxLoss) riskcalcMaxLoss.value = String(Math.round(riskAmount));
+
+        // E. 自动执行计算并填入建议保证金与委托量
+        applyCryptoRiskCalc();
+
+        // F. 界面高亮与提示
+        setCryptoOrderStatus(`⚡ 已从图表同步${isLong ? '做多' : '做空'}测算框：入场 ${entryPrice.toFixed(2)}，止损 ${stopPrice.toFixed(2)}${targetPrice ? '，止盈 ' + targetPrice.toFixed(2) : ''}，风险 ${riskAmount} USDT`, 'ready');
+
+        const orderPanel = document.querySelector('.crypto-order-panel') || document.getElementById('crypto-order-grid');
+        orderPanel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+/**
+ * 币圈离线数据看板与增量下载
+ */
+async function loadCryptoOfflineStatus() {
+    const tableBody = document.getElementById('offline-data-table-body');
+    const totalSymbolsEl = document.getElementById('offline-total-symbols');
+    const totalSizeEl = document.getElementById('offline-total-size');
+    if (!tableBody) return;
+
+    tableBody.innerHTML = '<tr><td colspan="6" style="padding: 12px; text-align: center; color: var(--text-muted, #848e9c);">正在扫描本地离线数据...</td></tr>';
+
+    try {
+        const response = await fetch(`${API_BASE}/crypto/data/offline_status`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        if (totalSymbolsEl) totalSymbolsEl.textContent = data.total_symbols || 0;
+        if (totalSizeEl) totalSizeEl.textContent = (data.total_size_mb || 0) + ' MB';
+
+        const symbols = data.symbols || [];
+        if (symbols.length === 0) {
+            tableBody.innerHTML = '<tr><td colspan="6" style="padding: 12px; text-align: center; color: var(--text-muted, #848e9c);">本地尚未缓存任何币种离线数据，请使用下方工具下载</td></tr>';
+            return;
+        }
+
+        tableBody.innerHTML = symbols.map((sym) => {
+            const isComplete = sym.is_complete_2024_now;
+            const statusBadge = isComplete
+                ? '<span style="color: #0ecb81; font-weight: 600;">✅ 完整</span>'
+                : `<span style="color: #f0b90b;">⏳ ${sym.trade_count}个月</span>`;
+            return `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                    <td style="padding: 6px 10px; font-weight: 600; color: #f0b90b;">
+                        <a href="javascript:void(0)" class="offline-sym-link" data-sym="${sym.symbol}" title="点击填入下载框" style="color: #f0b90b; text-decoration: none;">${sym.symbol}</a>
+                    </td>
+                    <td style="padding: 6px 10px; color: var(--text-muted, #848e9c); text-transform: uppercase;">${sym.source}</td>
+                    <td style="padding: 6px 10px;">${sym.trade_range} (${sym.trade_count}月)</td>
+                    <td style="padding: 6px 10px;">${sym.mark_count} / ${sym.funding_count}</td>
+                    <td style="padding: 6px 10px;">${sym.size_mb} MB</td>
+                    <td style="padding: 6px 10px;">${statusBadge}</td>
+                </tr>
+            `;
+        }).join('');
+
+        tableBody.querySelectorAll('.offline-sym-link').forEach((link) => {
+            link.addEventListener('click', () => {
+                const symInput = document.getElementById('offline-download-symbol');
+                if (symInput && link.dataset.sym) symInput.value = link.dataset.sym;
+            });
+        });
+    } catch (err) {
+        console.error('加载离线数据状态失败:', err);
+        tableBody.innerHTML = `<tr><td colspan="6" style="padding: 12px; text-align: center; color: #f6465d;">加载离线数据看板失败: ${err.message}</td></tr>`;
+    }
+}
+
+async function triggerCryptoOfflineDownload() {
+    const symbolInput = document.getElementById('offline-download-symbol');
+    const yearSelect = document.getElementById('offline-download-year');
+    const btn = document.getElementById('start-offline-download-btn');
+    const statusEl = document.getElementById('offline-download-status');
+
+    const symbol = (symbolInput?.value || '').trim().toUpperCase();
+    const year = yearSelect?.value || 'all';
+
+    if (!symbol) {
+        alert('请输入要下载的合约代码 (例如 BTCUSDT)');
+        return;
+    }
+
+    if (btn) btn.disabled = true;
+    if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.style.color = '#f0b90b';
+        statusEl.textContent = `⏳ 正在检查并从 Binance 官方归档下载 ${symbol} (${year}) 历史数据，请稍候...`;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/crypto/data/download`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ symbol, year, source: 'binance' })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+
+        if (statusEl) {
+            statusEl.style.color = '#0ecb81';
+            statusEl.textContent = `✅ 下载完成！新增下载 ${result.downloaded} 个月，已缓存 ${result.already_cached} 个月，失败 ${result.failed} 个月。`;
+        }
+        await loadCryptoOfflineStatus();
+    } catch (err) {
+        console.error('离线数据下载失败:', err);
+        if (statusEl) {
+            statusEl.style.color = '#f6465d';
+            statusEl.textContent = `❌ 下载失败: ${err.message}`;
+        }
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 function normalizeChartTime(item) {

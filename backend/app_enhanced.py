@@ -1851,6 +1851,32 @@ def get_crypto_source_status():
         return jsonify({'error': str(exc)}), 503
 
 
+@app.route('/api/crypto/data/offline_status', methods=['GET'])
+def get_crypto_offline_status():
+    try:
+        from backend.crypto.data_manager import scan_crypto_offline_status
+        return jsonify(scan_crypto_offline_status())
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@app.route('/api/crypto/data/download', methods=['POST'])
+def download_crypto_data():
+    try:
+        from backend.crypto.data_manager import sync_crypto_offline_data
+        payload = request.get_json() or {}
+        symbol = str(payload.get('symbol') or '').strip().upper()
+        if not symbol:
+            return jsonify({'error': 'symbol is required'}), 400
+        year = payload.get('year') or 'all'
+        source = str(payload.get('source') or 'binance').lower()
+        kinds = payload.get('kinds') or ('trade', 'mark', 'funding')
+        result = sync_crypto_offline_data(symbol=symbol, year=year, source=source, kinds=tuple(kinds))
+        return jsonify(result)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
 def _crypto_history_prepare_payload(payload):
     normalized = dict(payload or {})
     current_start = normalized.get('current_start')
