@@ -3461,6 +3461,40 @@ function shiftLogicalRange(range, delta = 1) {
     };
 }
 
+/**
+ * 在下一根 K 线推进时，智能保持用户的可视范围：
+ * 1. 若用户在右侧预留了空白（最新 K 线的 logical index 在当前可视范围内），则完全不移动可视范围，新 K 线静默绘制在空白处；
+ * 2. 若最新 K 线到达或超出可视范围右侧，平移使最新 K 线刚好可见，维持视口缩放与宽度；
+ * 3. 若用户正在查看远期历史，保持历史可视范围不变。
+ */
+function computePreservedNextLogicalRange(previousLogicalRange, dataLength) {
+    if (!previousLogicalRange || !Number.isFinite(previousLogicalRange.from) || !Number.isFinite(previousLogicalRange.to)) {
+        if (dataLength > 0) {
+            const count = Math.min(dataLength, 150);
+            return { from: dataLength - count, to: dataLength + 15 };
+        }
+        return null;
+    }
+    const newBarIndex = Math.max(0, dataLength - 1);
+
+    // A. 最新 K 线已经在当前可视窗口内部（例如用户在右侧预留了空白）
+    if (newBarIndex >= previousLogicalRange.from && newBarIndex <= previousLogicalRange.to - 1) {
+        return previousLogicalRange;
+    }
+
+    // B. 最新 K 线到达或超出了右边缘：整体平移以露出新 K 线，维持视口宽度
+    if (newBarIndex > previousLogicalRange.to - 1) {
+        const delta = newBarIndex - (previousLogicalRange.to - 1);
+        return {
+            from: previousLogicalRange.from + delta,
+            to: previousLogicalRange.to + delta,
+        };
+    }
+
+    // C. 用户正在向左回溯历史 K 线：保持用户当前查看的历史区间
+    return previousLogicalRange;
+}
+
 function setVisibleRangeAll(range) {
     if (!range) return;
     chart?.timeScale().setVisibleLogicalRange(range);
@@ -5772,16 +5806,11 @@ async function nextCryptoBar() {
         clearCryptoPeriodSnapshotCacheForPeriod(currentPeriod);
         const hadRefreshSnapshot = !!(payload.delta && payload.delta.refresh_snapshot);
         applyCryptoNextDelta(payload.delta);
-        // 推进后始终将视图锚定到数据最右端（最新 K 线），确保用户看到变化。
+        // 推进后智能保持用户当前的视口与右侧空白，避免图表强行跳动到最右端
         const dataLength = latestRenderedKlineData.length;
-        if (dataLength > 0 && chart) {
-            const previousWidth = previousLogicalRange
-                ? (previousLogicalRange.to - previousLogicalRange.from)
-                : Math.min(dataLength, 200);
-            const barsToShow = Math.min(previousWidth, dataLength);
-            setVisibleRangeAll({ from: dataLength - barsToShow, to: dataLength });
-        } else if (previousLogicalRange !== null) {
-            setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+        const targetRange = computePreservedNextLogicalRange(previousLogicalRange, dataLength);
+        if (targetRange) {
+            setVisibleRangeAll(targetRange);
         }
         if (payload.finished) {
             pausePlayback();
@@ -5828,8 +5857,9 @@ async function nextBar() {
             }
             const snapshot = extractIntradaySnapshot(data);
             applyActiveSnapshotToChartWindow(snapshot);
-            if (previousLogicalRange !== null) {
-                setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+            const targetRange = computePreservedNextLogicalRange(previousLogicalRange, (latestRenderedKlineData || []).length);
+            if (targetRange) {
+                setVisibleRangeAll(targetRange);
             }
             renderPendingOrders(data.pending_orders);
             await updateAccountInfo();
@@ -5858,8 +5888,9 @@ async function nextBar() {
                         candlestickSeries.update(data.new_bar);
                         upsertRenderedBar(data.new_bar);
 
+                        const targetRange = computePreservedNextLogicalRange(previousLogicalRange, (latestRenderedKlineData || []).length);
                         if (data.requires_full_refresh) {
-                            await updateAdjustment(shiftLogicalRange(previousLogicalRange, 1));
+                            await updateAdjustment(targetRange);
                         } else {
                             if (data.new_volume) {
                                 volumeSeries.update(data.new_volume);
@@ -5876,7 +5907,9 @@ async function nextBar() {
 
                             await updateMovingAverages();
                             await loadTechnicalIndicator(currentIndicatorType);
-                            setVisibleRangeAll(shiftLogicalRange(previousLogicalRange, 1));
+                            if (targetRange) {
+                                setVisibleRangeAll(targetRange);
+                            }
                             await updateChipDistribution();
                         }
                     }

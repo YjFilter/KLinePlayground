@@ -323,6 +323,50 @@ class ChartTradePriceLineDraggingTests(unittest.TestCase):
         self.assertIn("training/${currentTraining.id}/orders/", self.js)
 
 
+class ChartViewportPreservationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_compute_preserved_next_logical_range_exists(self):
+        self.assertIn("function computePreservedNextLogicalRange(previousLogicalRange, dataLength)", self.js)
+
+    def test_node_execution_preserves_right_blank_space_on_next_bar(self):
+        node_script = """
+        const fs = require('fs');
+        const js = fs.readFileSync('frontend/js/main_enhanced.js', 'utf8');
+        eval(js.substring(js.indexOf('function computePreservedNextLogicalRange'), js.indexOf('function setVisibleRangeAll')));
+
+        // 1. User left blank space on right (bars 0..99, visible range is 20..140). New bar is index 99.
+        const r1 = computePreservedNextLogicalRange({ from: 20, to: 140 }, 100);
+        if (r1.from !== 20 || r1.to !== 140) {
+            throw new Error(`Expected {from:20, to:140} but got ${JSON.stringify(r1)}`);
+        }
+
+        // 2. User is pinned to right edge (bars 0..100, visible range is 0..100). New bar is index 100.
+        const r2 = computePreservedNextLogicalRange({ from: 0, to: 100 }, 101);
+        if (r2.from !== 1 || r2.to !== 101) {
+            throw new Error(`Expected {from:1, to:101} but got ${JSON.stringify(r2)}`);
+        }
+
+        // 3. Fallback when previous range is null
+        const r3 = computePreservedNextLogicalRange(null, 100);
+        if (!r3 || r3.to <= r3.from) {
+            throw new Error(`Expected valid default range but got ${JSON.stringify(r3)}`);
+        }
+
+        console.log('ALL_PRESERVATION_TESTS_PASSED');
+        """
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.assertIn("ALL_PRESERVATION_TESTS_PASSED", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
 
