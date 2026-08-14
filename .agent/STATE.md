@@ -800,8 +800,22 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **769 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `5937532`。
 
+## Toolbar Event Bubbling Isolation & Drawing Sync Model Recovery Fix (2026-08-14)
+- **原因查明**：
+  - 浮动工具条 `#drawing-floating-toolbar` 处于 `#chart` 容器内。当用户鼠标按下（`pointerdown` / `mousedown`）点击「⚡ 同步到下单区」或设置按钮时，事件向上冒泡到图表容器，触发了 `drawingController._onPointerDown`；由于未命中图表上的具体控制柄，画图控制器在按钮响应前将当前选中对象取消了选中（`selectedId = null`），导致后续的点击逻辑未能拿到画图模型。
+- **调整落地**：
+  1. **事件冒泡彻底隔离**：为 `#drawing-floating-toolbar` 以及所有画图设置弹窗（斐波那契/做多做空/线条/矩形/文本）统一拦截并阻止 `pointerdown`、`mousedown` 与 `click` 的向上冒泡，杜绝误触画布取消选中。
+  2. **模型状态双重兜底**：
+     - 在工具条显示时自动记录 `lastSelectedRiskDrawingModel`；
+     - 在同步方法 `syncDrawingToOrderPanel` 中采用多重降级解析：`selectedId -> lastSelectedRiskDrawingModel -> activeDrawing -> selectedDrawing -> store.list().find(risk)`，确保 100% 稳健命中当前测算框。
+  3. **表单联动闭环**：同步后强制向限价、止损、止盈及以损定仓输入框分发 `input` 与 `change` 事件并刷新预览与保证金。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **769 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `f6c1936`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
