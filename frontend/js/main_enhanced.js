@@ -4928,6 +4928,60 @@ function showTrainingInterface() {
     toggleToolbarForTraining(true);
 }
 
+function formatChartCrosshairTime(time) {
+    if (!time) return '';
+    if (typeof time === 'object' && time !== null) {
+        const y = time.year;
+        const m = String(time.month).padStart(2, '0');
+        const d = String(time.day).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    }
+    const date = new Date(Number(time) * 1000);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+
+    // 格式化为 aicoin / TradingView 风格: 2026-08-14 17:00
+    if (isCryptoMode() || isIntradayMode() || hours !== '00' || minutes !== '00') {
+        return `${year}-${month}-${day} ${hours}:${minutes}`;
+    }
+    return `${year}-${month}-${day}`;
+}
+
+function formatChartTickMark(time, tickMarkType) {
+    const date = new Date(Number(time) * 1000);
+    if (Number.isNaN(date.getTime())) return '';
+    const year = date.getUTCFullYear();
+    const month = date.getUTCMonth() + 1;
+    const day = date.getUTCDate();
+    const hours = String(date.getUTCHours()).padStart(2, '0');
+    const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+
+    // 0: Year, 1: Month, 2: DayOfMonth, 3: Time, 4: TimeWithSeconds
+    if (tickMarkType === 3 || tickMarkType === 4) {
+        return `${hours}:${minutes}`;
+    }
+    if (tickMarkType === 2) {
+        return `${month}月 ${day}`;
+    }
+    if (tickMarkType === 1) {
+        return `${year}-${String(month).padStart(2, '0')}`;
+    }
+    if (tickMarkType === 0) {
+        return `${year}`;
+    }
+    if (isCryptoMode() || isIntradayMode()) {
+        if (hours === '00' && minutes === '00') {
+            return `${month}月 ${day}`;
+        }
+        return `${hours}:${minutes}`;
+    }
+    return `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}`;
+}
+
 // 图表管理
 function initializeChart() {
     destroyDrawingTools();
@@ -4968,30 +5022,16 @@ function initializeChart() {
             borderColor: palette.border,
             minimumWidth: 80,
         },
-        // 使用 localization 选项来格式化十字标线的时间
+        // 使用 localization 选项来格式化十字标线的时间 (精确到分钟，AiCoin 风格: 2026-08-14 17:00)
         localization: {
-            // timeFormatter 用于格式化十字标线悬浮窗中的时间
-            timeFormatter: (businessDay) => {
-                // businessDay 是一个 Date 对象，包含了年、月、日
-                // 注意：这里的 businessDay 是一个 UTC 日期对象，所以使用 getUTCFullYear 等方法可以避免时区问题
-                const date = new Date(businessDay * 1000);
-
-                const year = date.getUTCFullYear();
-                const month = ('0' + (date.getUTCMonth() + 1)).slice(-2); // 月份从0开始
-                const day = ('0' + date.getUTCDate()).slice(-2);
-
-                return `${year}年${month}月${day}日`;
-            },
+            timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp),
             locale: 'zh-CN',
         },
         timeScale: {
             borderColor: palette.border,
             timeVisible: true,
             secondsVisible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-            }
+            tickMarkFormatter: (time, tickMarkType) => formatChartTickMark(time, tickMarkType),
         },
     });
 
@@ -5044,13 +5084,14 @@ function initializeChart() {
             borderColor: palette.border,
             minimumWidth: 80,
         },
+        localization: {
+            timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp),
+            locale: 'zh-CN',
+        },
         timeScale: {
             borderColor: palette.border,
             visible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-            }
+            tickMarkFormatter: (time, tickMarkType) => formatChartTickMark(time, tickMarkType),
         },
     });
 
@@ -5098,13 +5139,14 @@ function initializeChart() {
             borderColor: palette.border,
             minimumWidth: 80,
         },
+        localization: {
+            timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp),
+            locale: 'zh-CN',
+        },
         timeScale: {
             borderColor: palette.border,
             visible: false,
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
-            }
+            tickMarkFormatter: (time, tickMarkType) => formatChartTickMark(time, tickMarkType),
         },
     });
 
@@ -5516,8 +5558,20 @@ function updateCurrentInfo(barData, progress) {
     if (!barData) return;
     const palette = getThemePalette();
 
-    const date = new Date(barData.time * 1000);
-    const formattedDate = `${date.getFullYear()}/${(date.getMonth() + 1).toString().padStart(2, '0')}/${date.getDate().toString().padStart(2, '0')}`;
+    let formattedDate = '';
+    if (typeof formatChartCrosshairTime === 'function') {
+        formattedDate = formatChartCrosshairTime(barData.time);
+    } else {
+        const date = new Date(barData.time * 1000);
+        const year = date.getUTCFullYear();
+        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(date.getUTCDate()).padStart(2, '0');
+        const hours = String(date.getUTCHours()).padStart(2, '0');
+        const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+        formattedDate = (hours !== '00' || minutes !== '00')
+            ? `${year}-${month}-${day} ${hours}:${minutes}`
+            : `${year}-${month}-${day}`;
+    }
     document.getElementById('current-date').textContent = formattedDate;
     document.getElementById('current-price').textContent = formatMarketPrice(barData.close);
 

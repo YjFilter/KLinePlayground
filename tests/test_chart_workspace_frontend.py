@@ -403,6 +403,55 @@ class CryptoPartialCloseUITests(unittest.TestCase):
         self.assertIn("floorCryptoQuantity(positionQuantity * ratio, step)", self.js)
 
 
+class ChartTimeMinutePrecisionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_time_formatter_uses_minute_precision_format(self):
+        self.assertIn("function formatChartCrosshairTime", self.js)
+        self.assertIn("function formatChartTickMark", self.js)
+        self.assertIn("timeFormatter: (businessDayOrTimestamp) => formatChartCrosshairTime(businessDayOrTimestamp)", self.js)
+
+    def test_node_execution_formats_time_to_minute_precision(self):
+        node_script = """
+        const fs = require('fs');
+        const js = fs.readFileSync('frontend/js/main_enhanced.js', 'utf8');
+        let isCrypto = true;
+        function isCryptoMode() { return isCrypto; }
+        function isIntradayMode() { return false; }
+        eval(js.substring(js.indexOf('function formatChartCrosshairTime'), js.indexOf('// 图表管理')));
+
+        // 2026-08-14 17:00 UTC timestamp: Date.UTC(2026, 7, 14, 17, 0, 0) / 1000
+        const timestamp = Math.floor(Date.UTC(2026, 7, 14, 17, 0, 0) / 1000);
+        const formatted = formatChartCrosshairTime(timestamp);
+        if (formatted !== '2026-08-14 17:00') {
+            throw new Error(`Expected '2026-08-14 17:00' but got '${formatted}'`);
+        }
+
+        // Tick mark formatting
+        const tickTime = formatChartTickMark(timestamp, 3);
+        if (tickTime !== '17:00') {
+            throw new Error(`Expected '17:00' but got '${tickTime}'`);
+        }
+
+        const tickDay = formatChartTickMark(timestamp, 2);
+        if (tickDay !== '8月 14') {
+            throw new Error(`Expected '8月 14' but got '${tickDay}'`);
+        }
+
+        console.log('TIME_MINUTE_PRECISION_TESTS_PASSED');
+        """
+        result = subprocess.run(
+            ["node", "-e", node_script],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        self.assertIn("TIME_MINUTE_PRECISION_TESTS_PASSED", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
 
