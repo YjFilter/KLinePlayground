@@ -813,8 +813,23 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **769 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `f6c1936`。
 
+## Risk Model Resolver Centralization & Store Method Fix (2026-08-14)
+- **原因查明**：
+  - `drawingController.store`（`DrawingStore` 类）原生只暴露了 `snapshot()` 和 `get(id)`，此前调用的 `store.list()` 返回 `undefined`；
+  - `invokeDrawingAction('sync-order')` 内部存在遗留的校验拦截，未将获取责任完整委托给 `syncDrawingToOrderPanel`；
+  - 浏览器端可能因缓存未即时加载最新的 JS 文件。
+- **调整落地**：
+  1. **数据层扩展**：在 `DrawingStore` 中显式添加 `list()` 与 `getAll()` 作为 `snapshot()` 的别名，保障所有外部调用兼容。
+  2. **统一解析器**：抽取统一的 `getActiveRiskDrawingModel(explicitModel)`，通过 5 级降级策略（`explicitModel -> selectedId -> lastSelectedRiskDrawingModel -> activeDrawing -> selectedDrawing -> store.snapshot().reverse().find(risk)`）100% 可靠捕获做多/做空框。
+  3. **调用链直通**：`invokeDrawingAction('sync-order')` 与浮动工具条统一直接调用 `syncDrawingToOrderPanel()`，不再进行前置误杀拦截。
+  4. **缓存规避**：在 `index_enhanced.html` 引入带有版本参数（`?v=20260814_sync`）的脚本标签，杜绝浏览器静态资源缓存。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **769 passed, 89 subtests passed (100% 全绿)**。
+  - Commit ID: `314df76`。
+
 ## Next Action
 等待用户下一项需求。
+
 
 
 
