@@ -26,8 +26,9 @@
 - 分支：`main`（另有 `backup/pre-multiperiod-20260812` 备份分支）。
 - 当前存在大量尚未提交的功能改动，不能清理、覆盖、回滚或统一格式化。
 - 最近完成币圈默认两年历史、按月离线缓存准备、5m/15m 分段加载、跨周期连续性和下一根性能优化；随后完成 AICoin 风格 UI 多阶段改造、画图工具扩展与浮动工具条、斐波那契趋势时间（价格档位版）、基于风险的仓位计算、MACD(10,20,5)/MA(10,20,40,80,160) 默认参数。
-- 最新完整验证：`745 passed, 89 subtests passed`（2026-08-14 接手复核，全绿）。
-- 最新交接：`.agent/handoffs/2026-08-14-git-object-repair-crypto-verified.md`。
+- 2026-08-17 ~ 08-26 完成 Stage 2/3 前后端模块化拆分、币圈回放周期失步修复、快照刷新替换图表窗口修复；对应 19 项未提交改动（详见回填交接）。2026-08-30 接手后在此基础上继续治理优化。
+- 最新完整验证：`784 passed, 89 subtests passed`（2026-08-30 晚复核，全绿；含 19 个 JS node:test 单测门禁）。
+- 最新交接：`.agent/handoffs/2026-08-30-frontend-module-wiring.md`（此前同日：governance-optimization、08-26 回填、08-14 git 修复）。
 - 本地服务应监听 `0.0.0.0:8000`；接手时必须重新检查，不能相信旧 PID。
 - 已知控制面遗留问题：`python scripts/agent_status.py .agent/tasks` 会报告 `.agent/tasks/done/TASK-023-result.md` 缺少任务元数据。它是结果报告而不是标准任务包，未获得主 Agent 审查前不要移动或改写。
 - 2026-08-14 修复过本地 git 对象库缺失（HEAD 提交 `338bb62` 的对象被整体删除，git 全命令报 `fatal: bad object HEAD`）。恢复方式：curl 走 git smart-http 下载 packfile + `git index-pack`；注意本执行环境 git 自带 TLS 直连 GitHub 会被间歇性重置（`SSL_ERROR_SYSCALL`），网络取数用 `curl.exe` 更稳。

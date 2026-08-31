@@ -942,8 +942,81 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
   - Commit ID: `dab9629`。
 
+> [!IMPORTANT]
+> **Git 提交与推送铁律**：后续所有功能和修改一律在本地验证完成，**绝不自动执行 `git push`**。只有在用户验证通过并显式指示“提交到 GitHub”时，才执行远程推送。
+
+## Visible Range Extreme Price Tags (High / Low Markers, AICoin Style) (2026-08-14)
+- **用户需求**：
+  - 在主图上实时显示当前可见可视范围内的最高价和最低价，并采用类似 AICoin 的指示标签样式（`← 0.07035` / `0.06918 →`）。
+- **调整落地**：
+  1. **动态极值追踪与标签计算**：
+     - 在 `main_enhanced.js` 中新增 `updateVisibleExtremePriceTags()`，根据 `chart.timeScale().getVisibleLogicalRange()` 精准定位当前视野内的最高 K 棒与最低 K 棒；
+     - 通过 `candlestickSeries.priceToCoordinate` 与 `chart.timeScale().timeToCoordinate` 精确计算最高影线顶端和最低影线底端的像素坐标；
+     - 自动根据 X 轴所在半区自适应切换指示方向：左侧指向 `← 0.07035`，右侧指向 `0.06918 →`；
+  2. **事件与响应式联动**：
+     - 绑定可见视口平移缩放（`subscribeVisibleLogicalRangeChange` / `subscribeVisibleTimeRangeChange`）、K 线前进/更新（`replaceRenderedKlineData` / `upsertRenderedBar`）、窗口尺寸变化（`resizeCharts`），并配合 `requestAnimationFrame` 确保 60fps 丝滑流畅；
+  3. **AICoin 风格精致渲染**：
+     - 在 `style_enhanced.css` 中引入 `.chart-extreme-price-tag`，半透明深色微胶囊背景、等宽数字高对比排版，自适应浅色与深色主题。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - 本地验证完成，**未执行 Git 远程推送（严格遵循用户验证指令）**。
+
+## Stage 2 & 3: Code Architecture Governance & Modularization (2026-08-17)
+- **用户需求**：
+  - 选项 D：推进代码治理（前端/后端单文件解耦拆分）。
+- **调整落地**：
+  1. **前端模块化分层 (`frontend/js/modules/`)**：
+     - `theme.js`：主题色盘配置、深浅/AiCoin色盘管理；
+     - `extreme_tags.js`：可视区间极值标签（AICoin 风格 High/Low 标签）动态计算与调度；
+     - `crypto_order.js`：永续合约下单台名义价值、保证金与快捷比例换算；
+     - `position.js`：持仓未实现盈亏与收益率计算；
+     - `index_enhanced.html`：按依赖顺序列入模块化脚本引入。
+  2. **后端蓝图解耦落地 (`backend/routes/`)**：
+     - `user_routes.py`：用户列表查询、创建与云端同步；
+     - `stock_routes.py`：A股分时/历史日期与标的查询；
+     - `crypto_routes.py`：币圈标的池与合约查询；
+     - `training_routes.py`：训练会话活跃状态管理；
+     - `app_enhanced.py`：完成 Blueprint 动态注册与统一入口维护。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - 本地验证完成，**未执行 Git 远程推送（严格遵循用户验证指令）**。
+
+## Fix: Crypto Replay Period Desync (Daily vs 2D Step Bug) (2026-08-23)
+- **问题定位**：
+  - 用户反馈在日线（1D）模式下点击“下一根 K 线”时，K 线步进和聚合跳变为了两日线（2D）周期（从 10-26 跨步到 10-28）。
+  - **根本原因**：
+    1. 在前端 `switchCryptoViewPeriod` 中切换周期后，未在应用快照时调用 `updatePeriodBadge(nextPeriod)`；
+    2. 当从其他周期切回或切换期间，前端 `currentPeriod` 内部状态与工具栏 `.view-period-btn.active` 选中状态失步；
+    3. 工具栏按钮在视觉上高亮 `1D`，而实际请求后端时被 `if (currentPeriod === nextPeriod)` 拦截直接 return，导致后端 Session 的 ReplayClock 仍停留在 `2d`（2日线）模式；
+    4. 后端 `models.CryptoPeriod.parse` 未对 `"1d"` / `"1D"` 等常见别名做宽松容错。
+- **调整落地**：
+  1. **前端周期状态联动强化**：
+     - 在 `applyCryptoPeriodSnapshot` 中强制调用 `updatePeriodBadge(nextPeriod)` 同步全局 `currentPeriod` 与工具栏激活状态；
+     - 在 `formatIntradayPeriodBadge` 中增加 `1d` 显式映射；
+  2. **后端容错加固**：
+     - 在 `backend/crypto/models.py` 的 `CryptoPeriod.parse()` 中增加对 `"1d"`, `"1w"`, 大小写等别名的智能容错映射。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - 本地验证完成，**未执行 Git 远程推送（严格遵循用户验证指令）**。
+
+## Fix: Replace Chart Window State on Snapshot Refresh (Preventing Mixed Period Bar Merging) (2026-08-26)
+- **现象定位**：
+  - 用户反馈在未完成 K 线触发补全时（`delta.refresh_snapshot`），图表上的 K 线全部错乱，出现大量细单日柱子，且之后推进持续混乱。
+- **根本原因**：
+  - `applyCryptoNextDelta` 收到 `delta.refresh_snapshot` 时调用 `applyActiveSnapshotToChartWindow(snapshot)`；
+  - `applyActiveSnapshotToChartWindow` 内部调用 `applyChartWindow(payload)` 时**未传 `{ replace: true }`**！
+  - 导致 `mergeChartWindow` 将当前 2D 快照数据与之前 1D 残留在 `chartWindowState.kline_data` 中的单日数据执行了 `mergeTimedItems` 混杂合并！
+  - 1D 的所有单日 K 棒被强行保留并交织插入在 2D K 棒之间，造成图面完全错乱！
+- **修复落地**：
+  - 在 `applyActiveSnapshotToChartWindow` 中显式传入 `{ replace: true }`，确保快照刷新时彻底清空并替换旧周期数据，杜绝多周期数据交织混杂；
+  - 统一成交量时间戳转换（`intradayBarToTimestamp`）；
+  - 静态脚本版本提升为 `?v=20260826_v3`。
+- **质量门禁**：
+  - 全量自动化测试：`.venv\Scripts\python.exe -m pytest -q` -> **783 passed, 89 subtests passed (100% 全绿)**。
+  - 本地验证完成，**未执行 Git 远程推送（严格遵循用户验证指令）**。
+
 ## Next Action
-等待用户下一项需求。
+等待用户在浏览器中硬刷新并验证补全与推进（2D 蜡烛干净原地闭合收盘）。
 
 
 
@@ -957,3 +1030,40 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
 
 
 
+
+## Governance Optimization: Route Blueprints Migration + Frontend Pure-Logic Module + JS Quality Gates (2026-08-30)
+- **用户需求**：解决接手评估中的优化项 2~6：模块化落地、前端质量门禁、交接断层、缓存版本自动化、控制面小项。
+- **调整落地**：
+  1. **后端路由实迁 Blueprint**：`app_enhanced.py` 从 3881 行减至约 2410 行；45 个 `@app.route` 处理器实迁至 `backend/routes/` 四个 Blueprint（user 11 个、crypto 9 个、stock 3 个、training 24 个，含随迁辅助 `get_ai_config`/`analyze_report_with_ai`/`_crypto_history_prepare_*`）。共享状态与业务辅助函数保留在 `app_enhanced.py`（测试直接引用其符号）；处理器内以函数级 `import backend.app_enhanced as ae` 延迟绑定访问，保住 monkeypatch 契约。同时消除 user_routes 桩与 app 路由的重复注册隐患；清理 4 个死导入（base64/traceback/requests/sqlite3）。
+  2. **前端纯逻辑模块**：新增 `frontend/js/modules/chart_window_core.js`（225 行，UMD，浏览器 + require 双模式），17 个纯函数自 `main_enhanced.js` 迁出（mergeTimedItems、mergeChartWindow、parseChartWindowTimestamp、intradayBarToTimestamp、formatIntradayPeriodBadge、normalizeChart* 等），main 9606→9429 行并以解构真正消费模块（区别于此前的"只拆不接"）。
+  3. **JS 质量门禁**：新增 `tests/js/chart_window_core.test.js`（node:test，12 个用例）+ `tests/test_js_unit.py`（pytest 包装器，node 缺失时跳过），`pytest -q` 门禁覆盖前端纯逻辑；新增 `.eslintrc.json`，`npx eslint@8.57.0 frontend/js/modules/ tests/js/` 零告警（main_enhanced.js 遗留债暂不入 lint 范围）。
+  4. **静态测试加载器**：4 个前端静态测试文件改用 `tests/_frontend_js.py` 按 `index_enhanced.html` script 顺序拼接源码，贴合浏览器共享全局作用域的真实契约，断言本身未改。
+  5. **缓存版本自动化**：`index_enhanced.html` 去掉手写 `?v=`，`/` 路由改为 `_versioned_index_html()` 按各 js/css 文件 mtime 自动追加版本号，杜绝忘改版本导致的旧缓存。
+  6. **控制面小项**：`agent_status.py` 对 `TASK-023-result.md` 的告警确认已被早期会话修复（`*-result.md` 校验豁免），无需改动；`routes/__init__.py` 及本次重写的 6 个文件换行符归一 CRLF；git gc 评估完成——提交安全前不执行（避免清掉 2 个既有 dangling blob）。
+  7. **交接断层**：新增 `.agent/handoffs/2026-08-26-modularization-and-replay-fixes-backfill.md` 回填 8/17、8/23、8/26 三次会话；`AI_TAKEOVER.md` 摘要同步（783→784 门禁、最新交接指针）。
+- **质量门禁**：
+  - 全量 `.venv\Scripts\python.exe -m pytest -q` -> **784 passed, 89 subtests passed (100% 全绿，含新 JS 单测门禁)**。
+  - `node --test tests/js/chart_window_core.test.js` -> 12 pass / 0 fail；ESLint 零告警；`git diff --check` 干净。
+  - 浏览器烟雾验证：页面正常渲染，`window.KLineChartWindowCore` 与全部接线函数就位，`formatIntradayPeriodBadge('1d')='1D'`，11 个脚本全部带自动 mtime 版本号。
+  - 本地验证完成，**未执行 Git 提交与远程推送（严格遵循用户验证指令）**。
+
+## Next Action
+等待用户浏览器验收（K线回放、下单、持仓、周期切换如常即通过）；验收后可指示分片提交（建议按：路由迁移 / 前端模块 + 门禁 / 缓存版本化 / 文档交接 四片）。
+
+## Frontend Module Wiring & Continued Extraction (2026-08-30 晚续段)
+- **用户需求**：继续剩余优化空间——"只拆不接"的模块接线、继续缩小 main、扩大 lint 覆盖。
+- **关键发现**：8/17 创建的 4 个模块中，theme.js/extreme_tags.js 是 main 现行逻辑的**过时副本**（main 从未消费，一直跑自己的本地实现）；position.js/crypto_order.js 则**在 main 中无对应物**（main 直接使用后端算好的 unrealized_pnl），属无消费者的投机模块。
+- **调整落地**（方向：把 main 的**现行逻辑**灌回模块再接线，绝不用旧副本覆盖 main）：
+  1. **theme.js 真接线**：模块内的过时色盘替换为 main 现行 THEME_PALETTES 表（light/dark/crypto_dark/crypto_light，AiCoin 配色），main 侧以 `const THEME_PALETTES = (window.KLineThemeModule || {}).PALETTES;` 消费（保留静态测试的边界字面量，测试零改动）。
+  2. **extreme_tags.js 真接线**：main 的可视区极值标签现行实现（146 行）参数化后迁入模块（chart/series/klineData 注入，消除全局耦合），main 仅保留 raf 调度薄壳（约 20 行）。
+  3. **新增 period_snapshot_cache.js**：币圈周期快照缓存簇（LRU 上限 16 + 训练会话隔离 + 窗口键构建）整体内聚入模块，跨模块复用 chart_window_core 的时间戳解析（UMD 双环境 require/root），`chartWindowState` 默认参数改为双环境安全解析；main 以解构消费，7 个新 node:test 单测。
+  4. **ESLint 覆盖扩展**至 js 根部纯库 indicator_math.js / risk_calc.js / drawing_tools.js；清理 drawing_tools.js 中 7 个确认零引用的死代码（6 个常量/函数 + 仅被死代码调用的 formatCompactNumber）。
+  5. **position.js / crypto_order.js 处置**：无消费者、无 main 对应物，属用户未提交改动**不删除**，报告待用户决定（接线需先有客户端盈亏预览/下单台计算需求）。
+- **质量门禁**：
+  - JS 单测 **19 passed**（chart_window_core 12 + period_snapshot_cache 7）；ESLint 全范围零告警；`.venv` 全量 pytest **784 passed, 89 subtests passed**。
+  - `main_enhanced.js` 9429 → **9182 行**；模块数 6 个全部被真实消费（theme/extreme_tags/period_snapshot_cache/chart_window_core）或明确挂起待需求（position/crypto_order）。
+  - 浏览器实测（硬刷新）：模块色盘即 main 现行色盘（`getThemePalette().chartBg='#fdfefe'`）、极值标签调度链路、缓存键构建（`t1|1d|default_window|...`）全部就位，12 个脚本加载正常。
+  - 本地验证完成，**未执行 Git 提交与推送**。
+
+## Next Action
+等待用户浏览器验收（重点：主题切换、可视区极值标签、币圈多周期回切秒回）；position.js/crypto_order.js 去留由用户决定。
