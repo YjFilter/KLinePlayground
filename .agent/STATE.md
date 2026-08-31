@@ -1067,3 +1067,12 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
 
 ## Next Action
 等待用户浏览器验收（重点：主题切换、可视区极值标签、币圈多周期回切秒回）；position.js/crypto_order.js 去留由用户决定。
+
+## Commits (2026-08-30)
+- 上述两次会话成果已按用户指示分五片提交至本地 `main`（**未推送远程**）：
+  - `e032af1` fix: 币圈回放周期别名容错
+  - `e89ac40` refactor: 45 条路由实迁四个 Blueprint
+  - `9b7837e` refactor: 前端纯逻辑抽取入模块并完成真实接线
+  - `1730455` test: JS 单测接入 pytest 门禁
+  - `1efaa38` docs: 交接与摘要同步
+- 提交前最终门禁复验：784 passed, 89 subtests passed。
