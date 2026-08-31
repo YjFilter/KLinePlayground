@@ -3,6 +3,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from _frontend_js import load_frontend_js
+
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML_PATH = ROOT / "frontend" / "index_enhanced.html"
@@ -15,7 +17,7 @@ class CryptoFrontendStaticTests(unittest.TestCase):
     def setUpClass(cls):
         cls.html = HTML_PATH.read_text(encoding="utf-8")
         cls.css = CSS_PATH.read_text(encoding="utf-8")
-        cls.js = JS_PATH.read_text(encoding="utf-8")
+        cls.js = load_frontend_js()
 
     def test_crypto_workspace_has_independent_theme_toggle(self):
         self.assertIn('id="crypto-theme-toggle-btn"', self.html)

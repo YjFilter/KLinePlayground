@@ -1,0 +1,30 @@
+{
+  "root": true,
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2022": true
+  },
+  "parserOptions": {
+    "ecmaVersion": 2022,
+    "sourceType": "script"
+  },
+  "globals": {
+    "currentTraining": "readonly",
+    "chartWindowState": "readonly"
+  },
+  "extends": "eslint:recommended",
+  "rules": {
+    "no-unused-vars": ["error", { "args": "none" }]
+  },
+  "overrides": [
+    {
+      "files": ["frontend/js/modules/*.js", "tests/js/**/*.test.js"],
+      "excludedFiles": ["frontend/js/main_enhanced.js"]
+    }
+  ],
+  "ignorePatterns": [
+    "frontend/js/marked.min.js",
+    "node_modules/"
+  ]
+}

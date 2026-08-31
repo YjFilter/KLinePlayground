@@ -5,13 +5,15 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from _frontend_js import load_frontend_js
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 JS_PATH = PROJECT_ROOT / "frontend" / "js" / "main_enhanced.js"
 
 
 def _load_js() -> str:
-    return JS_PATH.read_text(encoding="utf-8")
+    return load_frontend_js()
 
 
 def _function_body(source: str, signature: str) -> str:

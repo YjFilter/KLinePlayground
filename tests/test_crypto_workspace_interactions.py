@@ -2,15 +2,13 @@ import re
 import unittest
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
-JS_PATH = ROOT / "frontend" / "js" / "main_enhanced.js"
+from _frontend_js import load_frontend_js
 
 
 class CryptoWorkspaceInteractionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.js = JS_PATH.read_text(encoding="utf-8")
+        cls.js = load_frontend_js()
 
     def function_source(self, name):
         match = re.search(rf"(?:async )?function {name}\([^)]*\)\s*{{", self.js)

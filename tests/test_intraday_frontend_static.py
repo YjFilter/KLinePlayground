@@ -29,15 +29,16 @@ import os
 import unittest
 from pathlib import Path
 
+from _frontend_js import load_frontend_js
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 JS_PATH = PROJECT_ROOT / "frontend" / "js" / "main_enhanced.js"
 
 
 def _load_js() -> str:
-    """Read the frontend JavaScript source as UTF-8 text."""
-    with open(JS_PATH, "r", encoding="utf-8") as fh:
-        return fh.read()
+    """Read the page scripts as UTF-8 text, mirroring the browser's shared scope."""
+    return load_frontend_js()
 
 
 class _StaticTestCase(unittest.TestCase):
