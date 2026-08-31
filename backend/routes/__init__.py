@@ -1,9 +1,18 @@
 """
 KLinePlayground - Route Blueprints Module
 """
-from flask import Blueprint
+from backend.routes.user_routes import user_bp, init_user_routes
+from backend.routes.stock_routes import stock_bp, init_stock_routes
+from backend.routes.crypto_routes import crypto_bp, init_crypto_routes
+from backend.routes.training_routes import training_bp, init_training_routes
 
-crypto_bp = Blueprint('crypto_routes', __name__)
-stock_bp = Blueprint('stock_routes', __name__)
-user_bp = Blueprint('user_routes', __name__)
-training_bp = Blueprint('training_routes', __name__)
+__all__ = [
+    'user_bp',
+    'init_user_routes',
+    'stock_bp',
+    'init_stock_routes',
+    'crypto_bp',
+    'init_crypto_routes',
+    'training_bp',
+    'init_training_routes'
+]
