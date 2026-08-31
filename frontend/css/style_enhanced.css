@@ -864,8 +864,48 @@ body[data-theme="dark"] .chart-header {
 }
 
 .chart {
+    position: relative;
     flex: 1;
     min-height: 0;
+}
+
+/* === Visible range extreme price tags (AICoin style) === */
+.chart-extreme-price-tag {
+    position: absolute;
+    pointer-events: none;
+    z-index: 15;
+    display: none;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", monospace;
+    font-variant-numeric: tabular-nums;
+    color: #e6edf3;
+    line-height: 1;
+    white-space: nowrap;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(14, 18, 26, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    user-select: none;
+    transition: opacity 100ms ease;
+}
+
+[data-theme="light"] .chart-extreme-price-tag,
+[data-crypto-theme="light"] .chart-extreme-price-tag {
+    color: #1f2328;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid rgba(0, 0, 0, 0.16);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.chart-extreme-price-tag.point-left {
+    transform: translateY(-50%);
+}
+
+.chart-extreme-price-tag.point-right {
+    transform: translate(-100%, -50%);
 }
 
 .volume-chart {
@@ -4084,7 +4124,11 @@ body.chart-dragging-order, body.chart-dragging-order * {
     outline-offset: 2px;
 }
 
-#main-app.crypto-training-active .positions-list,
+#main-app.crypto-training-active .positions-list {
+    max-height: none !important;
+    overflow: visible !important;
+    font-size: 11px;
+}
 #main-app.crypto-training-active .trade-list,
 #main-app.crypto-training-active .pending-orders {
     max-height: 118px;
@@ -4575,11 +4619,11 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pos-card {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 7px 9px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    gap: 7px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 6px;
-    background: linear-gradient(180deg, rgba(30, 36, 48, 0.65) 0%, rgba(18, 22, 30, 0.85) 100%);
+    background: linear-gradient(180deg, rgba(30, 36, 48, 0.75) 0%, rgba(18, 22, 30, 0.9) 100%);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 #main-app.crypto-training-active .crypto-pos-card-header {
@@ -4591,65 +4635,71 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pos-tags-wrap {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
 }
 #main-app.crypto-training-active .crypto-pos-symbol {
     color: var(--crypto-strong-text);
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
 }
 #main-app.crypto-training-active .crypto-pos-side {
     padding: 1px 6px;
     border-radius: 3px;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
     color: #fff;
 }
 #main-app.crypto-training-active .crypto-pos-side.long { background: var(--crypto-long); }
 #main-app.crypto-training-active .crypto-pos-side.short { background: var(--crypto-short); }
 #main-app.crypto-training-active .crypto-pos-tag {
-    padding: 1px 5px;
+    padding: 1px 6px;
     border: 1px solid var(--crypto-border);
     border-radius: 3px;
     color: var(--crypto-muted);
-    font-size: 10px;
+    font-size: 10.5px;
     line-height: 1.2;
 }
 #main-app.crypto-training-active .crypto-pos-pnl {
     margin-left: auto;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     text-align: right;
+    white-space: nowrap;
 }
 #main-app.crypto-training-active .crypto-pos-pnl.positive { color: var(--crypto-long); }
 #main-app.crypto-training-active .crypto-pos-pnl.negative { color: var(--crypto-short); }
 #main-app.crypto-training-active .crypto-pos-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 3px 8px;
-    padding: 5px 7px;
-    background: rgba(0, 0, 0, 0.18);
+    gap: 4px 10px;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.22);
     border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.04);
 }
 #main-app.crypto-training-active .crypto-pos-grid > div {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     justify-content: space-between;
     gap: 4px;
     min-width: 0;
 }
 #main-app.crypto-training-active .crypto-pos-grid span {
     color: var(--crypto-muted);
-    font-size: 10px;
+    font-size: 10.5px;
     white-space: nowrap;
+    flex-shrink: 0;
 }
 #main-app.crypto-training-active .crypto-pos-grid strong {
     color: var(--crypto-text);
-    font-size: 10.5px;
-    font-weight: 650;
+    font-size: 11px;
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 #main-app.crypto-training-active .crypto-pos-grid strong.tp,
 #main-app.crypto-training-active .crypto-pos-grid span.tp { color: var(--crypto-long); }
@@ -4658,18 +4708,18 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pos-actions {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 5px;
+    gap: 6px;
     margin-top: 2px;
 }
 #main-app.crypto-training-active .crypto-pos-actions button {
     padding: 3px 4px;
-    height: 25px;
+    height: 27px;
     border: 1px solid var(--crypto-border);
     border-radius: 4px;
     background: var(--crypto-control);
     color: var(--crypto-text);
-    font-size: 10.5px;
-    font-weight: 500;
+    font-size: 11px;
+    font-weight: 600;
     cursor: pointer;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     display: flex;
@@ -4679,7 +4729,7 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pos-actions button:hover {
     background: var(--crypto-control-hover);
     color: var(--crypto-strong-text);
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.25);
 }
 #main-app.crypto-training-active .crypto-pos-actions button[data-crypto-pos-action="close-all"]:hover {
     border-color: var(--crypto-short);

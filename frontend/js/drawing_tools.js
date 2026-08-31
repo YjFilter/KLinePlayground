@@ -39,12 +39,6 @@
   const DEFAULT_LINE_STYLE = 'solid';
   const DEFAULT_LABEL_VISIBLE = true;
   const DEFAULT_TEXT_CONTENT = 'Text';
-  const DEFAULT_RECTANGLE_FILL = 'transparent';
-  const DEFAULT_RECTANGLE_OPACITY = 0.12;
-  // 斐波那契时间（Fibonacci Time Zones / Fibonacci Time）：
-  // 把斐波那契倍数应用到时间轴上，从起点锚点向右按倍数画垂直时间线。
-  // 参考 AiCoin：0 / 0.382 / 0.618 / 1 / 1.382 / 1.618 / 2 / 2.382 / 2.618 / 3
-  const DEFAULT_FIBONACCI_TIME_LEVELS = Object.freeze([0, 0.382, 0.618, 1, 1.382, 1.618, 2, 2.382, 2.618, 3]);
 
   let nextDrawingId = 1;
   const SNAP_DISTANCE_PX = 8;
@@ -627,37 +621,6 @@
     if (absoluteValue >= 0.01) return trimFixed(value, 5);
     if (absoluteValue >= 0.0001) return trimFixed(value, 6);
     return trimFixed(value, 8);
-  }
-
-  function formatSignedPrice(value) {
-    if (!Number.isFinite(value)) return '--';
-    return `${value >= 0 ? '+' : '-'}${formatAdaptivePrice(Math.abs(value))}`;
-  }
-
-  function formatSignificant(value, digits) {
-    if (!Number.isFinite(value)) return '--';
-    if (value === 0) return '0';
-    return Number(value.toPrecision(digits)).toString();
-  }
-
-  function formatCompactNumber(value, suffixes) {
-    if (!Number.isFinite(value)) return '--';
-    const units = suffixes || [
-      {threshold: 1e9, divisor: 1e9, suffix: 'B'},
-      {threshold: 1e6, divisor: 1e6, suffix: 'M'},
-      {threshold: 1e3, divisor: 1e3, suffix: 'K'},
-    ];
-    const absoluteValue = Math.abs(value);
-    const unit = units.find((candidate) => absoluteValue >= candidate.threshold);
-    if (!unit) return formatAdaptivePrice(value);
-    return `${trimFixed(value / unit.divisor, 2)}${unit.suffix}`;
-  }
-
-  function formatAccountValue(value) {
-    return formatCompactNumber(value, [
-      {threshold: 1e6, divisor: 1e6, suffix: 'M'},
-      {threshold: 1e3, divisor: 1e3, suffix: 'K'},
-    ]);
   }
 
   function colorWithAlpha(color, alpha) {

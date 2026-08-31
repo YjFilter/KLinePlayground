@@ -33,6 +33,26 @@ let currentHistoryFilter = 'all';
 let isViewOnlyMode = false;
 let skipTradeReasonPrompt = false;
 let pendingTradeReasonAction = null;
+// 图表窗口/周期格式化等纯逻辑已抽取到 modules/chart_window_core.js。
+const {
+    createEmptyChartWindowState,
+    formatIntradayPeriodBadge,
+    extractIntradaySnapshot,
+    intradayBarToTimestamp,
+    buildIntradayKlineChartData,
+    normalizeChartTime,
+    normalizeChartCandle,
+    normalizeChartVolume,
+    normalizeChartMarker,
+    normalizeTradeMarkers,
+    mergeTimedItems,
+    mergeChartWindow,
+    parseChartWindowTimestamp,
+    formatChartWindowTimestamp,
+    shiftChartWindowYear,
+    earlierChartWindowTimestamp,
+    laterChartWindowTimestamp,
+} = window.KLineChartWindowCore || {};
 let chartWindowState = createEmptyChartWindowState();
 let chartWindowRequestChain = Promise.resolve();
 let chartWindowRequestGeneration = 0;
@@ -50,7 +70,6 @@ let cryptoInstrumentSearchTimer = null;
 let periodSwitchAbortController = null;
 let periodSwitchGeneration = 0;
 let periodSwitchFeedbackTimer = null;
-let cryptoPeriodSnapshotCacheTrainingId = null;
 let cryptoOrderConstraints = null;
 let currentCryptoSummary = null;
 let cryptoOrderSubmitting = false;
@@ -62,32 +81,20 @@ let cryptoHistoryPrepareRetryConfig = null;
 let cryptoEarlierSegmentLoading = false;
 let cryptoEarlierSegmentGeneration = 0;
 const PERIOD_LOADING_DELAY_MS = 150;
-const CRYPTO_PERIOD_SNAPSHOT_CACHE_LIMIT = 16;
-const cryptoPeriodSnapshotCache = new Map();
 const CHART_PANEL_STORAGE_KEY = 'kline-chart-panel-heights-v2';
 const CHART_PANEL_DEFAULT_RATIOS = { chart: 0.72, 'volume-chart': 0.11, 'indicator-chart': 0.17 };
 const CHART_PANEL_MIN_HEIGHTS = { chart: 160, 'volume-chart': 32, 'indicator-chart': 52 };
-function createEmptyChartWindowState() {
-    return {
-        kline_data: [],
-        volume_data: [],
-        trade_markers: [],
-        window_start: null,
-        window_end: null,
-        history_start: null,
-        history_end: null,
-        render_start: null,
-        render_end: null,
-        has_earlier_render: false,
-        training_start: null,
-        training_end: null,
-        has_earlier: false,
-        has_later: false,
-        extended_history: false,
-        read_only: false,
-        period: 'daily',
-    };
-}
+
+// 币圈周期快照缓存已抽取到 modules/period_snapshot_cache.js（LRU + 训练会话隔离）。
+const {
+    buildCryptoPeriodSnapshotCacheKey,
+    clearCryptoPeriodSnapshotCache,
+    clearCryptoPeriodSnapshotCacheForPeriod,
+    getCryptoPeriodSnapshotCache,
+    getCryptoReplayCacheTime,
+    setCryptoPeriodSnapshotCache,
+    syncCryptoPeriodSnapshotCacheTraining,
+} = window.KLinePeriodSnapshotCache || {};
 
 function resetChartWindowState() {
     clearCryptoPeriodSnapshotCache();
@@ -98,80 +105,6 @@ function resetChartWindowState() {
     chartWindowLoadingDirection = null;
     chartWindowState = createEmptyChartWindowState();
     updateChartWindowControls();
-}
-
-function clearCryptoPeriodSnapshotCache() {
-    cryptoPeriodSnapshotCache.clear();
-    cryptoPeriodSnapshotCacheTrainingId = currentTraining?.id === undefined || currentTraining?.id === null
-        ? null
-        : String(currentTraining.id);
-}
-
-// 只清指定周期的快照缓存（回放推进/分段加载时保留其他周期缓存，回切秒回）。
-function clearCryptoPeriodSnapshotCacheForPeriod(period) {
-    if (!period) return;
-    const prefix = String(currentTraining?.id || '') + '|' + String(period) + '|';
-    for (const cacheKey of Array.from(cryptoPeriodSnapshotCache.keys())) {
-        if (cacheKey.startsWith(prefix)) cryptoPeriodSnapshotCache.delete(cacheKey);
-    }
-}
-
-function syncCryptoPeriodSnapshotCacheTraining(trainingId) {
-    const normalizedTrainingId = trainingId === undefined || trainingId === null
-        ? null
-        : String(trainingId);
-    if (cryptoPeriodSnapshotCacheTrainingId === normalizedTrainingId) return;
-    cryptoPeriodSnapshotCache.clear();
-    cryptoPeriodSnapshotCacheTrainingId = normalizedTrainingId;
-}
-
-function cryptoPeriodSnapshotCacheTimestamp(value) {
-    const parsed = parseChartWindowTimestamp(value);
-    return parsed ? String(Math.floor(parsed.getTime() / 1000)) : String(value || '');
-}
-
-function buildCryptoPeriodSnapshotCacheKey(trainingId, period, replayTime, windowState = chartWindowState) {
-    const expandedWindow = Boolean(windowState?.extended_history);
-    const windowStart = expandedWindow ? cryptoPeriodSnapshotCacheTimestamp(windowState.window_start) : '';
-    const windowEnd = expandedWindow ? cryptoPeriodSnapshotCacheTimestamp(windowState.window_end) : '';
-    const historyStart = cryptoPeriodSnapshotCacheTimestamp(windowState?.history_start);
-    const historyEnd = cryptoPeriodSnapshotCacheTimestamp(windowState?.history_end);
-    const renderStart = cryptoPeriodSnapshotCacheTimestamp(windowState?.render_start);
-    const renderEnd = cryptoPeriodSnapshotCacheTimestamp(windowState?.render_end);
-    return [
-        String(trainingId || ''),
-        String(period || ''),
-        expandedWindow ? 'extended_history' : 'default_window',
-        windowStart,
-        windowEnd,
-        historyStart,
-        historyEnd,
-        renderStart,
-        renderEnd,
-        cryptoPeriodSnapshotCacheTimestamp(replayTime),
-    ].join('|');
-}
-
-function getCryptoReplayCacheTime() {
-    return currentTraining?.current_time || currentTraining?.latestProgress?.current_time || null;
-}
-
-function getCryptoPeriodSnapshotCache(cacheKey) {
-    if (!cryptoPeriodSnapshotCache.has(cacheKey)) return null;
-    const snapshot = cryptoPeriodSnapshotCache.get(cacheKey);
-    cryptoPeriodSnapshotCache.delete(cacheKey);
-    cryptoPeriodSnapshotCache.set(cacheKey, snapshot);
-    return snapshot;
-}
-
-function setCryptoPeriodSnapshotCache(cacheKey, snapshot) {
-    if (!cacheKey || !snapshot) return;
-    cryptoPeriodSnapshotCache.delete(cacheKey);
-    cryptoPeriodSnapshotCache.set(cacheKey, snapshot);
-    while (cryptoPeriodSnapshotCache.size > CRYPTO_PERIOD_SNAPSHOT_CACHE_LIMIT) {
-        const oldestKey = cryptoPeriodSnapshotCache.keys().next().value;
-        cryptoPeriodSnapshotCache.delete(oldestKey);
-    }
 }
 
 // === Intraday 多周期回放 (TASK-013) ===
@@ -213,74 +146,9 @@ function getSelectedKlinePeriod() {
     return supportedReplayPeriods().indexOf(value) >= 0 ? value : 'daily';
 }
 
-// 将周期值转换为可读的徽章文字。
-function formatIntradayPeriodBadge(period) {
-    switch (period) {
-        case '1m': return '1m';
-        case '3m': return '3m';
-        case '5m': return '5m';
-        case '15m': return '15m';
-        case '30m': return '30m';
-        case '1h': return '1h';
-        case '2h': return '2h';
-        case '3h': return '3h';
-        case '4h': return '4h';
-        case '6h': return '6h';
-        case '8h': return '8h';
-        case '12h': return '12h';
-        case '4h_session': return '4h';
-        case 'weekly': return '1W';
-        case '2d': return '2D';
-        case '3d': return '3D';
-        case 'daily':
-        default: return '1D';
-    }
-}
-
-// start / data / period 返回顶层 snapshot；next / reset 把 snapshot 嵌在 response.snapshot。
-// 此函数统一提取 snapshot 对象。
-function extractIntradaySnapshot(response) {
-    if (!response || typeof response !== 'object') return null;
-    if (response.snapshot && typeof response.snapshot === 'object') {
-        return response.snapshot;
-    }
-    return response;
-}
 
 // 把市场墙上时间转换为 lightweight-charts 的 UTCTimestamp。
-// lightweight-charts 使用 UTC 字段绘制标签，因此这里用 Date.UTC 保留 10:00 等原始盘中时间，
-// 不把北京时间换算成 02:00 UTC。
-function intradayBarToTimestamp(bar) {
-    if (!bar) return 0;
-    const raw = bar.start_time || bar.end_time || bar.time || bar.datetime;
-    if (typeof raw === 'number') return raw;
-    if (!raw) return 0;
-    const match = String(raw).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
-    if (!match) return 0;
-    return Math.floor(Date.UTC(
-        Number(match[1]),
-        Number(match[2]) - 1,
-        Number(match[3]),
-        Number(match[4] || 0),
-        Number(match[5] || 0),
-        Number(match[6] || 0)
-    ) / 1000);
-}
 
-// 把 intraday snapshot.kline_data 转成 lightweight-charts 所需的蜡烛数据格式。
-function buildIntradayKlineChartData(klineData) {
-    if (!Array.isArray(klineData)) return [];
-    return klineData.map(function (bar) {
-        return {
-            time: intradayBarToTimestamp(bar),
-            open: Number(bar.open),
-            high: Number(bar.high),
-            low: Number(bar.low),
-            close: Number(bar.close),
-            volume: Number(bar.volume) || 0,
-        };
-    });
-}
 
 // intraday snapshot 没有独立的 volume_data，从每根 K 线的 volume 字段构造。
 function buildIntradayVolumeData(klineData) {
@@ -380,61 +248,8 @@ function applyIntradaySnapshot(snapshot, options) {
     }
 }
 
-const THEME_PALETTES = {
-    light: {
-        chartBg: '#fdfefe',
-        text: '#172033',
-        grid: 'rgba(23, 32, 51, 0.08)',
-        border: 'rgba(23, 32, 51, 0.12)',
-        overlay: 'rgba(255, 255, 255, 0.84)',
-        positive: '#e25555',
-        negative: '#0f8a52',
-        neutral: '#5d6b82',
-        chip: 'linear-gradient(90deg, transparent, rgba(15, 111, 255, 0.28))',
-        crosshair: '#758696',
-        crosshairLabel: '#758696',
-    },
-    dark: {
-        chartBg: '#121d31',
-        text: '#ecf2ff',
-        grid: 'rgba(255, 255, 255, 0.08)',
-        border: 'rgba(255, 255, 255, 0.12)',
-        overlay: 'rgba(9, 17, 31, 0.84)',
-        positive: '#ff7a74',
-        negative: '#4fd096',
-        neutral: '#9daccc',
-        chip: 'linear-gradient(90deg, transparent, rgba(103, 165, 255, 0.28))',
-        crosshair: '#9598a1',
-        crosshairLabel: '#363a45',
-    },
-    // AiCoin/Binance 风格加密货币配色：绿涨红跌、近黑背景、淡化网格。
-    crypto_dark: {
-        chartBg: '#0b0e11',
-        text: '#eaecef',
-        grid: 'rgba(255, 255, 255, 0.045)',
-        border: 'rgba(255, 255, 255, 0.08)',
-        overlay: 'rgba(11, 14, 17, 0.85)',
-        positive: '#0ecb81',
-        negative: '#f6465d',
-        neutral: '#848e9c',
-        chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.22))',
-        crosshair: 'rgba(132, 142, 156, 0.6)',
-        crosshairLabel: '#2b3141',
-    },
-    crypto_light: {
-        chartBg: '#ffffff',
-        text: '#1e2329',
-        grid: 'rgba(23, 32, 51, 0.05)',
-        border: 'rgba(23, 32, 51, 0.1)',
-        overlay: 'rgba(255, 255, 255, 0.88)',
-        positive: '#0ecb81',
-        negative: '#f6465d',
-        neutral: '#68778a',
-        chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.18))',
-        crosshair: 'rgba(104, 119, 138, 0.55)',
-        crosshairLabel: '#474d57',
-    }
-};
+// 主题色盘表已抽取到 modules/theme.js（由 applyChartTheme 等 AICoin 主题逻辑消费）。
+const THEME_PALETTES = (window.KLineThemeModule || {}).PALETTES;
 
 function getThemePalette() {
     if (isCryptoMode()) {
@@ -1754,9 +1569,9 @@ function setupChartPanelResizers() {
 // === Crypto console resizer (vertical splitter + collapse) ===
 const CRYPTO_CONSOLE_WIDTH_KEY = 'kline-crypto-console-width-v1';
 const CRYPTO_CONSOLE_COLLAPSED_KEY = 'kline-crypto-console-collapsed-v1';
-const CRYPTO_CONSOLE_DEFAULT_WIDTH = 340;
-const CRYPTO_CONSOLE_MIN_WIDTH = 280;
-const CRYPTO_CONSOLE_MAX_WIDTH = 520;
+const CRYPTO_CONSOLE_DEFAULT_WIDTH = 380;
+const CRYPTO_CONSOLE_MIN_WIDTH = 340;
+const CRYPTO_CONSOLE_MAX_WIDTH = 580;
 
 let cryptoConsoleResizing = false;
 
@@ -1919,6 +1734,7 @@ function resizeCharts() {
         }
         
         scheduleChipDistributionRender();
+        scheduleExtremePriceTagsUpdate();
     }
 }
 
@@ -3051,6 +2867,7 @@ function replaceRenderedKlineData(klineData) {
     applyLastPriceTagColor();
     showLatestChartInfo();
     updateChartTradePriceLines();
+    scheduleExtremePriceTagsUpdate();
 }
 
 function upsertRenderedBar(bar) {
@@ -3062,6 +2879,7 @@ function upsertRenderedBar(bar) {
         applyLastPriceTagColor();
         showLatestChartInfo();
         updateChartTradePriceLines();
+        scheduleExtremePriceTagsUpdate();
         return;
     }
 
@@ -3073,6 +2891,7 @@ function upsertRenderedBar(bar) {
         applyLastPriceTagColor();
         showLatestChartInfo();
         updateChartTradePriceLines();
+        scheduleExtremePriceTagsUpdate();
         return;
     }
 
@@ -3082,6 +2901,7 @@ function upsertRenderedBar(bar) {
     applyLastPriceTagColor();
     showLatestChartInfo();
     updateChartTradePriceLines();
+    scheduleExtremePriceTagsUpdate();
 }
 
 function syncDrawingToolBars() {
@@ -3936,54 +3756,6 @@ async function triggerCryptoOfflineDownload() {
     }
 }
 
-function normalizeChartTime(item) {
-    if (!item) return 0;
-    if (typeof item.time === 'number') return item.time;
-    const rawTime = item.time || item.timestamp || item.end_time || item.start_time || item.datetime;
-    return intradayBarToTimestamp({ time: rawTime });
-}
-
-function normalizeChartCandle(item) {
-    return {
-        time: normalizeChartTime(item),
-        open: Number(item.open),
-        high: Number(item.high),
-        low: Number(item.low),
-        close: Number(item.close),
-        volume: Number(item.volume) || 0,
-    };
-}
-
-function normalizeChartVolume(item) {
-    return {
-        time: normalizeChartTime(item),
-        value: Number(item.value ?? item.volume) || 0,
-        color: item.color || '#999999',
-    };
-}
-
-function normalizeChartMarker(marker) {
-    return {
-        ...marker,
-        time: normalizeChartTime(marker),
-    };
-}
-
-function mergeTimedItems(existingItems, incomingItems, normalizer) {
-    const merged = new Map();
-    [...(existingItems || []), ...(incomingItems || [])].forEach((item) => {
-        const normalized = normalizer(item);
-        if (normalized.time) merged.set(normalized.time, normalized);
-    });
-    return Array.from(merged.values()).sort((left, right) => left.time - right.time);
-}
-
-function normalizeTradeMarkers(markers) {
-    return (markers || [])
-        .map(normalizeChartMarker)
-        .filter((marker) => marker.time)
-        .sort((left, right) => left.time - right.time);
-}
 
 function alignTradeMarkerTimeToRenderedBar(markerTime) {
     const normalizedTime = normalizeChartTime({ time: markerTime });
@@ -4013,67 +3785,6 @@ function syncActiveTradeMarkers(markers) {
     lastKnownTradeCount = normalizedMarkers.length;
 }
 
-function mergeChartWindow(existing, incoming) {
-    const base = existing || createEmptyChartWindowState();
-    const next = incoming || {};
-    const normalizeCandle = (item) => ({ ...normalizeChartCandle(item), time: normalizeChartTime(item) });
-    const normalizeVolume = (item) => ({ ...normalizeChartVolume(item), time: normalizeChartTime(item) });
-    return {
-        ...base,
-        ...next,
-        kline_data: mergeTimedItems(base.kline_data, next.kline_data, normalizeCandle),
-        volume_data: mergeTimedItems(base.volume_data, next.volume_data, normalizeVolume),
-        trade_markers: next.trade_markers !== undefined
-            ? normalizeTradeMarkers(next.trade_markers)
-            : normalizeTradeMarkers(base.trade_markers),
-    };
-}
-
-function parseChartWindowTimestamp(value) {
-    if (value instanceof Date) {
-        return Number.isFinite(value.getTime()) ? new Date(value.getTime()) : null;
-    }
-    if (typeof value === 'number' && Number.isFinite(value)) {
-        return new Date(value < 1e12 ? value * 1000 : value);
-    }
-    if (!value) return null;
-    const numericValue = Number(value);
-    if (/^\d+(?:\.\d+)?$/.test(String(value)) && Number.isFinite(numericValue)) {
-        return new Date(numericValue < 1e12 ? numericValue * 1000 : numericValue);
-    }
-    const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
-    if (!match) return null;
-    return new Date(Date.UTC(
-        Number(match[1]), Number(match[2]) - 1, Number(match[3]),
-        Number(match[4] || 0), Number(match[5] || 0), Number(match[6] || 0)
-    ));
-}
-
-function formatChartWindowTimestamp(date) {
-    const pad = (value) => String(value).padStart(2, '0');
-    return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
-}
-
-function shiftChartWindowYear(value, yearDelta) {
-    const date = parseChartWindowTimestamp(value);
-    if (!date) return value;
-    const originalMonth = date.getUTCMonth();
-    date.setUTCFullYear(date.getUTCFullYear() + yearDelta);
-    if (date.getUTCMonth() !== originalMonth) date.setUTCDate(0);
-    return formatChartWindowTimestamp(date);
-}
-
-function earlierChartWindowTimestamp(left, right) {
-    if (!left) return right || null;
-    if (!right) return left;
-    return parseChartWindowTimestamp(left) <= parseChartWindowTimestamp(right) ? left : right;
-}
-
-function laterChartWindowTimestamp(left, right) {
-    if (!left) return right || null;
-    if (!right) return left;
-    return parseChartWindowTimestamp(left) >= parseChartWindowTimestamp(right) ? left : right;
-}
 
 function setChartWindowStatus(message, type = '') {
     const status = document.getElementById('chart-window-status');
@@ -4273,7 +3984,7 @@ function applyActiveSnapshotToChartWindow(snapshot) {
     if (!chartWindowState.window_start || chartWindowState.read_only) return;
     const windowVolumePalette = getThemePalette();
     const volumeData = (snapshot.kline_data || []).map((bar) => ({
-        time: bar.end_time || bar.start_time || bar.time,
+        time: intradayBarToTimestamp(bar),
         value: Number(bar.volume) || 0,
         color: Number(bar.close) >= Number(bar.open) ? windowVolumePalette.positive : windowVolumePalette.negative,
     }));
@@ -4289,7 +4000,7 @@ function applyActiveSnapshotToChartWindow(snapshot) {
         kline_data: snapshot.kline_data || [],
         volume_data: volumeData,
         trade_markers: chartWindowState.trade_markers || [],
-    });
+    }, { replace: true });
 }
 
 function applyTrainingSnapshot(data, options = {}) {
@@ -4370,6 +4081,7 @@ async function refreshTrainingView(options = {}) {
 function applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory) {
     applyIntradaySnapshot(snapshot, { fitContent: false });
     currentTraining.period = nextPeriod;
+    updatePeriodBadge(nextPeriod);
     const periodBars = snapshot.kline_data || [];
     const renderedStart = latestRenderedKlineData[0]?.time ?? null;
     const renderedEnd = latestRenderedKlineData[latestRenderedKlineData.length - 1]?.time ?? null;
@@ -4499,7 +4211,7 @@ async function loadEarlierCryptoSegment() {
 }
 
 async function switchCryptoViewPeriod(nextPeriod) {
-    if (currentPeriod === nextPeriod && currentTraining?.id) {
+    if (currentPeriod === nextPeriod && currentTraining?.period === nextPeriod && currentTraining?.id) {
         updatePeriodBadge(nextPeriod);
         return;
     }
@@ -4538,12 +4250,10 @@ async function switchCryptoViewPeriod(nextPeriod) {
     );
     const cachedSnapshot = getCryptoPeriodSnapshotCache(cacheKey);
     if (cachedSnapshot) {
-        endPeriodSwitchFeedback();
         applyCryptoPeriodSnapshot(cachedSnapshot, nextPeriod, visibleRange, hadExtendedHistory);
-        setChartWindowStatus('已从缓存切换到 ' + formatIntradayPeriodBadge(nextPeriod) + '。', 'success');
-        return;
+    } else {
+        beginPeriodSwitchFeedback(nextPeriod);
     }
-    beginPeriodSwitchFeedback(nextPeriod);
     try {
         const response = await fetch(API_BASE + '/training/' + currentTraining.id + '/period', {
             method: 'POST',
@@ -4594,65 +4304,8 @@ const CRYPTO_PERIOD_NEIGHBORS = {
 };
 
 function scheduleCryptoPeriodPrefetch(period) {
-    if (!isCryptoMode() || !currentTraining?.id) return;
-    const neighbors = CRYPTO_PERIOD_NEIGHBORS[period] || [];
-    if (!neighbors.length) return;
-    cryptoPeriodPrefetchAbortController?.abort();
-    cryptoPeriodPrefetchAbortController = new AbortController();
-    const generation = ++cryptoPeriodPrefetchGeneration;
-    const signal = cryptoPeriodPrefetchAbortController.signal;
-    const targetTrainingId = String(currentTraining.id);
-    // 延迟一小段，让主切换先完成渲染；预取失败静默忽略。
-    setTimeout(() => {
-        if (generation !== cryptoPeriodPrefetchGeneration) return;
-        void (async () => {
-            const visibleRange = chart?.timeScale().getVisibleRange?.() || null;
-            const visibleStart = cryptoVisibleTimeValue(visibleRange?.from ?? chartWindowState.render_start);
-            const visibleEnd = cryptoVisibleTimeValue(visibleRange?.to ?? chartWindowState.render_end);
-            for (const neighbor of neighbors) {
-                if (generation !== cryptoPeriodPrefetchGeneration) return;
-                if (String(currentTraining?.id || '') !== targetTrainingId) return;
-                const cacheKey = buildCryptoPeriodSnapshotCacheKey(
-                    targetTrainingId,
-                    neighbor,
-                    getCryptoReplayCacheTime(),
-                    chartWindowState,
-                );
-                if (getCryptoPeriodSnapshotCache(cacheKey)) continue;
-                const requestBody = {
-                    period: neighbor,
-                    request_id: 'prefetch-' + generation,
-                    compact_chart: true,
-                };
-                if (isFineCryptoPeriod(neighbor)) {
-                    if (visibleStart !== null) requestBody.visible_start = visibleStart;
-                    if (visibleEnd !== null) requestBody.visible_end = visibleEnd;
-                }
-                if (chartWindowState.extended_history) {
-                    const loadedWindowStart = parseChartWindowTimestamp(chartWindowState.window_start);
-                    const loadedWindowEnd = parseChartWindowTimestamp(chartWindowState.window_end);
-                    if (loadedWindowStart) requestBody.range_start = Math.floor(loadedWindowStart.getTime() / 1000);
-                    if (loadedWindowEnd) requestBody.range_end = Math.floor(loadedWindowEnd.getTime() / 1000);
-                }
-                try {
-                    const response = await fetch(API_BASE + '/training/' + targetTrainingId + '/period', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(requestBody),
-                        signal,
-                    });
-                    if (!response.ok) continue;
-                    const data = await response.json();
-                    if (generation !== cryptoPeriodPrefetchGeneration) return;
-                    const snapshot = extractIntradaySnapshot(data);
-                    if (snapshot) setCryptoPeriodSnapshotCache(cacheKey, snapshot);
-                } catch (error) {
-                    if (error?.name === 'AbortError') return;
-                    // 预取失败静默忽略，下次切换仍会走正常请求
-                }
-            }
-        })();
-    }, 250);
+    // Disabled: Avoid background calls that mutate backend session replay period
+    return;
 }
 
 async function switchViewPeriod(period) {
@@ -4763,7 +4416,7 @@ async function launchQuickTestBtc() {
         symbol: 'BTCUSDT',
         start_time: '2024-07-01 00:00:00',
         data_source: 'binance',
-        period: '5m',
+        period: getSelectedKlinePeriod() || 'daily',
         max_training_days: 30,
         initial_capital: 100000,
         leverage: 10,
@@ -4847,7 +4500,8 @@ function startTrainingWithConfig(trainingConfig) {
             clearSessionDrawings();
             currentTraining = await response.json();
             syncCryptoPeriodSnapshotCacheTraining(currentTraining.id);
-            currentTraining.period = period;
+            currentTraining.period = currentTraining.period || period;
+            updatePeriodBadge(currentTraining.period);
             currentReportData = null;
             hideTrainingSetup();
             document.getElementById('report-interface').classList.add('hidden');
@@ -5141,10 +4795,12 @@ function initializeChart() {
             maybeLoadEarlierCryptoSegment(timeRange);
         }
         scheduleChipDistributionRender();
+        scheduleExtremePriceTagsUpdate();
     });
     
     chart.timeScale().subscribeVisibleTimeRangeChange(() => {
         scheduleChipDistributionRender();
+        scheduleExtremePriceTagsUpdate();
     });
 
     // 监听成交量图表的时间轴变化
@@ -5528,6 +5184,25 @@ function formatCryptoToolbarVolume(value) {
     const unit = units.find(item => Math.abs(numericValue) >= item.threshold);
     if (!unit) return numericValue.toLocaleString();
     return `${Number((numericValue / unit.divisor).toFixed(2))}${unit.suffix}`;
+}
+
+// === Visible Range Extreme Price Tags (AICoin style: High / Low markers) ===
+// 渲染逻辑已抽取到 modules/extreme_tags.js，此处仅保留 raf 调度与全局注入。
+const {
+    updateVisibleExtremePriceTags: updateVisibleExtremePriceTagsFor,
+} = window.KLineExtremeTagsModule || {};
+let extremePriceTagsRafId = null;
+
+function scheduleExtremePriceTagsUpdate() {
+    if (extremePriceTagsRafId) return;
+    extremePriceTagsRafId = requestAnimationFrame(() => {
+        extremePriceTagsRafId = null;
+        updateVisibleExtremePriceTags();
+    });
+}
+
+function updateVisibleExtremePriceTags() {
+    updateVisibleExtremePriceTagsFor(chart, candlestickSeries, latestRenderedKlineData);
 }
 
 function updateElementText(elementId, text, color) {
@@ -8159,12 +7834,12 @@ function renderCryptoPositionCard(account, position, pendingOrders) {
         + (pnlPercent === null ? '' : ' (' + (pnlPercent >= 0 ? '+' : '') + pnlPercent.toFixed(2) + '%)') + '</strong>'
         + '</div>'
         + '<div class="crypto-pos-grid">'
-        + '<div><span>均价/现价</span><strong>' + formatCryptoValue(entryPrice) + ' / ' + formatCryptoValue(markPrice) + '</strong></div>'
-        + '<div><span>持仓量</span><strong>' + formatCryptoValue(quantity) + ' ' + escapeHtml(coin) + '</strong></div>'
-        + '<div><span>保证金</span><strong>' + formatCryptoValue(margin, 2) + ' USDT</strong></div>'
+        + '<div><span>开仓均价</span><strong>' + formatCryptoValue(entryPrice) + '</strong></div>'
+        + '<div><span>标记价格</span><strong>' + formatCryptoValue(markPrice) + '</strong></div>'
+        + '<div><span>持仓数量</span><strong>' + formatCryptoValue(quantity) + ' ' + escapeHtml(coin) + '</strong></div>'
+        + '<div><span>持仓保证金</span><strong>' + formatCryptoValue(margin, 2) + ' USDT</strong></div>'
         + '<div><span>预估强平价</span><strong style="color: #ff3b30; font-weight: 700;">' + (liquidation > 0 ? formatCryptoValue(liquidation) : '0.00 (全仓安全)') + '</strong></div>'
-        + '<div><span>止盈</span><strong class="tp">' + (protective.tp > 0 ? formatCryptoValue(protective.tp) : '--') + '</strong></div>'
-        + '<div><span>止损</span><strong class="sl">' + (protective.sl > 0 ? formatCryptoValue(protective.sl) : '--') + '</strong></div>'
+        + '<div><span>止盈 / 止损</span><strong>' + (protective.tp > 0 ? formatCryptoValue(protective.tp) : '--') + ' / ' + (protective.sl > 0 ? formatCryptoValue(protective.sl) : '--') + '</strong></div>'
         + '</div>'
         + '<div class="crypto-pos-actions">'
         + '<button type="button" data-crypto-pos-action="tpsl" class="btn-pos-action">止盈止损</button>'
