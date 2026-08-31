@@ -28,7 +28,18 @@ class CryptoPeriod(str, Enum):
 
     @classmethod
     def parse(cls, value: "CryptoPeriod | str") -> "CryptoPeriod":
-        return value if isinstance(value, cls) else cls(value)
+        if isinstance(value, cls):
+            return value
+        val = str(value).strip().lower()
+        aliases = {
+            "1d": cls.DAILY,
+            "1w": cls.WEEKLY,
+            "d": cls.DAILY,
+            "w": cls.WEEKLY,
+        }
+        if val in aliases:
+            return aliases[val]
+        return cls(val)
 
 @dataclass(frozen=True)
 class CryptoInstrument:
