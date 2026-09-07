@@ -53,6 +53,13 @@ const {
     earlierChartWindowTimestamp,
     laterChartWindowTimestamp,
 } = window.KLineChartWindowCore || {};
+const {
+    clearTradingHoursBands,
+    drawTradingHoursBands,
+    getTradingHours,
+    isIntradayCryptoPeriod,
+    setTradingHours,
+} = window.KLineTradingHoursModule || {};
 let chartWindowState = createEmptyChartWindowState();
 let chartWindowRequestChain = Promise.resolve();
 let chartWindowRequestGeneration = 0;
@@ -365,6 +372,7 @@ function updatePeriodBadge(period) {
     document.querySelectorAll('.view-period-btn').forEach((button) => {
         button.classList.toggle('active', button.dataset.period === currentPeriod);
     });
+    scheduleTradingHoursBandsUpdate();
 }
 
 async function persistUserSettings(partialSettings) {
@@ -435,6 +443,7 @@ function sleep(ms) {
 }
 
 function applyChartTheme() {
+    scheduleTradingHoursBandsUpdate();
     const palette = getThemePalette();
     const infoDisplay = document.getElementById('chart-info-display');
     if (infoDisplay) {
@@ -957,6 +966,7 @@ async function initializeApp() {
                         applyTheme(settings.theme, true, false);
                     }
                     applyCryptoTheme(settings.crypto_theme || currentCryptoTheme, true, false);
+                    applyTradingHoursFromSettings(settings);
                 }).catch(e => console.error(e));
         }
     } catch (error) {
@@ -1111,6 +1121,7 @@ function setupEventListeners() {
         applyTheme(currentTheme === 'dark' ? 'light' : 'dark', true, true);
     });
     document.getElementById('crypto-theme-toggle-btn')?.addEventListener('click', toggleCryptoTheme);
+    initTradingHours();
     document.getElementById('data-sync-btn')?.addEventListener('click', showDataSyncModal);
     document.getElementById('confirm-sync-btn')?.addEventListener('click', syncOfflineData);
     document.getElementById('cancel-sync-btn')?.addEventListener('click', hideDataSyncModal);
@@ -1735,6 +1746,7 @@ function resizeCharts() {
         
         scheduleChipDistributionRender();
         scheduleExtremePriceTagsUpdate();
+        scheduleTradingHoursBandsUpdate();
     }
 }
 
@@ -1870,6 +1882,7 @@ function selectUser(username) {
                 applyTheme(settings.theme, true, false);
             }
             applyCryptoTheme(settings.crypto_theme || currentCryptoTheme, true, false);
+            applyTradingHoursFromSettings(settings);
         }).catch(e => console.error(e));
 }
 
@@ -2391,6 +2404,7 @@ async function loadUserSettings() {
         document.getElementById('stamp-tax-rate').value = (settings.stamp_tax_rate * 1000).toFixed(1);
         document.getElementById('theme-select').value = settings.theme || currentTheme;
         applyCryptoTheme(settings.crypto_theme || currentCryptoTheme, true, false);
+        applyTradingHoursFromSettings(settings);
         document.getElementById('adjustment-mode').value = 'forward';
         const adjustmentRadio = document.querySelector('input[name="adjustment"][value="forward"]');
         if (adjustmentRadio) {
@@ -2549,6 +2563,7 @@ function setTrainingMarketType(marketType) {
 }
 
 function syncCryptoWorkspaceMode() {
+    scheduleTradingHoursBandsUpdate();
     const active = isCryptoMode();
     const mainApp = document.getElementById('main-app');
     mainApp?.classList.toggle('crypto-training-active', active);
@@ -3353,6 +3368,61 @@ function setVisibleTimeRangeAll(range) {
     });
 }
 
+/**
+ * 快速回到当前最新 K 线页，并复位价格刻度自适应
+ * @param {Object} [options]
+ * @param {boolean} [options.autoScale=true] 是否同时复位价格刻度自适应
+ * @param {number} [options.visibleBars=75] 默认展示的 K 线根数
+ * @param {number} [options.rightOffset=5] 右侧留白根数
+ */
+function scrollToLatestKline(options = {}) {
+    const {
+        autoScale = true,
+        visibleBars = 75,
+        rightOffset = 5,
+    } = options;
+    const totalBars = latestRenderedKlineData?.length || 0;
+    if (totalBars > 0) {
+        const to = totalBars - 1 + rightOffset;
+        const from = Math.max(0, to - visibleBars);
+        setVisibleRangeAll({ from, to });
+    } else if (chart) {
+        chart.timeScale().resetTimeScale();
+    }
+    if (autoScale) {
+        try {
+            chart?.priceScale('right')?.applyOptions({ autoScale: true });
+            volumeChart?.priceScale('right')?.applyOptions({ autoScale: true });
+            indicatorChart?.priceScale('right')?.applyOptions({ autoScale: true });
+        } catch (e) {
+            console.warn('复位价格轴自适应失败:', e);
+        }
+    }
+    updateJumpToLatestBtnVisibility();
+}
+
+/**
+ * 动态更新“回到最新K线”浮动按钮的可见性
+ * 当视野右侧滑离最新蜡烛（最新 K 线在视口外）时显示，视野处于最新附近时隐藏
+ */
+function updateJumpToLatestBtnVisibility(logicalRange) {
+    const jumpBtn = document.getElementById('jump-to-latest-btn');
+    if (!jumpBtn) return;
+    const totalBars = latestRenderedKlineData?.length || 0;
+    if (totalBars <= 0) {
+        jumpBtn.classList.add('hidden');
+        return;
+    }
+    const currentRange = logicalRange || chart?.timeScale().getVisibleLogicalRange?.();
+    if (!currentRange || !Number.isFinite(currentRange.to)) {
+        jumpBtn.classList.add('hidden');
+        return;
+    }
+    // 当视野最右侧落后于最新 K 线一定距离（例如大于 8 根 K 棒），提示可以回到最新
+    const isAwayFromLatest = currentRange.to < (totalBars - 8);
+    jumpBtn.classList.toggle('hidden', !isAwayFromLatest);
+}
+
 let lastSelectedRiskDrawingModel = null;
 
 /**
@@ -4078,7 +4148,7 @@ async function refreshTrainingView(options = {}) {
     await updateChipDistribution();
 }
 
-function applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory) {
+function applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory, wasNearLatest = false) {
     applyIntradaySnapshot(snapshot, { fitContent: false });
     currentTraining.period = nextPeriod;
     updatePeriodBadge(nextPeriod);
@@ -4104,28 +4174,29 @@ function applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtend
         kline_data: periodBars,
         volume_data: periodVolumes,
     };
-    const canRestoreRange = visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)
+    const canRestoreRange = !wasNearLatest && visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)
         && visibleRange.from >= renderedStart && visibleRange.to <= renderedEnd;
     requestAnimationFrame(() => {
+        if (wasNearLatest) {
+            // 用户在原周期看的就是最新 K 线，切换周期后直接定位到新周期的最新 K 线页
+            scrollToLatestKline();
+            return;
+        }
         if (canRestoreRange) {
             // 首选：保持原时间段（AiCoin 式，切换不丢位置）
             setVisibleTimeRangeAll(visibleRange);
             return;
         }
-        // 数据不足时夹紧缩放：尽量贴住原时间段，而不是 fitContent 跳全图
+        // 数据不足或时间段无交集时：优先展示新周期的最新走势，避免跳到远古历史
         if (visibleRange && Number.isFinite(renderedStart) && Number.isFinite(renderedEnd)) {
             const clampedFrom = Math.max(visibleRange.from, renderedStart);
             const clampedTo = Math.min(visibleRange.to, renderedEnd);
-            if (clampedTo > clampedFrom) {
+            if (clampedTo > clampedFrom && (clampedTo - clampedFrom) >= 10) {
                 setVisibleTimeRangeAll({ from: clampedFrom, to: clampedTo });
                 return;
             }
-            // 新周期窗口完全不与原时间段重叠（如从日线切到 1m 且窗口极小），
-            // 贴住新窗口末端，避免跳走太远
-            setVisibleTimeRangeAll({ from: renderedEnd, to: renderedEnd });
-            return;
         }
-        setVisibleTimeRangeAll(null);
+        scrollToLatestKline();
     });
 }
 
@@ -4224,6 +4295,10 @@ async function switchCryptoViewPeriod(nextPeriod) {
     periodSwitchAbortController = new AbortController();
     const requestGeneration = ++periodSwitchGeneration;
     const visibleRange = chart.timeScale().getVisibleRange?.() || null;
+    const visibleLogicalRange = chart.timeScale().getVisibleLogicalRange?.() || null;
+    const totalBarsBefore = latestRenderedKlineData?.length || 0;
+    // 判断切换前用户是否正处于最新 K 线附近（右侧距最新 <= 8 根或超出）
+    const wasNearLatest = Boolean(visibleLogicalRange && Number.isFinite(visibleLogicalRange.to) && (visibleLogicalRange.to >= totalBarsBefore - 8));
     const requestBody = {
         period: nextPeriod,
         request_id: requestGeneration,
@@ -4250,7 +4325,7 @@ async function switchCryptoViewPeriod(nextPeriod) {
     );
     const cachedSnapshot = getCryptoPeriodSnapshotCache(cacheKey);
     if (cachedSnapshot) {
-        applyCryptoPeriodSnapshot(cachedSnapshot, nextPeriod, visibleRange, hadExtendedHistory);
+        applyCryptoPeriodSnapshot(cachedSnapshot, nextPeriod, visibleRange, hadExtendedHistory, wasNearLatest);
     } else {
         beginPeriodSwitchFeedback(nextPeriod);
     }
@@ -4269,7 +4344,7 @@ async function switchCryptoViewPeriod(nextPeriod) {
         if (requestGeneration !== periodSwitchGeneration) return;
         const snapshot = extractIntradaySnapshot(data);
         setCryptoPeriodSnapshotCache(cacheKey, snapshot);
-        applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory);
+        applyCryptoPeriodSnapshot(snapshot, nextPeriod, visibleRange, hadExtendedHistory, wasNearLatest);
         setChartWindowStatus('已切换到 ' + formatIntradayPeriodBadge(nextPeriod) + '。', 'success');
         scheduleCryptoPeriodPrefetch(nextPeriod);
     } catch (error) {
@@ -4794,13 +4869,16 @@ function initializeChart() {
             indicatorChart.timeScale().setVisibleLogicalRange(timeRange);
             maybeLoadEarlierCryptoSegment(timeRange);
         }
+        updateJumpToLatestBtnVisibility(timeRange);
         scheduleChipDistributionRender();
         scheduleExtremePriceTagsUpdate();
+        scheduleTradingHoursBandsUpdate();
     });
     
     chart.timeScale().subscribeVisibleTimeRangeChange(() => {
         scheduleChipDistributionRender();
         scheduleExtremePriceTagsUpdate();
+        scheduleTradingHoursBandsUpdate();
     });
 
     // 监听成交量图表的时间轴变化
@@ -5021,6 +5099,16 @@ function initializeChart() {
         }
     });
 
+    // 绑定右下角“回到最新K线”浮动按钮点击事件
+    const jumpToLatestBtn = document.getElementById('jump-to-latest-btn');
+    if (jumpToLatestBtn && !jumpToLatestBtn.dataset.bound) {
+        jumpToLatestBtn.dataset.bound = 'true';
+        jumpToLatestBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            scrollToLatestKline();
+        });
+    }
+
     initializeDrawingTools();
 }
 
@@ -5203,6 +5291,127 @@ function scheduleExtremePriceTagsUpdate() {
 
 function updateVisibleExtremePriceTags() {
     updateVisibleExtremePriceTagsFor(chart, candlestickSeries, latestRenderedKlineData);
+}
+
+// === 做单时段色带（仅币圈 4H 以下周期；时段与开关在图表工具栏"做单"处配置） ===
+let tradingHoursRafId = null;
+let tradingHoursEnabled = true;
+
+function scheduleTradingHoursBandsUpdate() {
+    if (tradingHoursRafId) return;
+    tradingHoursRafId = requestAnimationFrame(() => {
+        tradingHoursRafId = null;
+        renderTradingHoursBands();
+    });
+}
+
+function renderTradingHoursBands() {
+    const chartContainer = document.getElementById('chart');
+    if (!chart || !chartContainer) return;
+    const scoped = isCryptoMode() && isIntradayCryptoPeriod(currentPeriod);
+    const controls = document.getElementById('trading-hours-controls');
+    if (controls) {
+        controls.classList.toggle('hidden', !scoped);
+        controls.classList.toggle('disabled', !tradingHoursEnabled);
+    }
+    const toggleBtn = document.getElementById('trading-hours-toggle-btn');
+    if (toggleBtn) {
+        toggleBtn.classList.toggle('active', tradingHoursEnabled);
+        toggleBtn.setAttribute('aria-pressed', String(tradingHoursEnabled));
+    }
+    const trainingHidden = document.getElementById('training-interface')?.classList.contains('hidden');
+    if (!scoped || trainingHidden || !tradingHoursEnabled) {
+        clearTradingHoursBands(chartContainer);
+        return;
+    }
+    const rightScaleWidth = Number(chart.priceScale?.('right')?.width?.()) || 0;
+    drawTradingHoursBands({
+        chart,
+        container: chartContainer,
+        hours: getTradingHours(),
+        color: getThemePalette().sessionBand,
+        rightPad: rightScaleWidth,
+    });
+}
+
+function updateTradingHoursControls() {
+    const hours = getTradingHours();
+    const startSelect = document.getElementById('trading-hours-start');
+    const endSelect = document.getElementById('trading-hours-end');
+    if (startSelect) startSelect.value = String(hours.start);
+    if (endSelect) endSelect.value = String(hours.end);
+}
+
+function populateTradingHoursControls() {
+    const startSelect = document.getElementById('trading-hours-start');
+    const endSelect = document.getElementById('trading-hours-end');
+    if (startSelect && startSelect.options.length === 0) {
+        startSelect.innerHTML = Array.from({ length: 24 }, (_, h) =>
+            `<option value="${h}">${String(h).padStart(2, '0')}:00</option>`).join('');
+    }
+    if (endSelect && endSelect.options.length === 0) {
+        endSelect.innerHTML = Array.from({ length: 24 }, (_, i) => {
+            const h = i + 1;
+            return `<option value="${h}">${h === 24 ? '24:00' : String(h).padStart(2, '0') + ':00'}</option>`;
+        }).join('');
+    }
+    updateTradingHoursControls();
+}
+
+function applyTradingHoursFromSettings(settings) {
+    const start = Number(settings?.trading_hours_start);
+    const end = Number(settings?.trading_hours_end);
+    if (Number.isInteger(start) && start >= 0 && start <= 23) setTradingHours(start, getTradingHours().end);
+    if (Number.isInteger(end) && end >= 1 && end <= 24) setTradingHours(getTradingHours().start, end);
+    if (settings?.trading_hours_enabled !== undefined) {
+        tradingHoursEnabled = Number(settings.trading_hours_enabled) === 1 || settings.trading_hours_enabled === true;
+    }
+    updateTradingHoursControls();
+    scheduleTradingHoursBandsUpdate();
+}
+
+function saveTradingHoursLocal() {
+    localStorage.setItem('tradingHours', JSON.stringify({
+        start: getTradingHours().start,
+        end: getTradingHours().end,
+        enabled: tradingHoursEnabled,
+    }));
+}
+
+function onTradingHoursChange() {
+    const startValue = document.getElementById('trading-hours-start')?.value;
+    const endValue = document.getElementById('trading-hours-end')?.value;
+    const hours = setTradingHours(startValue, endValue);
+    saveTradingHoursLocal();
+    persistUserSettings({
+        trading_hours_start: hours.start,
+        trading_hours_end: hours.end,
+        trading_hours_enabled: tradingHoursEnabled ? 1 : 0,
+    });
+    renderTradingHoursBands();
+}
+
+function onTradingHoursToggle() {
+    tradingHoursEnabled = !tradingHoursEnabled;
+    saveTradingHoursLocal();
+    persistUserSettings({ trading_hours_enabled: tradingHoursEnabled ? 1 : 0 });
+    renderTradingHoursBands();
+}
+
+function initTradingHours() {
+    try {
+        const saved = JSON.parse(localStorage.getItem('tradingHours') || 'null');
+        if (saved) {
+            setTradingHours(saved.start, saved.end);
+            if (typeof saved.enabled === 'boolean') tradingHoursEnabled = saved.enabled;
+        }
+    } catch (error) {
+        console.error('读取做单时段设置失败:', error);
+    }
+    populateTradingHoursControls();
+    document.getElementById('trading-hours-start')?.addEventListener('change', onTradingHoursChange);
+    document.getElementById('trading-hours-end')?.addEventListener('change', onTradingHoursChange);
+    document.getElementById('trading-hours-toggle-btn')?.addEventListener('click', onTradingHoursToggle);
 }
 
 function updateElementText(elementId, text, color) {

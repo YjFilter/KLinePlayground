@@ -25,6 +25,7 @@
             chip: 'linear-gradient(90deg, transparent, rgba(15, 111, 255, 0.28))',
             crosshair: '#758696',
             crosshairLabel: '#758696',
+            sessionBand: 'rgba(23, 92, 255, 0.045)',
         },
         dark: {
             chartBg: '#121d31',
@@ -38,6 +39,7 @@
             chip: 'linear-gradient(90deg, transparent, rgba(103, 165, 255, 0.28))',
             crosshair: '#9598a1',
             crosshairLabel: '#363a45',
+            sessionBand: 'rgba(103, 165, 255, 0.06)',
         },
         // AiCoin/Binance 风格加密货币配色：绿涨红跌、近黑背景、淡化网格。
         crypto_dark: {
@@ -52,6 +54,7 @@
             chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.22))',
             crosshair: 'rgba(132, 142, 156, 0.6)',
             crosshairLabel: '#2b3141',
+            sessionBand: 'rgba(240, 185, 11, 0.05)',
         },
         crypto_light: {
             chartBg: '#ffffff',
@@ -65,6 +68,7 @@
             chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.18))',
             crosshair: 'rgba(104, 119, 138, 0.55)',
             crosshairLabel: '#474d57',
+            sessionBand: 'rgba(240, 165, 11, 0.07)',
         }
     };
 

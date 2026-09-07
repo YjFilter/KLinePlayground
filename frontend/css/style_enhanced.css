@@ -3331,6 +3331,7 @@ body.chart-dragging-order, body.chart-dragging-order * {
 /* AICoin-inspired crypto training workspace */
 #main-app.crypto-training-active,
 #main-app.crypto-training-active[data-crypto-theme="dark"] {
+    color-scheme: dark;
     --crypto-shell: #0b0e11;
     --crypto-panel: #11161c;
     --crypto-panel-raised: #171d24;
@@ -3365,7 +3366,13 @@ body.chart-dragging-order, body.chart-dragging-order * {
     color: var(--crypto-text);
 }
 
+#main-app.crypto-training-active select option {
+    background-color: #1e2026;
+    color: #eaecef;
+}
+
 #main-app.crypto-training-active[data-crypto-theme="light"] {
+    color-scheme: light;
     --crypto-shell: #f3f6fa;
     --crypto-panel: #ffffff;
     --crypto-panel-raised: #edf2f7;
@@ -3398,6 +3405,11 @@ body.chart-dragging-order, body.chart-dragging-order * {
     --scroll-thumb: #bcc8d6;
     background: var(--crypto-shell);
     color: var(--crypto-text);
+}
+
+#main-app.crypto-training-active[data-crypto-theme="light"] select option {
+    background-color: #ffffff;
+    color: #182230;
 }
 
 #main-app.crypto-training-active .toolbar {
@@ -4813,4 +4825,260 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pending-order-actions .crypto-cancel-order {
     border-color: #74343b;
     color: #ff8b94;
+}
+
+/* === 做单时段色带与工具栏时段选择 === */
+.chart-panels #chart {
+    position: relative;
+}
+
+.trading-hours-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+/* 做单时间高亮控件：紧凑微胶囊风格，完全融入币圈 AiCoin/Binance 顶部工具栏 */
+.trading-hours-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: opacity 0.15s, border-color 0.15s, background-color 0.15s;
+}
+
+.trading-hours-controls.hidden {
+    display: none;
+}
+
+.trading-hours-controls .trading-hours-sep {
+    font-size: 10px;
+    color: var(--crypto-muted, #848e9c);
+    opacity: 0.6;
+    user-select: none;
+    padding: 0 1px;
+}
+
+.trading-hours-controls select {
+    min-height: 20px;
+    height: 20px;
+    padding: 0 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--crypto-strong-text, #eaecef);
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    color-scheme: dark;
+    transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+}
+
+.trading-hours-controls select:hover {
+    border-color: rgba(240, 185, 11, 0.35);
+    background: rgba(255, 255, 255, 0.07);
+    color: #fff;
+}
+
+.trading-hours-controls select:focus {
+    border-color: rgba(240, 185, 11, 0.55);
+    background: rgba(240, 185, 11, 0.06);
+}
+
+.trading-hours-controls select option {
+    background-color: #1e2026;
+    color: #eaecef;
+    padding: 5px 8px;
+    font-size: 11px;
+}
+
+.trading-hours-controls select option:checked {
+    background-color: rgba(240, 185, 11, 0.25);
+    color: #f0b90b;
+    font-weight: 600;
+}
+
+.trading-hours-toggle-btn {
+    min-height: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--crypto-muted, #848e9c);
+    font-size: 11px;
+    line-height: 1.2;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s, background-color 0.15s, border-color 0.15s;
+}
+
+.trading-hours-toggle-btn:hover {
+    color: var(--crypto-strong-text, #eaecef);
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.trading-hours-toggle-btn.active {
+    border-color: rgba(240, 185, 11, 0.4);
+    background: rgba(240, 185, 11, 0.12);
+    color: #f0b90b;
+    font-weight: 500;
+}
+
+/* 关闭状态：静音弱化 */
+.trading-hours-controls.disabled {
+    opacity: 0.55;
+    border-color: transparent;
+    background: transparent;
+}
+
+.trading-hours-controls.disabled .trading-hours-toggle-btn {
+    border-color: transparent;
+    background: transparent;
+    color: var(--crypto-muted, #848e9c);
+}
+
+.trading-hours-controls.disabled select {
+    border-color: transparent;
+    background: transparent;
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+.trading-hours-controls.disabled .trading-hours-sep {
+    opacity: 0.3;
+}
+
+/* === 亮色主题完全统一自适应（匹配 [data-crypto-theme="light"] 与 [data-theme="light"]） === */
+#main-app[data-crypto-theme="light"] .trading-hours-controls,
+[data-theme="light"] .trading-hours-controls {
+    border-color: rgba(0, 0, 0, 0.1);
+    background: rgba(0, 0, 0, 0.03);
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-controls .trading-hours-sep,
+[data-theme="light"] .trading-hours-controls .trading-hours-sep {
+    color: #68778a;
+    opacity: 0.7;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-controls select,
+[data-theme="light"] .trading-hours-controls select {
+    color-scheme: light;
+    border-color: rgba(0, 0, 0, 0.12);
+    background: #ffffff;
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-controls select:hover,
+[data-theme="light"] .trading-hours-controls select:hover {
+    border-color: rgba(185, 135, 0, 0.5);
+    background: #f8fafc;
+    color: #101828;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-controls select:focus,
+[data-theme="light"] .trading-hours-controls select:focus {
+    border-color: #b98700;
+    box-shadow: 0 0 0 1px rgba(185, 135, 0, 0.2);
+    background: #ffffff;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-controls select option,
+[data-theme="light"] .trading-hours-controls select option {
+    background-color: #ffffff;
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-controls select option:checked,
+[data-theme="light"] .trading-hours-controls select option:checked {
+    background-color: rgba(185, 135, 0, 0.15);
+    color: #b98700;
+    font-weight: 600;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-toggle-btn,
+[data-theme="light"] .trading-hours-toggle-btn {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-toggle-btn:hover,
+[data-theme="light"] .trading-hours-toggle-btn:hover {
+    color: #182230;
+    background: rgba(0, 0, 0, 0.05);
+}
+
+#main-app[data-crypto-theme="light"] .trading-hours-toggle-btn.active,
+[data-theme="light"] .trading-hours-toggle-btn.active {
+    border-color: rgba(185, 135, 0, 0.4);
+    background: rgba(185, 135, 0, 0.12);
+    color: #b98700;
+}
+
+/* === 回到最新 K 线浮动按钮（参考 AiCoin / TradingView 经典交互，支持亮暗双主题） === */
+.jump-to-latest-btn {
+    position: absolute;
+    right: 86px;
+    bottom: 30px;
+    z-index: 26;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    background: rgba(22, 27, 34, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--crypto-muted, #8491a3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(4px);
+    transition: opacity 0.2s ease, transform 0.2s ease, background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.jump-to-latest-btn svg {
+    flex-shrink: 0;
+}
+
+.jump-to-latest-btn:hover {
+    background: rgba(30, 36, 46, 0.98);
+    border-color: rgba(240, 185, 11, 0.55);
+    color: #f0b90b;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+
+.jump-to-latest-btn.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(6px);
+}
+
+/* 亮色主题完全统一 */
+#main-app[data-crypto-theme="light"] .jump-to-latest-btn,
+[data-theme="light"] .jump-to-latest-btn {
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    color: #55657e;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+#main-app[data-crypto-theme="light"] .jump-to-latest-btn:hover,
+[data-theme="light"] .jump-to-latest-btn:hover {
+    background: #ffffff;
+    border-color: rgba(185, 135, 0, 0.6);
+    color: #b98700;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }

@@ -585,6 +585,12 @@
                                 <button id="toggle-indicator-panel-btn" type="button" aria-controls="indicator-chart" aria-expanded="true">指标</button>
                                 <button id="indicator-library-btn" type="button" title="指标库">指标库</button>
                                 <button id="crypto-theme-toggle-btn" type="button" class="hidden" data-crypto-workspace-only aria-label="切换币圈明暗主题" aria-pressed="false" title="切换为浅色主题">☀</button>
+                                <div id="trading-hours-controls" class="trading-hours-controls hidden" role="group" aria-label="做单时间高亮">
+                                    <button id="trading-hours-toggle-btn" type="button" class="trading-hours-toggle-btn active" aria-pressed="true" title="开启/关闭做单时段背景色带">做单</button>
+                                    <select id="trading-hours-start" aria-label="做单开始时间"></select>
+                                    <span class="trading-hours-sep">–</span>
+                                    <select id="trading-hours-end" aria-label="做单结束时间"></select>
+                                </div>
                                 <button id="chart-fullscreen-btn" type="button" aria-controls="chart-panels" aria-label="全屏图表">全屏</button>
                             </div>
                         </div>
@@ -621,6 +627,10 @@
                 </div>
                 <div id="chart-panels" class="chart-panels">
                     <button id="chart-focus-exit-btn" type="button" class="hidden" aria-label="退出全屏图表" title="退出全屏">退出全屏</button>
+                    <button id="jump-to-latest-btn" type="button" class="jump-to-latest-btn hidden" aria-label="回到最新K线" title="快速回到当前最新K线页">
+                        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3.5l4.5 4.5-4.5 4.5M9.5 3.5l4.5 4.5-4.5 4.5"/></svg>
+                        <span>最新</span>
+                    </button>
                     <span id="drawing-status" class="drawing-status" aria-live="polite"></span>
                     <div id="drawing-fibonacci-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="斐波那契设置">
                         <div class="drawing-settings-header"><strong>斐波那契档位</strong><button type="button" data-fibonacci-action="close" aria-label="关闭斐波那契设置">×</button></div>
@@ -1032,6 +1042,7 @@
     <script src="js/modules/position.js"></script>
     <script src="js/modules/chart_window_core.js"></script>
     <script src="js/modules/period_snapshot_cache.js"></script>
+    <script src="js/modules/trading_hours.js"></script>
     <script src="js/main_enhanced.js"></script>
 </body>
 </html>
