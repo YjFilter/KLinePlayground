@@ -72,6 +72,7 @@
                 <div id="current-bar-id" class="bar-id-display"></div>
             </div>
             <div class="toolbar-right">
+                <button id="ashare-live-watch-btn" class="btn btn-warning" title="进入 A 股 1分钟实时看盘与模拟下单" style="background: linear-gradient(135deg, #ff5722 0%, #ff9800 100%); color: #ffffff; font-weight: 600; border: none; box-shadow: 0 2px 8px rgba(255, 87, 34, 0.35);">📈 A股实时看盘</button>
                 <button id="quick-test-btc-btn" class="btn btn-warning" title="使用 2024 年 BTC 离线数据一键秒开训练，用于快速测试各项功能" style="background: linear-gradient(135deg, #f0b90b 0%, #f39c12 100%); color: #1e2329; font-weight: 600; border: none; box-shadow: 0 2px 8px rgba(240, 185, 11, 0.35);">⚡ 快速测试(BTC)</button>
                 <button id="theme-toggle-btn" class="btn btn-secondary">深色主题</button>
                 <button id="data-sync-btn" class="btn btn-secondary">数据更新器</button>
@@ -144,6 +145,14 @@
                                 <input type="number" id="macd-fast" value="10" min="1" max="100">
                                 <input type="number" id="macd-slow" value="20" min="1" max="200">
                                 <input type="number" id="macd-signal" value="5" min="1" max="100">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>MACD2 大周期 (快 / 慢 / 信号)</label>
+                            <div class="inline-inputs">
+                                <input type="number" id="macd2-fast" value="80" min="1" max="500">
+                                <input type="number" id="macd2-slow" value="160" min="1" max="1000">
+                                <input type="number" id="macd2-signal" value="40" min="1" max="500">
                             </div>
                         </div>
                         <div class="form-group">
@@ -473,10 +482,52 @@
             </div>
         </div>
 
+        <div id="ashare-search-modal" class="modal hidden">
+            <div class="modal-content" style="max-width: 420px;">
+                <h2>搜索 A 股标的</h2>
+                <div class="form-group" style="margin: 12px 0;">
+                    <input type="search" id="ashare-search-input" placeholder="输入股票代码或拼音缩写，如 600519 / gzmt" style="width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box; border: 1px solid rgba(128,128,128,0.3); border-radius: 4px; background: inherit; color: inherit;">
+                </div>
+                <div id="ashare-search-results" style="max-height: 240px; overflow-y: auto; margin-bottom: 12px; border: 1px solid rgba(128,128,128,0.15); border-radius: 4px; padding: 4px;"></div>
+                <div class="modal-actions">
+                    <button id="close-ashare-search-btn" class="btn btn-secondary">关闭</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="ashare-balance-modal" class="modal hidden">
+            <div class="modal-content" style="max-width: 380px;">
+                <h2>调整模拟资产与持仓</h2>
+                <div class="form-group" style="margin: 10px 0;">
+                    <label>可用现金 (元)</label>
+                    <input type="number" id="ashare-modal-cash" min="0" step="10000" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid rgba(128,128,128,0.3); border-radius: 4px; background: inherit; color: inherit;">
+                </div>
+                <div class="form-group" style="margin: 10px 0;">
+                    <label>当前标的可用持仓 (股，100整倍数)</label>
+                    <input type="number" id="ashare-modal-avail-shares" min="0" step="100" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid rgba(128,128,128,0.3); border-radius: 4px; background: inherit; color: inherit;">
+                </div>
+                <div class="form-group" style="margin: 10px 0;">
+                    <label>持仓成本均价 (元)</label>
+                    <input type="number" id="ashare-modal-avg-cost" min="0" step="0.01" style="width: 100%; padding: 6px; box-sizing: border-box; border: 1px solid rgba(128,128,128,0.3); border-radius: 4px; background: inherit; color: inherit;">
+                </div>
+                <div style="display: flex; gap: 8px; margin: 12px 0;">
+                    <button id="ashare-modal-unfreeze-btn" type="button" class="btn btn-secondary" style="flex: 1; font-size: 11px; padding: 4px 6px;" title="解除今日买入冻结，模拟次日持仓全部转为可用">⚡ 解冻T+1持仓</button>
+                    <button id="ashare-modal-reset-btn" type="button" class="btn btn-secondary" style="flex: 1; font-size: 11px; padding: 4px 6px; color: #ff7875;" title="清空持仓并重置现金为 10 万元">↺ 重置为10万</button>
+                </div>
+                <div class="modal-actions">
+                    <button id="cancel-ashare-balance-btn" class="btn btn-secondary">取消</button>
+                    <button id="save-ashare-balance-btn" class="btn btn-primary">保存生效</button>
+                </div>
+            </div>
+        </div>
+
         <div id="training-interface" class="training-workspace hidden">
             <aside class="left-panel workspace-sidebar">
                 <div class="control-section">
-                    <h3>账户信息</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <h3 style="margin: 0;">账户信息</h3>
+                        <button id="ashare-adjust-balance-btn" class="btn btn-secondary hidden" style="font-size: 11px; padding: 2px 6px;" title="微调模拟账户现金与持仓">调整资产</button>
+                    </div>
                     <div class="account-info">
                         <div class="info-item"><span>总资产</span><span id="total-assets">¥100,000</span></div>
                         <div class="info-item"><span>可用资金</span><span id="available-cash">¥100,000</span></div>
@@ -489,6 +540,10 @@
                     <h3>训练控制</h3>
                     <div class="training-controls">
                         <div id="training-progress" class="progress-info">进度: 0%</div>
+                        <div id="ashare-live-status-badge" class="hidden" style="color: #ff9800; font-size: 12px; margin-bottom: 6px; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff9800;"></span>
+                            <span>实时轮询中 (1分钟心跳)</span>
+                        </div>
                         <button id="end-training-btn" class="btn btn-warning">结束训练</button>
                         <button id="reset-training-btn" class="btn btn-secondary">重置训练</button>
                     </div>
@@ -523,25 +578,71 @@
                 </div>
             </aside>
 
+            <!-- A股实时看盘：AICoin 风格自选/收藏股票面板 -->
+            <aside id="ashare-live-watchlist-panel" class="ashare-live-watchlist-panel hidden" data-ashare-live-only>
+                <div class="ashare-wl-topbar">
+                    <div class="ashare-wl-tabs">
+                        <button class="ashare-wl-tab active" data-wl-tab="custom">自选</button>
+                        <button class="ashare-wl-tab" data-wl-tab="holding">持仓</button>
+                        <button class="ashare-wl-tab" data-wl-tab="index">指数</button>
+                    </div>
+                    <button id="ashare-wl-collapse-btn" class="ashare-wl-icon-btn" title="收起自选股面板">◀</button>
+                </div>
+
+                <div class="ashare-wl-table-head">
+                    <div class="ashare-wl-col-head col-symbol">名称</div>
+                    <div class="ashare-wl-col-head col-price" id="ashare-wl-sort-price" title="按价格排序">最新价 <span class="sort-arrow">↕</span></div>
+                    <div class="ashare-wl-col-head col-change" id="ashare-wl-sort-change" title="按涨跌幅排序">今日涨幅 <span class="sort-arrow">↕</span></div>
+                </div>
+
+                <div id="ashare-watchlist-items" class="ashare-wl-list">
+                    <!-- 动态渲染自选股票列表 -->
+                </div>
+
+                <div class="ashare-wl-footer">
+                    <button id="ashare-wl-add-btn" class="ashare-wl-add-btn">
+                        <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" style="vertical-align: -1px; margin-right: 4px;"><path d="M8 2a.75.75 0 0 1 .75.75v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5A.75.75 0 0 1 8 2z"/></svg>添加自选
+                    </button>
+                </div>
+            </aside>
+
             <main class="chart-container chart-workbench" style="position: relative;">
                 <div class="chart-header">
                     <div class="market-period-toolbar">
                         <div class="stock-info">
+                            <button id="ashare-wl-expand-btn" class="btn btn-secondary hidden" style="padding: 1px 6px; font-size: 11px; margin-right: 4px; vertical-align: middle;" title="展开自选股面板">▶ 自选</button>
                             <span id="stock-name">股票名称</span>
-                            <span id="current-period" class="period-badge">日K</span>
-                            <span id="current-date">当前日期</span>
+                            <button id="ashare-live-search-btn" class="btn btn-secondary hidden" style="padding: 1px 6px; font-size: 11px; margin-left: 2px; vertical-align: middle;" title="搜索并切换股票">🔍 换股</button>
                             <span id="current-price">当前价格</span>
+                            <span id="ashare-header-change" class="ashare-header-change">--</span>
+                            <span id="ashare-live-market-status" class="ashare-header-status-pill">--</span>
+                            <span id="current-date">当前日期</span>
+                            <span id="current-period" class="period-badge">日K</span>
+                            <button id="ashare-live-exit-btn" type="button" class="ashare-live-exit-btn hidden" title="退出实时看盘返回主页">✕ 退出看盘</button>
                         </div>
                         <div class="chart-actions">
                             <div class="view-period-switch">
-                                <!-- 分钟组 -->
+                                <!-- A股实时看盘专用周期组（同花顺标准：日、周、月 | 1分、5分、15分、30分、60分、120分、240分） -->
+                                <button class="view-period-btn ashare-live-period hidden active" data-period="daily">日</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="weekly">周</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="monthly">月</button>
+                                <span class="toolbar-group-separator ashare-live-period hidden"></span>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="1m">1分</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="5m">5分</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="15m">15分</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="30m">30分</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="60m">60分</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="120m">120分</button>
+                                <button class="view-period-btn ashare-live-period hidden" data-period="240m">240分</button>
+
+                                <!-- 分钟组 (Crypto / Replay) -->
                                 <button class="view-period-btn crypto-view-period hidden" data-period="1m">1m</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="3m">3m</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="5m">5m</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="15m">15m</button>
                                 <button class="view-period-btn shared-view-period" data-period="30m">30m</button>
-                                <span class="toolbar-group-separator"></span>
-                                <!-- 小时组 -->
+                                <span class="toolbar-group-separator crypto-view-separator"></span>
+                                <!-- 小时组 (Crypto / Replay) -->
                                 <button class="view-period-btn crypto-view-period hidden" data-period="1h">1h</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="2h">2h</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="3h">3h</button>
@@ -550,8 +651,8 @@
                                 <button class="view-period-btn crypto-view-period hidden" data-period="6h">6h</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="8h">8h</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="12h">12h</button>
-                                <span class="toolbar-group-separator"></span>
-                                <!-- 日周组 -->
+                                <span class="toolbar-group-separator crypto-view-separator"></span>
+                                <!-- 日周组 (Crypto / Replay) -->
                                 <button class="view-period-btn shared-view-period active" data-period="daily">1D</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="2d">2D</button>
                                 <button class="view-period-btn crypto-view-period hidden" data-period="3d">3D</button>
@@ -559,21 +660,23 @@
                             </div>
                             <div class="toolbar-group-separator"></div>
                             <div id="drawing-toolbar" class="drawing-toolbar" role="toolbar" aria-label="画线工具">
-                                <button type="button" data-drawing-tool="select" aria-label="选择绘图" aria-pressed="false" title="选择"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.8v9.4l2.4-2.2 1.5 3.2 1.6-.7-1.5-3.2 3.2-.5z" fill="currentColor"/></svg></button>
-                                <button type="button" data-drawing-tool="trend" aria-label="趋势线" aria-pressed="false" title="趋势线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="4.2" y1="11.8" x2="11.8" y2="4.2"/><circle cx="4.2" cy="11.8" r="1.2" fill="currentColor" stroke="none"/><circle cx="11.8" cy="4.2" r="1.2" fill="currentColor" stroke="none"/></svg></button>
-                                <button type="button" data-drawing-tool="horizontal" aria-label="水平线" aria-pressed="false" title="水平线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/><circle cx="3" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="13" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>
-                                <button type="button" data-drawing-tool="ray" aria-label="射线" aria-pressed="false" title="射线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="12" x2="11.4" y2="5.4"/><path d="M11.4 5.4l-3 .4M11.4 5.4l-.4 3"/></svg></button>
-                                <button type="button" data-drawing-tool="rectangle" aria-label="矩形区间" aria-pressed="false" title="矩形区间"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.6" width="10" height="6.8" rx="0.8"/></svg></button>
-                                <button type="button" data-drawing-tool="text" aria-label="文字标注" aria-pressed="false" title="文字标注"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4.2 4.4h7.6M8 4.4v7.6"/></svg></button>
-<button type="button" data-drawing-tool="fibonacci" aria-label="斐波那契回撤" aria-pressed="false" title="斐波那契"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M3.2 12.6 12.8 3.4" stroke-width="1.3"/><path d="M3.2 6.4h6M3.2 9.2h7.6" stroke-width="1.2"/></svg></button>
+                                <button type="button" data-drawing-tool="select" aria-label="选择绘图" aria-pressed="false" title="选择 (Alt+Q)"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.8v9.4l2.4-2.2 1.5 3.2 1.6-.7-1.5-3.2 3.2-.5z" fill="currentColor"/></svg></button>
+                                <button type="button" data-drawing-tool="trend" aria-label="趋势线" aria-pressed="false" title="趋势线 (Alt+T)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="4.2" y1="11.8" x2="11.8" y2="4.2"/><circle cx="4.2" cy="11.8" r="1.2" fill="currentColor" stroke="none"/><circle cx="11.8" cy="4.2" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+                                <button type="button" data-drawing-tool="horizontal" aria-label="水平线" aria-pressed="false" title="水平线 (Alt+H)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="8" x2="13" y2="8"/><circle cx="3" cy="8" r="1.2" fill="currentColor" stroke="none"/><circle cx="13" cy="8" r="1.2" fill="currentColor" stroke="none"/></svg></button>
+                                <button type="button" data-drawing-tool="ray" aria-label="射线" aria-pressed="false" title="射线 (Alt+R)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="12" x2="11.4" y2="5.4"/><path d="M11.4 5.4l-3 .4M11.4 5.4l-.4 3"/></svg></button>
+                                <button type="button" data-drawing-tool="rectangle" aria-label="矩形区间" aria-pressed="false" title="矩形区间 (Alt+B)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.6" width="10" height="6.8" rx="0.8"/></svg></button>
+                                <button type="button" data-drawing-tool="text" aria-label="文字标注" aria-pressed="false" title="文字标注 (Alt+X)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4.2 4.4h7.6M8 4.4v7.6"/></svg></button>
+<button type="button" data-drawing-tool="fibonacci" aria-label="斐波那契回撤" aria-pressed="false" title="斐波那契 (Alt+F)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M3.2 12.6 12.8 3.4" stroke-width="1.3"/><path d="M3.2 6.4h6M3.2 9.2h7.6" stroke-width="1.2"/></svg></button>
 <button type="button" data-drawing-tool="fib-trend-time" aria-label="斐波那契趋势时间" aria-pressed="false" title="斐波那契趋势时间"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true"><path d="M2.6 3.6h10.8M2.6 6.9h8.2M2.6 10.2h5.6M2.6 13.4h3.2" stroke-width="1.2" stroke-dasharray="2.2 1.8"/></svg></button>
-<button type="button" data-drawing-tool="ruler" aria-label="量尺" aria-pressed="false" title="量尺"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 8h8.8"/><path d="M5.6 5.9 3.4 8l2.2 2.1M10.4 5.9 12.6 8l-2.2 2.1"/></svg></button>
-                                <button type="button" data-drawing-tool="long-position" aria-label="做多测算" aria-pressed="false" title="做多测算"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 12.6h8.8"/><path d="M8 10.8V4.2M8 4.2 5.7 6.5M8 4.2l2.3 2.3"/></svg></button>
-                                <button type="button" data-drawing-tool="short-position" aria-label="做空测算" aria-pressed="false" title="做空测算"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 3.4h8.8"/><path d="M8 5.2v6.6M8 11.8 5.7 9.5M8 11.8l2.3-2.3"/></svg></button>
+<button type="button" data-drawing-tool="ruler" aria-label="量尺" aria-pressed="false" title="量尺 (Alt+M)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 8h8.8"/><path d="M5.6 5.9 3.4 8l2.2 2.1M10.4 5.9 12.6 8l-2.2 2.1"/></svg></button>
+                                <button type="button" data-drawing-tool="polyline" aria-label="连续折线" aria-pressed="false" title="连续折线 (Alt+Z)：左键单击加点，右键/双击/Enter 结束"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.2 12.2 6.6 6.8l2.6 3.2 3.6-5.6"/><circle cx="3.2" cy="12.2" r="1.1" fill="currentColor" stroke="none"/><circle cx="9.2" cy="10" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.8" cy="4.4" r="1.1" fill="currentColor" stroke="none"/></svg></button>
+                                <button type="button" data-drawing-tool="long-position" aria-label="做多测算" aria-pressed="false" title="做多测算 (Alt+L)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 12.6h8.8"/><path d="M8 10.8V4.2M8 4.2 5.7 6.5M8 4.2l2.3 2.3"/></svg></button>
+                                <button type="button" data-drawing-tool="short-position" aria-label="做空测算" aria-pressed="false" title="做空测算 (Alt+S)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 3.4h8.8"/><path d="M8 5.2v6.6M8 11.8 5.7 9.5M8 11.8l2.3-2.3"/></svg></button>
                                 <button type="button" id="drawing-magnet-btn" data-drawing-action="magnet" aria-label="磁吸模式 (吸附OHLC)" aria-pressed="false" title="磁吸模式 (吸附高低开收点，按住Ctrl强吸，按住Alt禁用)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 3.5v4.2a4.5 4.5 0 0 0 9 0V3.5"/><path d="M3.5 6h3M9.5 6h3"/><rect x="2.5" y="2.5" width="2" height="2.5" fill="currentColor"/><rect x="11.5" y="2.5" width="2" height="2.5" fill="currentColor"/></svg></button>
+                                <button type="button" id="alert-add-btn" class="alert-add-btn hidden" data-alert-action="add" aria-label="价格预警" aria-pressed="false" title="添加价格预警：点击后在图上点一下落线，价格穿越该价位时弹窗提醒 (Alt+A)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.6a4 4 0 0 1 8 0c0 3 1.2 4 1.2 4H2.8S4 9.6 4 6.6z"/><path d="M6.5 12.9a1.7 1.7 0 0 0 3 0"/></svg></button>
                                 <span class="drawing-toolbar-divider"></span>
                                 <button type="button" data-drawing-action="lock" aria-label="锁定或解锁选中图形" title="锁定"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="8" height="5.6" rx="1"/><path d="M5.6 7V5.6a2.4 2.4 0 0 1 4.8 0V7" stroke-linecap="round"/></svg></button>
-                                <button type="button" data-drawing-action="hide" aria-label="隐藏或显示选中图形" title="隐藏"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8S4.9 4.6 8 4.6 13.4 8 13.4 8 11.1 11.4 8 11.4 2.6 8 2.6 8z"/><circle cx="8" cy="8" r="1.6"/></svg></button>
+                                <button type="button" data-drawing-action="hide" aria-label="隐藏所有画线" title="隐藏所有画线"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" aria-hidden="true"><path d="M2.6 8S4.9 4.6 8 4.6 13.4 8 13.4 8 11.1 11.4 8 11.4 2.6 8 2.6 8z"/><circle cx="8" cy="8" r="1.6"/></svg></button>
                                 <button type="button" data-drawing-action="delete" aria-label="删除选中图形" title="删除"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.6 4.8h8.8"/><path d="M6.4 4.8V3.6h3.2v1.2"/><path d="M5 4.8l.4 7.6h5.2l.4-7.6"/><path d="M6.9 7v3.4M9.1 7v3.4"/></svg></button>
                                 <button type="button" data-drawing-action="undo" aria-label="撤销绘图操作" title="撤销"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.6 4.6 4.2 7l2.4 2.4"/><path d="M4.2 7h5.2a3.3 3.3 0 0 1 0 6.6H6.6"/></svg></button>
                                 <button type="button" data-drawing-action="redo" aria-label="重做绘图操作" title="重做"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.4 4.6 11.8 7 9.4 9.4"/><path d="M11.8 7H6.6a3.3 3.3 0 0 0 0 6.6h2.8"/></svg></button>
@@ -584,6 +687,7 @@
                                 <button id="toggle-volume-panel-btn" type="button" aria-controls="volume-chart" aria-expanded="true">成交量</button>
                                 <button id="toggle-indicator-panel-btn" type="button" aria-controls="indicator-chart" aria-expanded="true">指标</button>
                                 <button id="indicator-library-btn" type="button" title="指标库">指标库</button>
+                                <button id="chart-bar-replay-btn" type="button" class="btn-chart-panel-control" aria-pressed="false" title="K线截断复盘 (Alt+P)：点击后在图上任选一根K线断开进行历史回放"><svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" style="vertical-align: -1px; margin-right: 3px;"><path d="M2.5 3.5a.75.75 0 0 1 .75.75v7.5a.75.75 0 0 1-1.5 0v-7.5A.75.75 0 0 1 2.5 3.5zm3.177 4.146l6-4A.75.75 0 0 1 12.8 4.25v7.5a.75.75 0 0 1-1.123.646l-6-4a.75.75 0 0 1 0-1.292z"/></svg>复盘</button>
                                 <button id="crypto-theme-toggle-btn" type="button" class="hidden" data-crypto-workspace-only aria-label="切换币圈明暗主题" aria-pressed="false" title="切换为浅色主题">☀</button>
                                 <div id="trading-hours-controls" class="trading-hours-controls hidden" role="group" aria-label="做单时间高亮">
                                     <button id="trading-hours-toggle-btn" type="button" class="trading-hours-toggle-btn active" aria-pressed="true" title="开启/关闭做单时段背景色带">做单</button>
@@ -594,6 +698,16 @@
                                 <button id="chart-fullscreen-btn" type="button" aria-controls="chart-panels" aria-label="全屏图表">全屏</button>
                             </div>
                         </div>
+                    </div>
+                    <!-- 层级 3: 当日行情统计横条 (高/低/开/昨收/量/额/振幅) -->
+                    <div id="ashare-live-header-metrics" class="ashare-live-header-metrics hidden">
+                        <span class="metric-item"><span class="lbl">高</span><strong id="ashare-live-metric-high">--</strong></span>
+                        <span class="metric-item"><span class="lbl">低</span><strong id="ashare-live-metric-low">--</strong></span>
+                        <span class="metric-item"><span class="lbl">开</span><strong id="ashare-live-metric-open">--</strong></span>
+                        <span class="metric-item"><span class="lbl">昨收</span><strong id="ashare-live-metric-prev">--</strong></span>
+                        <span class="metric-item"><span class="lbl">量</span><strong id="ashare-live-metric-vol">--</strong></span>
+                        <span class="metric-item"><span class="lbl">额</span><strong id="ashare-live-metric-amt">--</strong></span>
+                        <span class="metric-item"><span class="lbl">振幅</span><strong id="ashare-live-metric-amp">--</strong></span>
                     </div>
                 </div>
                 <div class="chart-window-toolbar" aria-label="历史走势加载">
@@ -626,11 +740,56 @@
                     </div>
                 </div>
                 <div id="chart-panels" class="chart-panels">
-                    <button id="chart-focus-exit-btn" type="button" class="hidden" aria-label="退出全屏图表" title="退出全屏">退出全屏</button>
+                    <button id="chart-focus-exit-btn" type="button" class="hidden" aria-label="退出全屏图表" title="退出全屏 (ESC)"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align: -1px; margin-right: 4px;"><path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4"/></svg>退出全屏</button>
                     <button id="jump-to-latest-btn" type="button" class="jump-to-latest-btn hidden" aria-label="回到最新K线" title="快速回到当前最新K线页">
                         <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3.5l4.5 4.5-4.5 4.5M9.5 3.5l4.5 4.5-4.5 4.5"/></svg>
                         <span>最新</span>
                     </button>
+                    <!-- K线截断复盘辅助指示器 (跟随光标移动的垂直虚线与截断标记) -->
+                    <div id="chart-replay-cut-indicator" class="chart-replay-cut-indicator hidden" aria-hidden="true">
+                        <div class="cut-indicator-line"></div>
+                        <div class="cut-indicator-badge">« 截断至此</div>
+                    </div>
+                    <!-- K线截断复盘浮动控制栏 (截断后展示在主图上方，支持按住手柄自由拖动) -->
+                    <div id="chart-bar-replay-bar" class="chart-bar-replay-bar hidden" role="toolbar" aria-label="K线截断复盘控制栏">
+                        <div class="replay-bar-drag-handle" title="按住拖动控制栏">
+                            <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" style="opacity: 0.75;"><path d="M5 3a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm6-10a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0zm0 5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0z"/></svg>
+                            <span>⏮ 复盘中</span>
+                        </div>
+                        <div class="replay-bar-divider"></div>
+                        <button id="replay-reselect-cut-btn" type="button" class="replay-bar-btn" title="重选截断起点">
+                            <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M2.5 3.5a.75.75 0 0 1 .75.75v7.5a.75.75 0 0 1-1.5 0v-7.5A.75.75 0 0 1 2.5 3.5zm3.177 4.146l6-4A.75.75 0 0 1 12.8 4.25v7.5a.75.75 0 0 1-1.123.646l-6-4a.75.75 0 0 1 0-1.292z"/></svg>
+                            <span>选起点</span>
+                        </button>
+                        <button id="replay-play-pause-btn" type="button" class="replay-bar-btn replay-play-btn" title="播放 / 暂停 (空格键)">
+                            <svg class="icon-play" viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M4 3.5a.5.5 0 0 1 .78-.415l8 4.5a.5.5 0 0 1 0 .83l-8 4.5A.5.5 0 0 1 4 12.5v-9z"/></svg>
+                            <svg class="icon-pause hidden" viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M4.5 3.5A1.5 1.5 0 0 1 6 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5zm7 0A1.5 1.5 0 0 1 13 5v6a1.5 1.5 0 0 1-3 0V5a1.5 1.5 0 0 1 1.5-1.5z"/></svg>
+                        </button>
+                        <button id="replay-step-forward-btn" type="button" class="replay-bar-btn" title="步进一根K线 (→ 方向键)">
+                            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M3.5 3.5a.5.5 0 0 1 .78-.415l6 3.5a.5.5 0 0 1 0 .83l-6 3.5A.5.5 0 0 1 3.5 10.5v-7zm7.5 0a.75.75 0 0 1 .75.75v6.5a.75.75 0 0 1-1.5 0v-6.5a.75.75 0 0 1 .75-.75z"/></svg>
+                            <span>前进</span>
+                        </button>
+                        <div class="replay-bar-speed-group">
+                            <label for="replay-speed-select" class="sr-only">播放速度</label>
+                            <select id="replay-speed-select" class="replay-speed-select" title="播放间隔">
+                                <option value="300">0.3s/根</option>
+                                <option value="500">0.5s/根</option>
+                                <option value="1000" selected>1.0s/根</option>
+                                <option value="2000">2.0s/根</option>
+                                <option value="3000">3.0s/根</option>
+                            </select>
+                        </div>
+                        <div class="replay-bar-divider"></div>
+                        <div class="replay-bar-progress">
+                            <span id="replay-progress-time" class="replay-progress-time">--</span>
+                            <span id="replay-progress-fraction" class="replay-progress-fraction">(--/--)</span>
+                        </div>
+                        <div class="replay-bar-divider"></div>
+                        <button id="replay-exit-btn" type="button" class="replay-bar-btn replay-exit-btn" title="退出复盘并回到当前最新行情 (ESC)">
+                            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+                            <span>回到最新</span>
+                        </button>
+                    </div>
                     <span id="drawing-status" class="drawing-status" aria-live="polite"></span>
                     <div id="drawing-fibonacci-settings" class="drawing-settings drawing-settings-popover hidden" aria-label="斐波那契设置">
                         <div class="drawing-settings-header"><strong>斐波那契档位</strong><button type="button" data-fibonacci-action="close" aria-label="关闭斐波那契设置">×</button></div>
@@ -700,23 +859,17 @@
                     <div id="chart" class="chart" data-panel="main"></div>
                     <div class="chart-panel-splitter" data-before-panel="chart" data-after-panel="volume-chart" role="separator" aria-orientation="horizontal" aria-label="调整K线图和成交量图高度" tabindex="0"></div>
                     <div id="volume-chart" class="volume-chart" data-panel="volume"></div>
-                    <div class="chart-panel-splitter" data-before-panel="volume-chart" data-after-panel="indicator-chart" role="separator" aria-orientation="horizontal" aria-label="调整成交量图和技术指标图高度" tabindex="0"></div>
+                    <div class="chart-panel-splitter" id="indicator-splitter" data-before-panel="volume-chart" data-after-panel="indicator-chart" role="separator" aria-orientation="horizontal" aria-label="调整成交量图和技术指标图高度" tabindex="0"></div>
                     <div id="indicator-chart" class="indicator-chart" data-panel="indicator">
-                        <div id="indicator-header" class="indicator-header">
-                            <select id="indicator-select" class="hidden" aria-hidden="true" tabindex="-1" title="技术指标">
-                                <option value="MACD">MACD</option>
-                                <option value="KDJ">KDJ</option>
-                                <option value="RSI">RSI</option>
-                                <option value="BOLL">BOLL</option>
-                            </select>
-                            <button id="indicator-header-picker" type="button" class="indicator-header-picker" title="切换技术指标" aria-haspopup="dialog" aria-label="切换技术指标">
-                                <span id="indicator-type-name" class="indicator-type-name">MACD</span>
-                                <span id="indicator-type-params" class="indicator-type-params">(10,20,5)</span>
-                                <span class="indicator-header-caret" aria-hidden="true">▾</span>
-                            </button>
-                            <span id="indicator-values" class="indicator-values"></span>
-                        </div>
-                        <div id="indicator-canvas" class="indicator-canvas"></div>
+                        <select id="indicator-select" class="hidden" aria-hidden="true" tabindex="-1" title="技术指标">
+                            <option value="MACD">MACD</option>
+                            <option value="MACD2">MACD2</option>
+                            <option value="KDJ">KDJ</option>
+                            <option value="RSI">RSI</option>
+                            <option value="BOLL">BOLL</option>
+                        </select>
+                        <div id="subcharts-wrapper" class="subcharts-wrapper"></div>
+                        <div id="indicator-canvas" class="indicator-canvas hidden" style="display:none;"></div>
                     </div>
                     <div id="indicator-library-panel" class="ind-lib-panel hidden">
                         <div class="ind-lib-header">
@@ -760,7 +913,144 @@
                     </div>
                 </div>
 
-                <div class="control-section">
+                <!-- ========================================== -->
+                <!-- A股实时看盘与模拟交易专属控制台 (data-ashare-live-only) -->
+                <!-- ========================================== -->
+
+                <!-- 1. A股账户资产卡片 -->
+                <div id="ashare-live-account-section" class="control-section account-console-section hidden" data-ashare-live-only>
+                    <div class="ashare-section-header">
+                        <h3>账户</h3>
+                        <button id="ashare-live-adjust-btn" type="button" class="ashare-gear-btn" title="调整初始现金与可用持仓">⚙</button>
+                    </div>
+                    <div class="account-info ashare-account-info">
+                        <div class="info-item"><span>总资产</span><span id="ashare-live-total-assets">¥100,000.00</span></div>
+                        <div class="info-item"><span>可用资金</span><span id="ashare-live-available-cash">¥100,000.00</span></div>
+                        <div class="info-item"><span>持仓市值</span><span id="ashare-live-position-value">¥0.00</span></div>
+                        <div class="info-item"><span>浮动盈亏</span><span id="ashare-live-floating-pnl">¥0.00 (+0.00%)</span></div>
+                    </div>
+                </div>
+
+                <!-- 2. 当前标的持仓卡片 -->
+                <div id="ashare-live-position-section" class="control-section position-console-section hidden" data-ashare-live-only>
+                    <div class="ashare-section-header">
+                        <h3>当前持仓</h3>
+                        <button id="ashare-live-unfreeze-btn" type="button" class="btn btn-secondary ashare-btn-mini hidden" title="模拟次日开盘：一键解冻今日买入持仓">次日解冻</button>
+                    </div>
+                    <div id="ashare-live-positions" class="positions-list">
+                        <div class="no-positions">暂无持仓</div>
+                    </div>
+                    <div class="ashare-section-header" style="margin-top: 10px;">
+                        <h3>限价挂单</h3>
+                    </div>
+                    <div id="ashare-live-orders" class="positions-list">
+                        <div class="no-positions">暂无挂单</div>
+                    </div>
+                </div>
+
+                <!-- 3. A股模拟下单面板 -->
+                <div id="ashare-live-order-section" class="control-section order-console-section hidden" data-ashare-live-only>
+                    <div class="ashare-section-header">
+                        <h3>股票交易</h3>
+                    </div>
+                    <div class="ashare-direction-buttons" role="group" aria-label="买卖方向">
+                        <button type="button" id="ashare-tab-buy" class="ashare-direction-buy active" data-action="buy">买入</button>
+                        <button type="button" id="ashare-tab-sell" class="ashare-direction-sell" data-action="sell">卖出</button>
+                    </div>
+
+                    <!-- 买入子面板 -->
+                    <div id="ashare-buy-subpanel" class="ashare-trade-subpanel">
+                        <div class="ashare-order-grid">
+                            <label>委托方式
+                                <div class="ashare-order-type-switch" data-target="buy">
+                                    <button type="button" class="ashare-order-type-btn active" data-otype="market">市价</button>
+                                    <button type="button" class="ashare-order-type-btn" data-otype="limit">限价</button>
+                                </div>
+                            </label>
+                            <label>委托价格
+                                <div class="ashare-price-field" id="ashare-buy-price-display">--</div>
+                                <input type="number" id="ashare-buy-limit-price" class="ashare-limit-input hidden" min="0.01" step="0.01" placeholder="限价" inputmode="decimal">
+                            </label>
+                        </div>
+                        <div class="ashare-input-group">
+                            <div class="ashare-input-header">
+                                <label for="ashare-buy-lots">买入数量 (手)</label>
+                                <span class="ashare-hint-text">最大可买 <strong id="ashare-max-buy-lots">0</strong> 手</span>
+                            </div>
+                            <div class="ashare-input-wrapper">
+                                <input type="number" id="ashare-buy-lots" min="1" step="1" value="1" placeholder="手数" inputmode="numeric">
+                                <span class="ashare-input-suffix">手 (100股)</span>
+                            </div>
+                        </div>
+                        <div class="fraction-buttons ashare-fraction-buttons" data-target="buy">
+                            <button type="button" data-ashare-fraction="0.25">25%</button>
+                            <button type="button" data-ashare-fraction="0.5">50%</button>
+                            <button type="button" data-ashare-fraction="0.75">75%</button>
+                            <button type="button" data-ashare-fraction="1">全部</button>
+                        </div>
+                        <div class="ashare-order-preview">
+                            <div><span>预估金额 (含佣金)</span><strong id="ashare-buy-total-cost">¥0.00</strong></div>
+                            <div><span>成交后剩余可用</span><strong id="ashare-buy-remain-cash">¥0.00</strong></div>
+                        </div>
+                        <button id="ashare-submit-buy" type="button" class="ashare-submit-btn buy">提交买入委托</button>
+                        <div class="ashare-rule-note">
+                            <span>ℹ A股现货仅做多无空头；买入为100股整倍数；当日买入股票冻结，T+1次日方可卖出。</span>
+                        </div>
+                    </div>
+
+                    <!-- 卖出子面板 -->
+                    <div id="ashare-sell-subpanel" class="ashare-trade-subpanel hidden">
+                        <div class="ashare-order-grid">
+                            <label>委托方式
+                                <div class="ashare-order-type-switch" data-target="sell">
+                                    <button type="button" class="ashare-order-type-btn active" data-otype="market">市价</button>
+                                    <button type="button" class="ashare-order-type-btn" data-otype="limit">限价</button>
+                                </div>
+                            </label>
+                            <label>委托价格
+                                <div class="ashare-price-field" id="ashare-sell-price-display">--</div>
+                                <input type="number" id="ashare-sell-limit-price" class="ashare-limit-input hidden" min="0.01" step="0.01" placeholder="限价" inputmode="decimal">
+                            </label>
+                        </div>
+                        <div class="ashare-input-group">
+                            <div class="ashare-input-header">
+                                <label for="ashare-sell-lots">卖出数量 (手)</label>
+                                <span class="ashare-hint-text">可用持仓 <strong id="ashare-max-sell-lots">0</strong> 手</span>
+                            </div>
+                            <div class="ashare-input-wrapper">
+                                <input type="number" id="ashare-sell-lots" min="1" step="1" value="1" placeholder="手数" inputmode="numeric">
+                                <span class="ashare-input-suffix">手 (100股)</span>
+                            </div>
+                        </div>
+                        <div class="fraction-buttons ashare-fraction-buttons" data-target="sell">
+                            <button type="button" data-ashare-fraction="0.25">25%</button>
+                            <button type="button" data-ashare-fraction="0.5">50%</button>
+                            <button type="button" data-ashare-fraction="0.75">75%</button>
+                            <button type="button" data-ashare-fraction="1">全部</button>
+                        </div>
+                        <div class="ashare-order-preview">
+                            <div><span>预估回笼 (扣费)</span><strong id="ashare-sell-total-revenue">¥0.00</strong></div>
+                            <div><span>今日冻结 (T+1)</span><strong id="ashare-sell-frozen-hint" style="color: #ff9800;">0 股</strong></div>
+                        </div>
+                        <button id="ashare-submit-sell" type="button" class="ashare-submit-btn sell">提交卖出委托</button>
+                        <div class="ashare-rule-note">
+                            <span id="ashare-sell-rule-tip">ℹ 卖出受限于可用持仓；当日买入股票冻结中不可卖出。</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. 模拟成交记录卡片 -->
+                <div id="ashare-live-history-section" class="info-section record-console-section hidden" data-ashare-live-only>
+                    <div class="ashare-section-header">
+                        <h3>交易记录</h3>
+                        <button id="ashare-clear-history-btn" type="button" class="ashare-clear-link" title="清空全部历史交易记录">清空</button>
+                    </div>
+                    <div id="ashare-live-trade-history" class="trade-list">
+                        <div class="no-trades">暂无交易记录</div>
+                    </div>
+                </div>
+
+                <div class="control-section" data-replay-only>
                     <div class="playback-controls" style="margin-bottom: 5px;">
                         <button id="play-pause-btn" class="btn btn-primary">
                             <span class="play-icon">▶</span>
@@ -798,7 +1088,7 @@
                     </div>
                 </div>
 
-                <div class="control-section position-console-section">
+                <div class="control-section position-console-section" data-replay-only>
                     <h3>当前持仓</h3>
                     <div id="current-positions" class="positions-list">
                         <div class="no-positions">暂无持仓</div>
@@ -944,7 +1234,7 @@
                                 <label class="crypto-tpsl-input sl">止损价<input type="number" id="crypto-sl-price" min="0" step="0.01" placeholder="选填"></label>
                                 <span id="crypto-sl-pnl" class="crypto-tpsl-pnl sl"></span>
                             </div>
-                            <p class="crypto-tpsl-note">按标记价触发，触发后以市价平仓；止盈止损仅随开仓单生效。</p>
+                            <p class="crypto-tpsl-note">按标记价触发，触发后以市价平仓；开仓后也可直接在图上拖动止盈/止损线补设或改价（平仓限价任意价位皆可挂）。</p>
                         </div>
                     </div>
                     <div class="crypto-tpsl-section crypto-riskcalc-section" data-crypto-workspace-only>
@@ -1001,7 +1291,7 @@
                     </div>
                 </div>
                         </aside>
-                <div id="crypto-console-collapsed-tab" class="crypto-console-collapsed-tab hidden" data-crypto-workspace-only role="button" tabindex="0" aria-label="展开交易台" title="展开交易台">交易台</div>
+                <div id="crypto-console-collapsed-tab" class="crypto-console-collapsed-tab hidden" data-crypto-workspace-only role="button" tabindex="0" aria-label="展开交易台" title="展开交易台 (点击重新展开)"><span class="collapsed-tab-icon">‹</span><span class="collapsed-tab-text">交易台</span></div>
         </div>
 
         <div id="report-interface" class="hidden">
@@ -1043,6 +1333,9 @@
     <script src="js/modules/chart_window_core.js"></script>
     <script src="js/modules/period_snapshot_cache.js"></script>
     <script src="js/modules/trading_hours.js"></script>
+    <script src="js/modules/ashare_trading.js"></script>
+    <script src="js/modules/price_alerts.js"></script>
+    <script src="js/modules/bar_replay.js"></script>
     <script src="js/main_enhanced.js"></script>
 </body>
 </html>

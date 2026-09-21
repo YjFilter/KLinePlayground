@@ -7,7 +7,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const th = require('../../frontend/js/modules/trading_hours.js');
 
-// 图表 X 轴时间戳直接对应墙上时间（如 08:00 即 08:00:00 UTC）
+// 图表显示层已按北京时间（UTC+8）渲染，时段窗口按东八区换算回 UTC 时间戳：
+// 北京 08:00 = 00:00:00Z，北京 24:00 = 16:00:00Z（当日）。
 const day0 = Date.UTC(2026, 7, 30, 0, 0, 0) / 1000;
 const iso = (sec) => new Date(sec * 1000).toISOString();
 
@@ -20,27 +21,36 @@ test('周期门控：4H 及以下才显示时段色带（包含 4H）', () => {
     }
 });
 
-test('8-24 全天窗口：整日可视返回单段（精确对齐 08:00~24:00）', () => {
+test('8-24 全天窗口：默认东八区，可视返回单段（北京 08:00~24:00 = 00:00Z~16:00Z）', () => {
     const segments = th.computeTradingHourSegments(day0, day0 + 86400, { start: 8, end: 24 });
     assert.equal(segments.length, 1);
-    assert.equal(iso(segments[0][0]), '2026-08-30T08:00:00.000Z'); // 08:00
-    assert.equal(iso(segments[0][1]), '2026-08-31T00:00:00.000Z'); // 24:00
+    assert.equal(iso(segments[0][0]), '2026-08-30T00:00:00.000Z');
+    assert.equal(iso(segments[0][1]), '2026-08-30T16:00:00.000Z');
 });
 
-test('22-06 跨午夜窗口：可视日内两段', () => {
-    const segments = th.computeTradingHourSegments(day0, day0 + 86400, { start: 22, end: 6 });
+test('显式 tzOffsetMinutes=0 可覆盖默认值，窗口按图表时间原文对齐', () => {
+    const segments = th.computeTradingHourSegments(day0, day0 + 86400, { start: 8, end: 24 }, 0);
+    assert.equal(segments.length, 1);
+    assert.equal(iso(segments[0][0]), '2026-08-30T08:00:00.000Z');
+    assert.equal(iso(segments[0][1]), '2026-08-31T00:00:00.000Z');
+});
+
+test('22-06 跨午夜窗口：北京一整日内两段', () => {
+    const from = day0 - 8 * 3600; // 北京 08-30 00:00
+    const to = day0 + 16 * 3600;  // 北京 08-31 00:00
+    const segments = th.computeTradingHourSegments(from, to, { start: 22, end: 6 });
     assert.equal(segments.length, 2);
-    // 00:00-06:00（前夜窗口的尾段）
-    assert.equal(iso(segments[0][0]), '2026-08-30T00:00:00.000Z');
-    assert.equal(iso(segments[0][1]), '2026-08-30T06:00:00.000Z');
-    // 22:00-24:00
-    assert.equal(iso(segments[1][0]), '2026-08-30T22:00:00.000Z');
-    assert.equal(iso(segments[1][1]), '2026-08-31T00:00:00.000Z');
+    // 北京 00:00-06:00 = 16:00Z-22:00Z（前一日）
+    assert.equal(iso(segments[0][0]), '2026-08-29T16:00:00.000Z');
+    assert.equal(iso(segments[0][1]), '2026-08-29T22:00:00.000Z');
+    // 北京 22:00-24:00 = 14:00Z-16:00Z
+    assert.equal(iso(segments[1][0]), '2026-08-30T14:00:00.000Z');
+    assert.equal(iso(segments[1][1]), '2026-08-30T16:00:00.000Z');
 });
 
 test('子窗口精确裁剪到可视范围', () => {
-    const from = day0 + 9 * 3600;
-    const to = day0 + 10 * 3600;
+    const from = day0 + 9 * 3600;  // 北京 17:00，在 08-24 窗口内
+    const to = day0 + 10 * 3600;   // 北京 18:00
     const segments = th.computeTradingHourSegments(from, to, { start: 8, end: 24 });
     assert.deepEqual(segments, [[from, to]]);
 });
@@ -48,8 +58,8 @@ test('子窗口精确裁剪到可视范围', () => {
 test('跨天可视返回多段', () => {
     const segments = th.computeTradingHourSegments(day0 + 6 * 3600, day0 + 42 * 3600, { start: 8, end: 24 });
     assert.equal(segments.length, 2);
-    assert.equal(iso(segments[0][0]), '2026-08-30T08:00:00.000Z');
-    assert.equal(iso(segments[1][0]), '2026-08-31T08:00:00.000Z');
+    assert.equal(iso(segments[0][0]), '2026-08-30T06:00:00.000Z');
+    assert.equal(iso(segments[1][0]), '2026-08-31T00:00:00.000Z');
 });
 
 test('起止相等视为关闭，无分段', () => {

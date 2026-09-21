@@ -120,6 +120,30 @@ def _crypto_history_prepare_payload(payload):
         normalized['current_end'] = current_end.strftime('%Y-%m-%d %H:%M:%S')
     normalized['completed_months'] = normalized.get('completed_chunks', 0)
     normalized['total_months'] = normalized.get('total_chunks', 0)
+
+    # 动态提示：清晰区分“极速读取离线缓存”与“首次从交易所跨网下载缺失月份”
+    if not normalized.get('status_text') and not normalized.get('message'):
+        current_m = normalized.get('current_month')
+        if current_m:
+            import backend.app_enhanced as ae
+            sym = normalized.get('symbol') or ''
+            src = normalized.get('source') or ''
+            is_cached = False
+            if sym:
+                try:
+                    cache = ae._get_crypto_instrument_cache()
+                    sources_to_check = [src] if src else ['bybit', 'binance']
+                    for c_src in sources_to_check:
+                        p = cache._data_path(c_src, sym, 'trade', current_m)
+                        if p.exists():
+                            is_cached = True
+                            break
+                except Exception:
+                    pass
+            if is_cached:
+                normalized['status_text'] = f'正在极速读取离线数据 [{current_m}]...'
+            else:
+                normalized['status_text'] = f'正在从交易所同步下载缺失月份 [{current_m}] (首次需耗时)...'
     return normalized
 
 def _crypto_history_prepare_owner(job_id):

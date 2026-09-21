@@ -205,7 +205,7 @@ class CryptoMonthlyCache:
         parsed = sorted((datetime.fromisoformat(left), datetime.fromisoformat(right)) for left, right in ranges)
         merged = []
         for left, right in parsed:
-            if merged and left <= merged[-1][1] + timedelta(microseconds=1):
+            if merged and left <= merged[-1][1] + timedelta(seconds=2):
                 merged[-1] = (merged[-1][0], max(merged[-1][1], right))
             else:
                 merged.append((left, right))
@@ -264,20 +264,38 @@ class CryptoMonthlyCache:
         if cache_key in self._frame_cache:
             return self._frame_cache[cache_key].copy()
         try:
-            with gzip.open(path, "rt", encoding="utf-8") as handle:
-                frame = pd.read_csv(handle, dtype=str)
-            if "timestamp" not in frame.columns:
-                raise ValueError("missing timestamp")
-            frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
-            for column in ("open", "high", "low", "close", "volume", "turnover"):
-                if column in frame.columns:
-                    if numeric == "float":
-                        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype(float)
-                    else:
+            if numeric == "float":
+                float_dtypes = {col: "float64" for col in ("open", "high", "low", "close", "volume", "turnover")}
+                with gzip.open(path, "rb") as handle:
+                    frame = pd.read_csv(handle, dtype=float_dtypes)
+                if "timestamp" not in frame.columns:
+                    raise ValueError("missing timestamp")
+                frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+            else:
+                with gzip.open(path, "rt", encoding="utf-8") as handle:
+                    frame = pd.read_csv(handle, dtype=str)
+                if "timestamp" not in frame.columns:
+                    raise ValueError("missing timestamp")
+                frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True)
+                for column in ("open", "high", "low", "close", "volume", "turnover"):
+                    if column in frame.columns:
                         frame[column] = frame[column].map(lambda value: Decimal(value) if pd.notna(value) and value != "" else None)
-            validation = _validate_frame(frame, kind=kind)
-            if not validation.is_valid:
-                raise ValueError(", ".join(issue.code for issue in validation.issues))
+
+            # 伴生元数据 {month}.json 若已记录 validation 为 valid，说明存入时已做过严格校验，无需重复逐行耗时重验
+            metadata_path = path.with_name(path.stem.replace(".csv", "") + ".json")
+            is_valid = False
+            if metadata_path.exists():
+                try:
+                    meta = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    if meta.get("validation") == "valid":
+                        is_valid = True
+                except Exception:
+                    pass
+            if not is_valid:
+                validation = _validate_frame(frame, kind=kind)
+                if not validation.is_valid:
+                    raise ValueError(", ".join(issue.code for issue in validation.issues))
+
             self._frame_cache[cache_key] = frame
             return frame.copy()
         except Exception as exc:
@@ -328,7 +346,10 @@ class CryptoMonthlyCache:
         pd = _load_pandas()
         start = utc_datetime(start)
         end = utc_datetime(end)
-        timestamps = pd.to_datetime(self.load(source, symbol, kind, start, end)["timestamp"], utc=True)
+        timestamps = pd.to_datetime(self.load(source, symbol, kind, start, end, numeric="float")["timestamp"], utc=True)
+        expected = pd.date_range(start=start, end=end, freq=f"{self.base_interval_minutes}min", tz="UTC")
+        if len(timestamps) == len(expected) and (timestamps.values == expected.values).all():
+            return []
         available = set(timestamps.dt.to_pydatetime())
         missing = []
         cursor = start

@@ -134,6 +134,21 @@ class FuturesOrder:
         )
 
 
+def _protective_priority(order: FuturesOrder) -> int:
+    """同一根 K 线内的撮合顺序：止损优先于止盈（保守撮合，不美化回测）。
+
+    引擎自建的止盈止损子单带 protection_type；用户在图上手工拖出的平仓单没有该字段，
+    按订单类型推断——平仓突破单 = 止损（价格穿越触发），平仓限价单 = 止盈。
+    """
+    if order.protection_type == "sl":
+        return 0
+    if order.protection_type == "tp":
+        return 1
+    if order.reduce_only:
+        return 0 if order.order_type == "breakout" else 1
+    return 2
+
+
 class FuturesOrderBook:
     def __init__(
         self,
@@ -186,10 +201,23 @@ class FuturesOrderBook:
                 raise FuturesOrderError("invalid_limit_direction", "开多限价必须低于当前价格。")
             if action == "open_short" and price <= current_price:
                 raise FuturesOrderError("invalid_limit_direction", "开空限价必须高于当前价格。")
-            if reduce_only and self.simulator.position.quantity > ZERO and price <= current_price:
-                raise FuturesOrderError("invalid_limit_direction", "平多限价必须高于当前价格。")
-            if reduce_only and self.simulator.position.quantity < ZERO and price >= current_price:
-                raise FuturesOrderError("invalid_limit_direction", "平空限价必须低于当前价格。")
+            # 平仓限价只能挂在"不会立刻成交"的那一侧（= 止盈侧），这是交易所的真实语义：
+            # "卖出限价"的撮合条件是 high >= 限价，所以低于标记价的卖出限价属于
+            # "可立即成交"的单子，下一根 K 线就会当场成交 —— 它不是止损。
+            # 止损必须用突破单（价格穿越触发价才成交）。
+            #   多头：限价在上 = 止盈；在下必须用 breakout 当止损
+            #   空头：限价在下 = 止盈；在上必须用 breakout 当止损
+            position_quantity = self.simulator.position.quantity
+            if reduce_only and position_quantity > ZERO and price <= current_price:
+                raise FuturesOrderError(
+                    "invalid_limit_direction",
+                    "平多限价必须高于当前标记价，否则会立即成交。低于标记价的止损请改用突破单。",
+                )
+            if reduce_only and position_quantity < ZERO and price >= current_price:
+                raise FuturesOrderError(
+                    "invalid_limit_direction",
+                    "平空限价必须低于当前标记价，否则会立即成交。高于标记价的止损请改用突破单。",
+                )
             return
         if order_type != "breakout":
             return
@@ -418,7 +446,50 @@ class FuturesOrderBook:
                 cancelled.append(order)
         return cancelled
 
-    def modify_order_price(self, order_id: str, new_price, timestamp: datetime | None = None) -> FuturesOrder | None:
+    def _retarget_reduce_only_order(self, order: FuturesOrder, price: Decimal, current_price: Decimal) -> None:
+        """按新价位重定平仓单的类型：止盈（限价，等价格到达）↔ 止损（突破，价格穿越才成交）。
+
+        图上把一条保护线拖到"会立即成交"的一侧时必须改判类型，否则下一根 K 线就会当场成交
+        （用户反馈：止损线还没到就被平仓）。多头价在上=止盈、在下=止损；空头相反。
+        """
+        position_quantity = self.simulator.position.quantity
+        if position_quantity == ZERO:
+            raise FuturesOrderError("no_position", "当前没有可平仓的持仓。")
+        if price == current_price:
+            raise FuturesOrderError(
+                "invalid_limit_direction",
+                "保护价不能等于当前标记价，请拖到其他价位（高于标记价为止盈、低于为止损）。",
+            )
+        is_take_profit = price > current_price if position_quantity > ZERO else price < current_price
+        order.order_type = "limit" if is_take_profit else "breakout"
+        order.protection_type = "tp" if is_take_profit else "sl"
+        order.limit_price = price if is_take_profit else None
+        order.trigger_price = None if is_take_profit else price
+        order.tp_price = price if is_take_profit else None
+        order.sl_price = None if is_take_profit else price
+
+    def _validate_amend_direction(self, order: FuturesOrder, price: Decimal, current_price: Decimal) -> None:
+        """开仓挂单改价时，不允许改到"会立即成交"的一侧（避免静默变成市价单）。"""
+        if order.reduce_only or order.protection_type:
+            return
+        if order.order_type == "limit":
+            if order.side == "buy" and price >= current_price:
+                raise FuturesOrderError("invalid_limit_direction", "买入限价必须低于当前标记价，否则会立即成交。")
+            if order.side == "sell" and price <= current_price:
+                raise FuturesOrderError("invalid_limit_direction", "卖出限价必须高于当前标记价，否则会立即成交。")
+        elif order.order_type == "breakout":
+            if order.side == "buy" and price <= current_price:
+                raise FuturesOrderError("invalid_trigger_direction", "买入突破价必须高于当前标记价。")
+            if order.side == "sell" and price >= current_price:
+                raise FuturesOrderError("invalid_trigger_direction", "卖出突破价必须低于当前标记价。")
+
+    def modify_order_price(
+        self,
+        order_id: str,
+        new_price,
+        timestamp: datetime | None = None,
+        current_price=None,
+    ) -> FuturesOrder | None:
         target = None
         for order in self.orders:
             if order.order_id == str(order_id) and order.status == "active":
@@ -429,6 +500,14 @@ class FuturesOrderBook:
         price_val = decimal_value(new_price)
         if price_val <= 0:
             raise ValueError("order price must be positive")
+
+        if current_price is not None:
+            mark = decimal_value(current_price)
+            if target.reduce_only:
+                # 保护单按新价位改判 止盈(限价) / 止损(突破)，避免拖过界后立刻成交
+                self._retarget_reduce_only_order(target, price_val, mark)
+                return target
+            self._validate_amend_direction(target, price_val, mark)
 
         if target.order_type == "limit":
             target.limit_price = price_val
@@ -465,10 +544,7 @@ class FuturesOrderBook:
             raise ValueError("bar low cannot exceed high")
         fills: list[FuturesFill] = []
         # 排序：SL 子单（breakout+parent）优先于 TP 子单（limit+parent），同根K线内保守触发止损
-        candidates = sorted(
-            list(self.active_orders),
-            key=lambda o: (0 if o.protection_type == "sl" else 1 if o.protection_type == "tp" else 2),
-        )
+        candidates = sorted(list(self.active_orders), key=_protective_priority)
         for order in candidates:
             if order.order_type not in {"limit", "breakout"} or order.submitted_at >= bar_time:
                 continue

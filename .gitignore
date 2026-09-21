@@ -6548,4 +6548,8 @@ dist/
 /.venv/
 *.log
 .playwright-cli/
+debug_*.png
+debug_*.json
+subchart_*.png
+top_left.png
 

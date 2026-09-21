@@ -37,8 +37,9 @@ def _bars(count=4):
     ])
 
 
-def _training(training_id="crypto-api", *, period="5m", bar_count=4):
-    bars = _bars(bar_count)
+def _training(training_id="crypto-api", *, period="5m", bar_count=4, bars=None):
+    if bars is None:
+        bars = _bars(bar_count)
     session = CryptoReplaySession(
         bars,
         initial_time=START,
@@ -115,6 +116,61 @@ class CryptoFuturesAPITests(unittest.TestCase):
     def tearDown(self):
         app_module.active_trainings.pop(self.training_id, None)
         self.checkpoint_patcher.stop()
+
+    def test_stop_loss_survives_bars_that_do_not_reach_it(self):
+        """回归（用户报告）：开仓后从图上拖出的止损线，不该在点下一根 K 线时就被平掉。
+
+        根因：止损当时被当成"平仓限价单"提交，而引擎对卖出限价的撮合条件是
+        ``high >= 限价``——挂在现价下方的止损必然立刻满足，于是下一根就成交。
+        止损必须是**突破单**（``low <= 触发价`` 才成交）。
+        """
+        bars = pd.DataFrame([
+            {"timestamp": START + timedelta(minutes=5 * i), "open": o, "high": h,
+             "low": low, "close": c, "volume": 10, "turnover": 1000}
+            for i, (o, h, low, c) in enumerate([
+                (100, 102, 98, 100),   # 开仓价 100
+                (100, 101, 97, 99),    # 未触及 95
+                (99, 99, 90, 91),      # 跌破 95 → 止损在此成交
+                (91, 92, 88, 90),
+            ])
+        ])
+        training_id = "crypto-protective-regression"
+        app_module.active_trainings[training_id] = _training(training_id, bars=bars)
+        try:
+            opened = self.client.post(
+                f"/api/training/{training_id}/trade",
+                json={"action": "open_long", "order_type": "market", "margin": 100, "leverage": 5},
+            )
+            self.assertEqual(opened.status_code, 200, opened.get_json())
+
+            # 旧写法（平仓限价挂在现价下方）必须被拒绝，并给出可操作的提示
+            rejected = self.client.post(
+                f"/api/training/{training_id}/trade",
+                json={"action": "close", "order_type": "limit", "limit_price": 95},
+            )
+            self.assertEqual(rejected.status_code, 400, rejected.get_json())
+            self.assertEqual(rejected.get_json()["code"], "invalid_limit_direction")
+            self.assertIn("突破单", rejected.get_json()["error"])
+
+            # 正确写法：突破单当止损
+            stop = self.client.post(
+                f"/api/training/{training_id}/trade",
+                json={"action": "close", "order_type": "breakout", "trigger_price": 95},
+            )
+            self.assertEqual(stop.status_code, 200, stop.get_json())
+            self.assertEqual(stop.get_json()["order"]["order_type"], "breakout")
+
+            # 推进一根 K 线：最低价 97 没碰到 95 → 必须仍在持仓
+            untouched = self.client.post(f"/api/training/{training_id}/next")
+            self.assertEqual(untouched.status_code, 200, untouched.get_json())
+            self.assertEqual(untouched.get_json()["position"]["side"], "long")
+
+            # 再推进一根：最低价 90 跌破 95 → 止损成交、持仓了结
+            crossed = self.client.post(f"/api/training/{training_id}/next")
+            self.assertEqual(crossed.status_code, 200, crossed.get_json())
+            self.assertNotEqual(crossed.get_json()["position"]["side"], "long")
+        finally:
+            app_module.active_trainings.pop(training_id, None)
 
     def test_market_open_and_account_snapshot(self):
         response = self.client.post(

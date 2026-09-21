@@ -25,7 +25,7 @@ class DrawingToolsIntegrationStaticTests(unittest.TestCase):
         self.assertIn('id="drawing-toolbar"', self.html)
         for tool in (
             "select", "trend", "horizontal", "ray", "rectangle", "text",
-            "fibonacci", "fib-trend-time", "ruler", "long-position", "short-position",
+            "fibonacci", "fib-trend-time", "ruler", "polyline", "long-position", "short-position",
         ):
             self.assertIn(f'data-drawing-tool="{tool}"', self.html)
         for action in ("lock", "hide", "delete", "undo", "redo", "clear"):

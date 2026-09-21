@@ -23,6 +23,8 @@ class _PrepareJob:
     total_chunks: int = 0
     current_start: str | None = None
     current_end: str | None = None
+    symbol: str | None = None
+    source: str | None = None
     error: str | None = None
     result: dict[str, Any] | None = None
     cancel_event: Event = field(default_factory=Event)
@@ -119,6 +121,8 @@ class CryptoHistoryPrepareManager:
                 current.total_chunks = int(progress.get("total_chunks", current.total_chunks) or 0)
                 current.current_start = progress.get("current_start")
                 current.current_end = progress.get("current_end")
+                current.symbol = progress.get("symbol") or current.symbol or current.payload.get("symbol")
+                current.source = progress.get("source") or current.source
 
         try:
             result = self.worker(
@@ -162,6 +166,8 @@ class CryptoHistoryPrepareManager:
             "percent": percent,
             "current_start": job.current_start,
             "current_end": job.current_end,
+            "symbol": job.symbol or job.payload.get("symbol"),
+            "source": job.source,
             "error": job.error,
         }
         if job.result and isinstance(job.result.get("summary"), dict):

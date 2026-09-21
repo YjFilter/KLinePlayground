@@ -435,6 +435,15 @@ if (elements['training-progress'].textContent !== '进度: 12.3% (3/10)') {{
             ),
         )
 
+    def test_crypto_position_card_theme_adaptability(self):
+        self.assertIn('.crypto-pos-card', self.css)
+        self.assertIn('.crypto-pos-grid', self.css)
+        self.assertIn('[data-crypto-theme="light"] .crypto-pos-card', self.css)
+        self.assertIn('[data-crypto-theme="light"] .crypto-pos-grid', self.css)
+        self.assertIn('[data-crypto-theme="light"] .crypto-pos-actions button', self.css)
+        self.assertIn('[data-crypto-theme="dark"] .crypto-pos-card', self.css)
+        self.assertIn('[data-crypto-theme="dark"] .crypto-pos-grid', self.css)
+
 
 if __name__ == "__main__":
     unittest.main()

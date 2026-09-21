@@ -69,6 +69,35 @@
             crosshair: 'rgba(104, 119, 138, 0.55)',
             crosshairLabel: '#474d57',
             sessionBand: 'rgba(240, 165, 11, 0.07)',
+        },
+        // A股实时看盘 AICoin 暗黑风格：红涨绿跌、近黑背景 #0b0e11、暗色网格与深色十字标线
+        ashare_dark: {
+            chartBg: '#0b0e11',
+            text: '#eaecef',
+            grid: 'rgba(255, 255, 255, 0.045)',
+            border: 'rgba(255, 255, 255, 0.08)',
+            overlay: 'rgba(11, 14, 17, 0.85)',
+            positive: '#f6465d',
+            negative: '#0ecb81',
+            neutral: '#848e9c',
+            chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.22))',
+            crosshair: 'rgba(132, 142, 156, 0.6)',
+            crosshairLabel: '#2b3141',
+            sessionBand: 'rgba(240, 185, 11, 0.05)',
+        },
+        ashare_light: {
+            chartBg: '#ffffff',
+            text: '#1e2329',
+            grid: 'rgba(23, 32, 51, 0.05)',
+            border: 'rgba(23, 32, 51, 0.1)',
+            overlay: 'rgba(255, 255, 255, 0.88)',
+            positive: '#f6465d',
+            negative: '#0ecb81',
+            neutral: '#68778a',
+            chip: 'linear-gradient(90deg, transparent, rgba(240, 185, 11, 0.18))',
+            crosshair: 'rgba(104, 119, 138, 0.55)',
+            crosshairLabel: '#474d57',
+            sessionBand: 'rgba(240, 165, 11, 0.07)',
         }
     };
 

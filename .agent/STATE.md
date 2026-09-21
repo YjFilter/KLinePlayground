@@ -1,12 +1,20 @@
 # Current Project State
 
-## Current Snapshot（当前快照 — 每次会话结束时覆盖此区块）
-- 最新测试基线：717 passed + 71 subtests passed（2026-07-22）
-- 未提交改动：backend/app_enhanced.py + 前端3文件 + AI_TAKEOVER.md + .agent/STATE.md（新增 z-index 修复：css .modal→1100, chart-focus-mode→900）
-- 最新提交：338bb62 — 币圈合约止盈止损 + 历史数据加载优化 + 键盘快捷键修复
-- 已完成：TASK-024 第一批 z-index 遮挡修复（全屏模式弹窗遮挡 + 加载遮罩盖弹窗），主 AI 浏览器验证层级 900<1000<1100 通过
-- 进行中：前端布局优化第二批（图表区内遮挡/错位）
-- 下一步：用户确认后启动第二批修复
+#### Current Snapshot（当前快照 — 每次会话结束时覆盖此区块）
+- 最新测试基线：796 passed + 89 subtests passed（Python pytest） / 39 passed（Node.js test runner）
+- 已完成：
+  1. AICoin 风格 A 股自选/收藏股票面板 (Watchlist)：完整实现左侧自选栏（`自选`、`持仓`、`指数` 三大标签分类），支持本地持久化存储 (`ashare_live_watchlist_v1`) 与预置核心权重股；
+  2. 毫秒级批量实时行情轮询：后端 `/api/ashare/live/batch` 接口通过腾讯行情网关单次请求获取数十只自选股票的现价与涨跌幅，前端 3 秒高频轮询，数据平滑跳动；
+  3. 双向升降序排序：支持按“最新价”与“今日涨幅”一键点击在“默认 - 降序 - 升序”间循环切换；
+  4. 点击联动与秒级切图：点击自选/持仓/指数列表中任意股票，中间 K 线图表、顶部行情条与右侧 A 股交易台秒级同步切换为该股票；
+  5. 快速搜索添加自选：底部常驻 `+ 添加自选` 按钮，唤起搜索弹窗支持代码/名称/拼音缩写模糊检索，一键加入自选或直接切图；单行悬停 `×` 快捷删除；
+  6. 自选面板一键折叠收起：面板右上角 `◀` 收起、图表头部 `▶ 自选` 展开，本地记忆折叠状态；
+  7. 经典三栏专业终端工作区：左侧自选股 (270px) + 中间核心走势图表 (1fr) + 右侧 A 股专属模拟交易台 (340px)，支持双侧独立折叠；
+  8. A 股同花顺专业标准周期（日、周、月 | 1分、5分、15分、30分、60分、120分、240分），日K加载 800 根覆盖 3.3 年以上历史数据，指数代码（如 sh000001 上证指数）精准识别；
+  9. A 股专属现货模拟交易台（四宫格资产指标、当前持仓浮盈、T+1锁定解冻、买卖整手撮合、快捷仓位比例）。
+- 隔离机制：data-ashare-live-only 与 data-crypto-workspace-only / data-a-share-workspace-only 严格互斥，零 regression
+- 验证状态：前端 JS 单测 39/39 全数通过，Python 单元测试 796/796 全数通过，HTTP 批量接口与搜索接口均毫秒级响应
+- 规范保障：严格恪守不执行 git commit 或 git push，工作树整洁可用
 
 ## Active Milestone
 Phase 4 - API and frontend integration is complete; TASK-014 passed final no-patch browser acceptance.
@@ -1168,8 +1176,613 @@ Give the next main AI the contents of `.agent/prompts/MAIN_AGENT_PROMPT.md`; use
   - 严格遵循指令：**未执行 git 提交与远程推送**。
 
 ## Next Action
-等待用户在浏览器刷新验证：
-1. 双击右侧价格轴（红框处）保持原生纵轴垂直正常缩放（已取消双击跳转最新，避免误触干扰看盘）；
-2. 往左回拉图表时，右下角浮现“最新”胶囊按钮，点击可平滑回到最新；
-3. 从大周期（如 1D）切换到小周期（如 15m/5m/1m）时，始终稳定留在最新 K 线页，不再跳往远古历史；
-4. 亮色/暗色双主题下“最新”悬浮按钮视觉完全一致协调。
+已落地 A 股实时看盘与 T+1 模拟下单 Demo 原型。等待用户体验与反馈。
+
+## Feature: A-Share Live Market Watch & T+1 Sandbox Demo (2026-09-08)
+- **用户需求**：
+  1. 沿用现有 AICoin/币圈界面的极简暗色/亮色视觉，用于 A 股实时看盘；
+  2. 最小 1 分钟轮询跳动即可；
+  3. 保留模拟下单功能：严格遵循 A 股“最小买入 100 股（一手）且为整数倍”以及“T+1 交易制度（当日买入冻结至次日方可卖出）”；
+  4. 账户资金与持仓随时可自由手动修改，方便模拟自定义实盘仓位。
+- **落地实现**：
+  1. **后端服务与接口**：
+     - `backend/services/ashare_live_service.py`：通过公共免费接口拉取股票搜索（代码/拼音首字母如 `600519`/`gzmt`）、分时 K 线（1m/5m/15m/30m/60m/日K，主用腾讯 ifzq 高速接口，备用东财）、实时快照（现价、涨跌幅、昨收、涨跌停）；
+     - `backend/routes/ashare_live_routes.py`：注册 `/api/ashare/live/search`、`/api/ashare/live/kline`、`/api/ashare/live/snapshot`。
+  2. **独立演示页面与逻辑**：
+     - `frontend/ashare_live_demo.html` & `frontend/js/ashare_live_demo.js`：
+       - 顶部股票搜索与实时指示条（昨收、涨跌停、现价变色）；
+       - Lightweight Charts 主图（K线 + MA5/10/20）与成交量副图，支持 30 秒/1 分钟轮询与最后一根 K 棒动态跳动；
+       - A 股模拟交易沙盒：买入步进限制 100 股，仓位百分比（25%/50%/75%/全仓）自动向下取整到 100 的倍数；
+       - T+1 持仓模型：今日买入记为 `frozen_today`，当天不可卖出；只有可用持仓 `available` 允许卖出；
+       - 弹窗自定义资金：随时修改可用现金、可用持仓股数与成本均价，存储于本地 `localStorage`，刷新不丢失；
+       - 完美支持 Dark（暗色）与 Light（亮色）双主题一键切换；
+     - 主训练页工具栏右侧新增直达按钮 `📈 A股实时看盘`。
+- **质量门禁**：
+  - Python 语法检查通过；
+  - JS 语法检查：`node --check frontend/js/ashare_live_demo.js` 通过；
+  - JS 单元测试：`node --test tests/js/*.test.js` -> **27 passed**；
+  - 后端全量测试回归：`pytest -q` -> **784 passed, 89 subtests passed (100% 全绿)**；
+  - 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+等待用户在浏览器中访问 `http://127.0.0.1:8000/ashare_live_demo.html` 进行体验验证：
+1. 股票搜索：输入 `600519` 或 `gzmt` 联想切换标的；
+2. 分时走势与轮询跳动；
+3. A 股 100 股限制、仓位整百取整、T+1 卖出拦截；
+4. 点击“调整资金/仓位”自由修改模拟账户数据；
+5. 确认暗色与亮色双主题效果。
+
+## Fix: Chart Time Display Timezone — Crypto UTC→UTC+8 对齐 AICoin (2026-09-09)
+- **现象**：同一根 ETH K线（低点 2440.22），AICoin 显示 2026-09-08 21:40，本项目复盘显示 13:40，恒差 8 小时；时间轴刻度与十字光标胶囊均受影响。
+- **根因**：币圈数据源时间为 UTC 原文，`formatChartCrosshairTime` 显式取 `getUTC*` 分量且主图未配置 `tickMarkFormatter`，Lightweight Charts 默认按 UTC 渲染时间轴——显示层整条链路停留在 UTC。
+- **修复（方案 A：显示层集中换区，数据层 UTC 单一事实源不动）**：
+  1. `main_enhanced.js`：新增 `chartTimeDisplayOffsetSeconds()`（isAshareLiveMode→0；isCryptoMode→+28800s；其余 0），`formatChartCrosshairTime` 的 Date/数字分支统一加偏移；新增 `formatChartTickMarkTime` 并接入主图 `timeScale.tickMarkFormatter`（零点整刻度显示 MM-DD，日内显示 HH:mm）。
+  2. **色带联动**：`trading_hours.js` `computeTradingHourSegments` 默认 `tzOffsetMinutes` 0→480——09-07 将其改为 0 实为迁就"X 轴显示 UTC"的错误显示；显示层修正后恢复 480 才是真正的北京时间 08:00–24:00 对齐。显式传参仍可覆盖。
+  3. **A股零波及**：A股 Intraday/实时看盘数据原文即北京时间（偏移 0），行为不变；极值标签仅价格无时间，不受影响；数据层时间戳/订单/资金费率/缓存键全部未动。
+- **测试同步**：`tests/js/trading_hours.test.js` 期望值按 +480 重算（8-24 窗口、跨午夜、跨天多段），新增"显式 tzOffsetMinutes=0 覆盖"用例；`tests/test_chart_workspace_frontend.py` 的 node eval 测试补 `isAshareLiveMode` 桩、期望值改为 UTC+8 语义（'2026-08-15 01:00'）并新增 A股原文反向断言。
+- **质量门禁**：`node --check` 通过；`node --test tests/js/*.test.js` → 40 passed；`npx eslint@8.57.0` → 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed (100% 全绿)**。
+- **遗留备注**：`git diff --check` 报 `main_enhanced.js:10025` 行尾空白与 `style_enhanced.css:6300` EOF 空行，均为 2026-09-08 ashare 会话遗留（非本次改动区域），按禁令未触碰，待用户指示。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+等待用户浏览器验收：同一段币圈行情与 AICoin 并排对照（十字光标/时间轴应为北京时间）；做单时段色带与北京时间 08:00–24:00 对齐；A股 30m 回放与 A股实时看盘时间显示确认无变化。
+
+## Fix: 持仓区块"时有时无"——A股看盘退出后 hidden 残留 (2026-09-10)
+- **现象**：币圈训练的右侧"当前持仓"区块有时在有时没有。
+- **根因**：`launchAshareLiveWatch` 旧版用 `classList.add('hidden')` 批量隐藏 `[data-replay-only]`（含币圈"当前持仓"）、`[data-crypto-workspace-only]` 等元素，而 `exitAshareLiveWatch` 不移除——只要进过一次 A股实时看盘再退出，这些区块带残留 hidden 直到刷新页面。CSS L5181-5189 的 `.ashare-live-active` 规则本已完整覆盖这些隐藏，JS 批量隐藏纯冗余。
+- **修复**：删除 launch 中该行冗余 `querySelectorAll(...).forEach(add('hidden'))`，显隐统一交由 CSS 属性系统（进入靠 `ashare-live-active` 类，退出类移除自动恢复，天然对称零残留），并留注释防止回归。`training-setup` 为 modal 初始 hidden、`syncCryptoWorkspaceMode` 两处调用点均不在 A股看盘期间触发——均无需改动。
+- **质量门禁**：`node --check` 通过；JS 单测 40 passed；ESLint 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新（Ctrl+Shift+R）后验证：进入 A股实时看盘 → 退出 → 回币圈训练，"当前持仓"区块应始终存在。
+
+## Refactor: A股实时看盘 UI 状态耦合治理——快照/恢复 + 存储分键 (2026-09-10)
+- **用户报告**：币圈训练 MACD 指标副图消失（此前"当前持仓"区块时有时无已修），怀疑实时看盘牵连复盘功能，要求重新审视、降低耦合、不加新功能。
+- **审计结论**（launchAshareLiveWatch / exitAshareLiveWatch 全副作用比对）：A股实时看盘直接改写三种模式共享的 UI 状态且退出不恢复——
+  1. `indicatorPanelVisible` / `currentIndicatorType` 被 launch 强制覆盖为 true/'MACD'（L10102-10103），exit 不恢复；
+  2. `indicator-chart` 副图 inline `style.display` 由 `toggleIndicatorVisibility`（L6740）管理，A股看盘期间点指标标签收起面板后 `display:none` 残留到币圈——**MACD 副图整体消失的机制**；
+  3. 面板高度比例全局单键 `kline-chart-panel-heights-v2`，A股/币圈互相污染（副图可被压到只剩图例行）。
+- **修复（纯对称化/隔离，零新功能）**：
+  1. launch 改状态前快照 `asharePreLiveUiState = { indicatorPanelVisible, currentIndicatorType, indicatorDisplay, volumeCollapsed, indicatorCollapsed }`；
+  2. exit 对称恢复：状态变量 + inline display + 折叠 class + 按钮/下拉/图例同步，恢复可见时 `loadTechnicalIndicator(currentIndicatorType)` 重载数据并 rAF `applyChartPanelRatios + resizeCharts`；
+  3. 面板比例存储分键：新增 `chartPanelStorageKey()`（ashare → `kline-chart-panel-heights-v2-ashare`），read/persist 按当前模式取键，`chartPanelRatiosKey` 记录缓存对应键（模式切换自动重读）。
+- **质量门禁**：`node --check` 通过；JS 单测 40 passed；ESLint 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新后重演路径验收（进出 A股实时看盘 → 币圈训练：当前持仓与 MACD 副图应始终稳定）；若 MACD 仍消失，在 console 执行 `JSON.stringify({display: document.getElementById('indicator-chart').style.display, h: document.getElementById('indicator-chart').getBoundingClientRect().height, visible: indicatorPanelVisible, type: currentIndicatorType})` 提供输出继续定位。
+
+## Feature: A股实时看盘限价挂单 + 全持仓列表 (2026-09-10)
+- **用户需求**：实时看盘下单面板此前仅市价；"当前持仓"卡片只显示当前标的。用户要求资金为全部 A 股共用、单子状态（持仓+挂单）在一个卡片看清楚，并支持限价挂单。
+- **落地**：
+  1. **模块真接线**：`ashare_trading.js`（此前"只拆不接"，仅测试引用）新增 `normalizeAshareAccount / computeAvailableShares / matchLimitOrders / validateLimitBuy / validateLimitSell` 五个纯函数并接入 main；index_enhanced.html 补 script 标签。
+  2. **账户模型扩展**（向后兼容，旧 localStorage 自动补默认字段）：`cash_frozen`（买入挂单冻结资金，cash 语义=立即可用）、`positions[code].frozen_sell`（卖出挂单冻结持仓）、`pending_orders`（当日有效挂单）。
+  3. **下单面板**：买入/卖出子面板各加"市价/限价"切换（独立记忆），限价输入框默认填现价，预览按限价计算。
+  4. **撮合引擎**：3 秒轮询快照到达即撮合当前标的 open 挂单（买: 限价≥现价；卖: 限价≤现价，按限价成交），成交后买入股数进 T+1 冻结、卖出扣持仓回笼资金；跨日挂单自动失效退冻结（当前标的轮询内撮合+读取时全局清理兜底）。
+  5. **持仓卡片升级**：列出**全部标的**持仓（当前标的置顶 ★高亮），跨标的现价用内存价格缓存 `asharePriceCache`；卡片下方新增"限价挂单"小节（跨标的挂单 + 撤单按钮，事件委托）。总资产 = 现金 + 挂单冻结 + 全持仓市值；"持仓市值"改为全持仓口径；最大可卖扣除挂卖冻结。
+- **质量门禁**：`node --check` 通过；JS 单测 **47 passed**（新增限价挂单 7 用例）；ESLint 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：市价/限价切换、挂单→撤单、限价成交（价格到达）、跨标的持仓列表与冻结标记、双主题观感。
+
+## Feature Addendum: A股实时模拟手续费 (2026-09-10)
+- 限价挂单会话追加：佣金万 2.5（最低 5 元）双边 + 印花税 0.05% 仅卖出（纯函数 computeAshareTradeFees + 2 用例）。
+- 全链路接入：市价买卖（资金检查/含费成本均价/回笼扣费）、限价挂单（冻结额含佣金，挂单记 frozen_amount，成交/撤单/跨日失效统一按其退回，兼容旧挂单）、买卖预览含费口径、成交记录显示费用。
+- 门禁：JS 单测 **49 passed**；pytest **800 passed, 89 subtests**。未提交未推送。
+
+## Next Action
+用户硬刷新验收：手续费显示（预览/成交提示/记录）、限价挂单冻结含佣、撤单/失效退回含佣冻结。
+
+## Feature: 画图工具 Alt+* 快捷键 (2026-09-10)
+- **用户需求**：量尺/做多/做空/水平线/斐波那契等常用画图工具快速选择。
+- **键位设计**（TradingView 惯例 Alt+ 层，与既有裸键层物理隔离）：Alt+M 量尺、Alt+L 做多、Alt+S 做空、Alt+H 水平线、Alt+F 斐波那契、Alt+Q 选择、Alt+T 趋势线、Alt+R 射线、Alt+B 矩形、Alt+X 文字。裸键 B/S/空格/Enter/数字已有占用（币圈做单与回放推进），Alt 修饰键层先行拦截保证 Alt+S 做空与裸 S 卖出零冲突。
+- **落地**：
+  1. 从工具按钮 click handler 提取共享函数 `activateDrawingTool(tool)`（控制器激活/工具条高亮/状态条含快捷键提示/fib-trend-time 面板特例），鼠标与键盘单一事实源；
+  2. keydown 训练界面快捷键段新增 Alt 分发层（守卫：training 可见 + 非只读 + 非输入框焦点 + 非 repeat，preventDefault 阻断浏览器 Alt 菜单）；
+  3. **顺手修复历史耦合**：A股实时看盘下裸键 B/S/空格/数字会误触币圈下单与回放推进——新增 isAshareLiveMode 守卫跳过（Alt 画图层不受影响）；
+  4. 10 个工具按钮 title 增加 "(Alt+X)" 标注（悬停可见）。
+- **过程插曲**：HTML title 批量替换脚本曾误删 data-drawing-tool/aria-label 属性（静态测试当场抓出），已完整恢复并复核。
+- **质量门禁**：`node --check` 通过；JS 单测 49 passed；ESLint 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：三种模式下 Alt+M/L/S/H/F/F+Q 等激活画图工具（工具条高亮 + 状态条提示）；A股看盘下按 B/S/空格无副作用。
+
+## Feature: 连续折线画图工具 (AICoin 风格) (2026-09-10)
+- **用户需求**：对标 AICoin 的"连续折线"工具——单击依次落点、自动连线成多段折线，双击结束，锚点白圈显示。
+- **落地**（drawing_tools.js 手势状态机扩展 + 渲染/命中/序列化全链路）：
+  1. `TOOL_POINT_COUNTS['polyline'] = Infinity`（可变点数，activateTool 校验放行）；
+  2. 新手势类型 `polyline-create`：pointerdown 落点（手势跨点击保持，pointerup 不结束）、双击（event.detail≥2）提交、move 实时预览"已落点+当前鼠标"；
+  3. 新增 `_commitPolyline`（≥2 点成线入 store 并选中）/`_removeLastPolylinePoint`（Backspace 撤点，仅剩一点时取消）/`_updatePolylineDraft`；
+  4. `_onKeyDown`：Backspace 手势内撤点（否则删除选中）、Enter 提交折线；Esc 沿用既有 cancelGesture 取消；
+  5. 渲染分支：多段折线（lineWidth/lineStyle 同既有线型体系），hover/selected/绘制中显示每个锚点白底圆圈（对齐 AICoin 视觉）；单点草稿进入渲染分支；
+  6. `_bodyDistance` polyline 多段线距离命中（选中可拖动、锚点可编辑、Ctrl+Z 可撤销——复用 store 通用机制）；
+  7. 工具条按钮（Z 形折线图标）+ **Alt+Z 快捷键**（DRAWING_TOOL_SHORTCUTS/LABELS/KEY_HINTS）+ 静态测试工具清单加 polyline。
+  8. 磁吸：落点走 `_anchorFromPoint`，OHLC 磁吸自动生效；序列化走通用 anchors 数组，持久化/恢复自动支持。
+- **质量门禁**：`node --check`（main + drawing_tools）通过；JS 单测 49 passed；ESLint 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：Alt+Z 或工具条激活连续折线 → 单击加点（锚点圆圈 + 预览线）→ 双击/Enter 成线 → Backspace 撤点 → Esc 取消；选中拖动/锚点编辑/删除正常。
+
+## Fix: 连续折线结束交互 (2026-09-10 用户实测反馈)
+- 双击失效根因：PointerEvent.detail 规范恒为 0——改用原生 dblclick 事件提交（末点去重）；新增右键结束成线（event.button===2 原生字段 + 绘制中屏蔽 contextmenu）；训练快捷键移除 Enter→下一根K线（与空格重复，Enter 专用于折线结束）。
+- 门禁：JS 49 passed；pytest **800 passed, 89 subtests** 全绿。未提交未推送。
+
+## Next Action
+用户硬刷新验收：左键加点 → 右键结束成线；双击/Enter 亦可结束；空格仍是下一根 K 线。
+
+## Fix: MACD 副图跨模式空白（根因：图表重建未清 series 记账）(2026-09-10)
+- **用户报告**：MACD 副图又不显示了（此前出现过）。
+- **复现**（CDP 直连真实 Chromium，币圈 ⇄ A股实时看盘双向）：进入实时看盘后 K 线已是茅台 800 根
+  （time 1788998400），但技术指标仍是币圈 181 根（time 1719763200，dif -1499.99）——两套时间戳不重叠
+  → 副图绘图区空白、图例行残留旧数据集数值；控制台持续报 `加载技术指标失败: Error: Value is undefined`。
+- **根因（有异常栈）**：`initializeChart()` 重建三个图表实例但**未清空 `currentIndicatorSeries` / `bollSeries`**，
+  下一次 `loadTechnicalIndicator` → `clearTechnicalIndicatorSeries` 对属于**已销毁图表**的旧 series 调
+  `removeSeries` → Lightweight Charts 抛 `Value is undefined` → 被 catch 吞掉，`lastIndicatorData` 不更新、
+  副图不重绘。栈：`clearTechnicalIndicatorSeries (main_enhanced.js:7029)` ← `Wn.removeSeries` ← `h`。
+  仅在跨数据集（会重建图表的路径）切换时触发，从主页直接进看盘看似正常故长期被掩盖。
+- **同时澄清**：项目记忆里"Legacy 盲盒日线可能日志 Value is undefined（非阻塞）"即此 bug，实为阻塞。
+- **修复（main_enhanced.js，3 处）**：
+  1. `initializeChart()` 重建前 `currentIndicatorSeries = []; bollSeries = {};`（记账与图表生命周期对齐）；
+  2. `clearTechnicalIndicatorSeries()` 对 `removeSeries` 逐条 try/catch 防御，单条失败不中断副图刷新，
+     记账无条件清空（原实现用 `bollSeries.upper` 判空还会漏 BOLL 部分系列）；
+  3. 同类泄漏：`startTrainingWithConfig()` 从看盘直跳训练的分支补 `asharePreLiveUiState = null;`
+     （该路径不走 exit，快照不作废会污染之后任何一次 exit 的恢复）。
+- **门禁**：`node --check` 通过；`node --test tests/js/*.test.js` → 51 passed；全量 `pytest -q` →
+  **810 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新后复演：币圈训练 ⇄ A股实时看盘 双向切换，MACD 副图应始终跟随当前数据集正常渲染。
+
+## Feature: A股实时看盘画图持久化（按标的隔离）(2026-09-10)
+- **用户需求**：实时盘画的图希望保留；当前重新进入不保留。
+- **根因**：画图仅存于 `DrawingStore` 内存，`initializeChart → initializeDrawingTools` 每次重建
+  `DrawingController`，故退出/重进/刷新即全丢（项目原本无任何画图持久化）。
+- **落地（main_enhanced.js，不改 drawing_tools.js 库）**：注入式 store——
+  `createAshareLiveDrawingStore()` 用已存快照播种 `DrawingStore`，包裹 `_commit`（增删改/undo/redo/clear
+  的唯一漏斗）与 `reset` 自动回写；存储键 `kline-ashare-live-drawings-v1::<symbol>` 按标的隔离，
+  空集合删键；`initializeDrawingTools()` 传入 store；`switchAshareLiveStock()` 换股后重建控制器装载
+  该标的自己的画图；存储不可用时静默降级为内存画图。
+- **范围**：仅实时看盘；回放训练保持 `clearSessionDrawings` 的"每次训练从干净画布开始"语义不变。
+- **门禁**：node --check 通过；JS 单测 51 passed；全量 pytest **810 passed, 89 subtests passed**。
+- **新增回归测试**：`tests/test_indicator_rebuild_and_drawing_persistence.py`（10 项）锁定两处修复结构不变式。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：实时看盘画线 → 退出 → 重进（或刷新页面）画线仍在；换股后只显示该股自己的画线。
+
+## Feature: A股实时看盘 价格预警（对标 AICoin）(2026-09-11)
+- **用户需求**：实时盘加预警，到价位弹提醒（附 AICoin 截图：右侧「价格跌至: 87.72 ✕」可拖标签 + 「添加成功」Toast）。
+- **确认范围**（四选一）：只做价格穿越（P1）；提醒=应用内弹窗+提示音 且 系统通知；独立「预警」按钮+右侧可拖标签；
+  仅 A股实时看盘。
+- **新增纯逻辑模块** `frontend/js/modules/price_alerts.js`（UMD，`KLinePriceAlertsModule`）：
+  价格按 A股 0.01 归一、方向推导（高于现价=涨至）、`normalizeAlert(List)`、**`evaluateAlertCrossing`**、
+  `formatAlertLabel`、`alertStorageKey`、`selectPersistableAlerts`。
+- **核心判定：穿越而非阈值比较** —— 涨至 `prev < target && now >= target`；跌至 `prev > target && now <= target`。
+  用上一价严格比较，避免停在阈值反复触发，并保证 3 秒轮询之间的跳空不漏报。
+- **接线（main_enhanced.js）**：priceLine 橙色虚线 + 贴价格轴的 `.alert-chip`（文字/✕/拖动柄）；
+  Alt+A 或按钮进入落线模式（图区点击 `coordinateToPrice` 落线，Esc 取消）；拖柄改价（松手按现价重推方向）；
+  ✕ 删除；创建弹「添加成功」Toast；判定放在 `startAshareLivePolling` 且**先判定后覆盖基准价**；
+  命中即 `triggeredAt`+`enabled=false`（触发即失效）并三通道提醒（弹窗 12s / WebAudio 双音 / Notification）；
+  标签定位在时间轴变化、resize、每次轮询、crosshair 移动四处 rAF 重定位。
+- **持久化**：`kline-ashare-live-alerts-v1::<symbol>`，只存"仍生效且未触发"项，空集合删键；换股/重进按标的恢复。
+- **样式/结构**：`#alert-add-btn`（默认 hidden，仅看盘显示）；`.alert-chip`/`.alert-popup`/`.alert-toast` 全套 +
+  light 主题覆盖（沿用 `.chart-extreme-price-tag` 的主题约定）。
+- **门禁**：node --check 通过；`node --test tests/js/*.test.js` → **69 passed**（新增 18 项）；
+  全量 `pytest -q` → **827 passed, 89 subtests passed**（新增静态守卫 17 项）。
+- **浏览器实测**（CDP + 真实 Chromium，茅台 600519）：落线/标签/Toast/拖动改价/穿越触发（弹窗+置灰+存储清空）/
+  不重复触发/退出重进恢复 —— 8 项全通过。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：进实时看盘 → Alt+A 或点铃铛 → 图上点一下落预警线 → 拖动改价 → 价格穿越看弹窗；
+再换股/退出重进确认按标的隔离与恢复（系统通知首次需授权）。
+
+## Fix: 当前持仓卡片收窄为"仅本股票"(2026-09-11)
+- **用户反馈**：看 600519 的图，当前持仓卡片里却显示 601727 的持仓；多标的/多笔订单一多很乱。
+  要求当前持仓只显示本股票，其余到「持仓」那里看。
+- **根因**：`renderAshareLiveAccount()` 用 `Object.keys(acc.positions).filter(持股>0)` 列出全部标的
+  （当前标的置顶 ★当前）——这是 09-10「全持仓列表」的既定行为，实盘用下来嫌乱，本次按用户意见收窄。
+- **修复（main_enhanced.js，约 4 行）**：
+  `const currentHeldShares = Number(acc.positions[currentAshareSymbol]?.total_shares) || 0;`
+  `const heldCodes = currentHeldShares > 0 ? [currentAshareSymbol] : [];`
+  只渲染本股票一张卡片，无持仓显示「暂无持仓」；去掉已无意义的 ★当前 标记；卡片字段/冻结标签/次日解冻不变。
+- **其余持仓不丢**：左侧自选面板本就有「持仓」标签页（`getAshareTabStocks()` 的 `'holding'` 分支遍历全部 positions）。
+  `限价挂单` 区块保持跨标的（设计如此，含撤单）。
+- **门禁**：node --check 通过；全量 `pytest -q` → **827 passed, 89 subtests passed**（无回归）。
+- **浏览器实测**：造 600519/601727/000858 三个持仓后逐一切换——卡片分别只显示对应本股票（或「暂无持仓」），
+  且左侧「持仓」标签页仍完整列出 3 只。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Pending（待用户确认）
+用户圈出最后一根绿 K 说「这里有一个买入的标志」。已核实：**实时看盘成交目前不会在 K 线图上留标记**
+（`executeAshareLiveBuy/Sell` 只写 trade_history，不调 `updateTradeMarkers`）。候选：A 标注真实买卖点 /
+B 标注形态信号点（如站上趋势线）/ C 仅陈述非需求。确认后再实现。
+
+## Next Action
+用户硬刷新验收：看盘时切换标的，当前持仓卡片应只显示该股票；全部持仓到左侧自选面板「持仓」标签页查看。
+
+## Feature: 交易记录补日期 + K 线成交标记（买入/卖出）(2026-09-11)
+- **用户反馈**：①交易记录只显示 `12:28:00` 没有日期，不知道哪天买的；②成交后图上完全没有买入标志。
+- **① 交易记录补日期（main_enhanced.js）**：
+  - 新增 `formatAshareTradeStamp()`（MM-DD HH:MM:SS）/ `formatAshareTradeStampFull()`（完整日期挂 title）；
+    历史成交行改为显示日期+时间并过 `escapeHtml`。
+  - 顺带补一个既有字段缺失：**限价成交**记录（matchAsharePendingOrders 两处 unshift）原本没写
+    `date`/`symbol`/`lots`，已补齐与市价记录对齐；无日期的历史遗留记录退化为只显示时间，不报错。
+- **② K 线成交标记**：新增 `currentAshareBarTime()` / `ashareTradeBarTime(record)` /
+  `updateAshareLiveTradeMarkers()`。**标记从持久化的 trade_history 反推，不另存一份**，天然随账户保存恢复。
+  映射优先用成交瞬间写入的 `bar_time`（同周期精确到具体 K 线），回退把 `date+time` 换算到图表时间域再交给
+  既有 `alignTradeMarkerTimeToRenderedBar()` 对齐（换周期仍能落回当日/当周那根 K 线；**日线 bar 时间是该日
+  UTC 零点，直接用浏览器本地时间戳会整整差一天**）。买入=红色/箭头上/K线下方，卖出=绿色/箭头下/K线上方。
+- **扩展 `updateTradeMarkers()`**：新增可选覆盖 `marker.position/color/shape/label`（不传则行为与原来
+  完全一致，币圈/回放零影响）。解决"箭头上下位置跟着 K 线涨跌翻转"的问题，并让标签显示中文「买/卖」。
+- **刷新时机**：loadAshareLiveData（进入/换股/换周期）、市价买、市价卖、限价成交、清空记录、重置账户 —— 6 条路径全覆盖。
+- **门禁**：node --check 通过；JS 单测 69 passed；全量 `pytest -q` → **838 passed, 89 subtests passed**
+  （新增 `tests/test_ashare_trade_markers_static.py` 11 项守卫）。
+- **浏览器实测**：5 条混合成交记录（含跨标的 / 只有 code 的早期限价成交 / 无日期遗留）→ 3 个标记精确落位、
+  跨标的被过滤、无日期记录安全跳过；交易记录显示 `09-09 10:15:30`、title 为完整日期。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：实时看盘买卖后，K 线对应位置出现红色「买」/绿色「卖」标记；交易记录显示日期（悬停看完整时间）；
+换周期/换股/重进后标记仍正确。
+
+## Fix: 锁定按钮无视觉反馈 + 市价单以损定仓开仓价不跟随实时价 (2026-09-12)
+用户一次提了 4 项，本次交付 #1、#2；#3/#4 待决策（见文末）。
+
+### #1 锁定：先纠正前提，再修真正的问题
+- **实测结论（CDP + 真实 Chromium）**：锁定**是**按单个对象生效且**确实**阻止拖动的——
+  锁定后拖 A：价格未变、图表也没被平移；对照的未锁 B 正常移动；锁 A 时 B 仍 `locked:false`
+  （**不存在"一锁全锁"**）。现有单测 `tests/test_drawing_tools_frontend.py` 也已覆盖。
+- **真正的问题是没有视觉反馈**：`syncDrawingFloatingToolbar()` 只挂在 `onSelectionChange` 上，
+  而 `toggleLock()/toggleHidden()` 只调 `refresh()` 不触发选中变化 → 实测 `locked:true` 但
+  `toolbarLockActive:false`，锁定高亮**从来不亮**；且锁体 SVG 是静态的，锁没锁长得一模一样。
+  用户截图里唯一白框其实是**焦点环**，不是锁定态。
+- **修复**：`drawing_tools.js` 的 `toggleLock/toggleHidden` 补 `_emitSelectionChange()`；
+  `main_enhanced.js` 新增 `applyDrawingLockVisualState()` 统一刷新**主工具条+浮动工具条**两处
+  （`.active`/`aria-pressed`/`title` + 锁体闭合↔开口形状切换），`invokeDrawingAction` 再显式回刷并提示
+  「🔒 已锁定：该图形不可拖动/缩放（仅对这一个图形生效）」。
+- **注意**：截图里选中对象带「同步到下单区」按钮 → 选中的是**做多/做空测算框**（isRiskDrawing），
+  不是普通水平线；若用户仍能拖动，需按其确切步骤复现。
+- 「还是会被拖动」在标准拖动路径下**无法复现**，已向用户说明并索取步骤。
+
+### #2 市价单·以损定仓开仓价
+- **根因**：`getCryptoRiskCalcParams()` 里 `entryPrice: entryInput > 0 ? entryInput : preview.entryPrice`
+  —— 输入框只要被填过一次，旧值就永远覆盖实时价（截图里 93878.43 vs 实际 71321.1）。
+  而 `getCryptoOrderPreview()` 对市价单取 `entryPrice = currentPrice` 本身是对的。
+- **修复**：市价单强制用 `preview.entryPrice`；新增 `syncCryptoRiskCalcEntryPrice()`
+  把「开仓价」输入框同步为实时价并 `readOnly`（限价/突破单恢复可编辑），
+  在 `refreshCryptoOrderPreview()` 中调用，价格变化时一并刷新反推数量。
+- **实测**（真实币圈训练会话 BTCUSDT 61704.8）：注入旧值 93878.43 → 被拉回 61704.8、readOnly、重算数量；
+  切限价 → 恢复可编辑。
+
+### 门禁
+`node --check` 通过；全量 `pytest -q` → **838 passed, 89 subtests passed**。
+
+## Pending（等用户决策，未动代码）
+- **#3 AICoin 风格拖动止盈止损线**：可复用 A股预警那套（`createPriceLine` + 贴轴 DOM 标签 + 拖动柄），
+  待定：松手即提交还是先确认？跟随持仓改价还是新增条件单？药丸显示哪些字段？A股看盘是否也要？
+- **#4 平仓不能设价格**：`backend/crypto/futures_orders.py:186-192` 规定限价只能挂在不会立即成交的一侧
+  （平多限价必须**高于**当前价），用户输 70000（低于现价）故被拒——是设计约束不是 bug。
+  前端 `validateCryptoPendingPrice()` 同规则前置提示。待定：引导走止盈止损 / 允许可立即成交的限价平仓 /
+  维持现状。
+
+## Next Action
+用户硬刷新验收 #1、#2；并就 #3（拖动设止盈止损）与 #4（平仓限价方向）给出决策后继续。
+
+## Feature: 平仓限价解除方向限制 + 开仓后可拖动创建止盈止损 (2026-09-12)
+用户决策：松手即提交 / 拖动=修改已有单 / 像 AICoin 显示 / 币圈（A股待确认）/ **成交后平仓不设限制**。
+
+### 两处认知纠正（省掉大量返工）
+1. **拖拽改价基建早已存在**：`main_enhanced.js` ~8016 行「主图持仓均价线与止盈止损/挂单线可视化」
+   已实现 `updateChartTradePriceLines()` 画线与 `initChartTradeLineDragging()` 拖动改价，
+   松手真的 `PUT /training/{id}/orders/{orderId}`，拖动中 tooltip 还显示 距现价%/预估收益。
+   **缺的只是"开仓后创建止盈止损"的入口**，不是拖拽本身。
+2. **"到价止损"能力后端本来就有**：`_validate_pending_direction()` 里
+   「平多**突破**价必须低于现价」就是到价止损；用户卡住的是「平多**限价**必须高于现价」。
+   即能力存在但埋在反直觉的「突破」单里，且报错没给出路。
+
+### A. 平仓限价解除方向限制
+- `backend/crypto/futures_orders.py`：删掉 limit 分支两条 `reduce_only` 方向校验（**开仓与突破单不变**）。
+  语义：平仓单一直挂到价格触及才成交 → 低于现价的平多单=止损，高于现价=止盈。
+- `validateCryptoPendingPrice()`：`action==='close'` 跳过方向校验。
+- `tests/test_crypto_binance_orders.py` 对应用例由"断言被拒"改为"断言受理"。
+
+### B. 开仓后可拖动创建/修改止盈止损
+- 新增 `buildChartProtectiveLineTitle()` → `止盈 (TP): 62,938.9 距现价 +2.00% 预估 +3.7 USDT`。
+- 新增**占位止盈/止损线**（持仓已建但缺 TP/SL 时画在 `entry±2%`，标题带「拖动设置」），拖动即创建；
+  无 orderId 的兜底保护价线也标记 `isPlaceholder`（拖动改为按新价创建，不再是死线）。
+- `getHoveredTradeLine()` 放开 `orderId` 硬要求；`finishDrag()` 新增占位分支 →
+  `createProtectiveOrderFromDrag()` POST `/trade` `{action:'close',order_type:'limit',limit_price}`。
+- HTML 提示改为"开仓后也可直接在图上拖动止盈/止损线补设或改价（平仓限价任意价位皆可挂）"。
+
+### 门禁
+`node --check` 通过；Python AST 通过；全量 `pytest -q` → **838 passed, 89 subtests passed**
+（含改写后的 `test_strict_limit_direction_rejects_equal_and_reversed_prices`，等于独立验证了引擎改动）。
+
+### 浏览器实测（BTCUSDT 61704.8，市价开多 0.003）
+占位线正确渲染并带 AICoin 风格文案；拖动止损线**确实**发出
+`POST /trade {"action":"close","order_type":"limit","limit_price":54744.69}`；
+返回 `400 平多限价必须高于当前价格` → **运行中的后端仍是旧进程**；失败后线位正确回滚。
+
+### ⚠️ 用户必须重启后端
+`启动项目.bat` 用 `python -m flask --app backend.app_enhanced run`（**无 --debug**，不会自动重载），
+8000 端口跑的还是旧代码。**关闭当前控制台窗口重跑 `启动项目.bat`** 后 A 项才生效。
+（未替用户重启：Agent 侧起的后台进程可能在会话结束时被回收，反而弄没用户的本地服务。）
+
+## Pending
+1. **AICoin 药丸样式轴标签**：信息已在线的标题里，但还没做成贴价格轴的彩色圆角药丸（含 ✕）。
+   可复用 A股预警 chip 那套基建。
+2. **A股实时看盘止盈止损**：用户说"也要"，但 A股实时盘是**纯客户端模拟账户**
+   （localStorage + `matchAshareLimitOrders` 前端撮合），**无服务端条件单引擎**；
+   且其撮合规则是"卖出限价 ≤ 现价即成交"，即**低于现价的卖出限价会立刻成交而非挂着等触发**。
+   要真正支持需新增一类"触发价到位才成交"的条件单，工作量与币圈不同量级，待确认。
+
+## Next Action
+用户重跑 `启动项目.bat` 后验收：开仓 → 图上拖动止盈/止损占位线创建保护单 → 再拖动改价；
+并确认 A股是否也要止盈止损（需新增条件单机制）。
+
+## Feature: AICoin 风格价格线药丸（止盈/止损浮层）(2026-09-12)
+用户：① 按你的先做，做完看结果再讨论；② 质疑"A股止盈止损为何做不了"。
+
+### ① 已交付（main_enhanced.js + style_enhanced.css）
+给每条止盈/止损线贴一个贴价格轴左侧的药丸：
+`[止盈] +3.7 USDT (+20.00%)  0.003  ✕` / `[止损] -3.7 USDT (-20.00%)  0.003  ✕`
+- `computeProtectiveLinePnl()`：优先按**保证金收益率**（取 `position.isolated_margin`，与 AICoin 口径一致），
+  无保证金信息时退化为价格涨跌幅。
+- **角色徽标可点** → `flipProtectiveLineRole()` 把线镜像到成本价另一侧（真实单走 PUT 改价）。
+- **✕** → 真实单 `cancelPendingOrder()` 撤单；占位线进 `suppressedProtectivePlaceholders`
+  （本次会话不再显示，换训练会话复位）。
+- **按住药丸本体=拖动改价**：复用既有挂单拖拽状态机（`currentDraggedTradeLine` + pointer capture），
+  拖动 tooltip / 成功提示 / 失败回滚全部沿用。
+- 定位复用既有统一调度：`scheduleAshareAlertChipsUpdate()` 扩展为同时调度 A股预警标签 + 币圈药丸，
+  因此时间轴变化/resize/crosshair 四处钩子无需改动即已覆盖。
+- `.trade-line-pill` 全套 CSS（is-tp/is-sl/is-placeholder + light 主题）。
+
+### 踩坑（重要，写进经验）
+新增 DOM 代码让**两个既有测试挂掉**：`test_chart_workspace_frontend.py::ChartTradePriceLinesTests::test_trade_price_lines_node_execution_logic`
+与 `test_crypto_frontend_static.py::test_render_crypto_account_passes_pending_orders_to_renderer`
+—— 它们把 `clearChartTradePriceLines()`…`renderCryptoPositionCard(` 的代码**抽进 Node 沙箱执行**，
+沙箱内**没有 document**、也没有模块级 `activeTradeLinePills` / `suppressedProtectivePlaceholders`。
+→ 修法：沿用文件既有 `typeof x === 'undefined'` 防御风格做守卫。
+**以后凡在该区间新增 DOM/全局依赖，必须先加 typeof 守卫。**
+
+### 门禁与实测
+`node --check` 通过；全量 `pytest -q` → **838 passed, 89 subtests passed**。
+浏览器实测（BTCUSDT，市价开多 0.003）：药丸 2 个渲染正确（209×22px 贴轴）；
+角色徽标切换 止损60470.7→止盈62938.9 ✓；✕ 关闭后药丸 2→1 且 `suppressed:['tp']` ✓；
+**拖动创建保护单成功**：`⚡ 已创建止损单：59,853.66 USDT`，`pendingCount:1` ✓
+（该步通过 = 上一轮 #4 后端改动**端到端验证通过**）。
+
+### ⚠️ 环境状态
+验证开始时 **8000/5000/5050 均无监听**（后端已停、请求全 502），应是用户按上轮建议关掉了服务。
+**已由 Agent 临时起了一个实例**（`flask --app backend.app_enhanced run --port 8000`，含 #4 新代码），
+故本轮得以完整验证。该后台进程**可能在会话结束后被回收**——若 8000 打不开，重跑 `启动项目.bat` 即可
+（8000 被占用时 bat 会自动改用 5000）。
+
+## ② 的结论（用户是对的）
+用户："平仓就是价格到达这一刻就触发…A股永远是多，币圈可以多空而已，不是一样吗？"
+→ **逻辑上完全一样**，上一轮说"A股要另一套机制"是**夸大**。真实差异只有一个撮合细节：
+A股撮合断言是「买入限价 ≥ 现价成交、卖出限价 ≤ 现价成交」，因此
+- **止盈**（平多挂高价）：`现价 >= 卖出限价` 未满足 → 自然挂着等触发 ✓ **现有挂单即可实现**；
+- **止损**（平多挂低价）：`现价 >= 卖出限价` 挂单当下已成立 → **立刻成交**（等于市价卖出）✗，
+  需补一个**穿越式触发判定**（价格从上向下穿触发价才成交）。
+即：A股止盈零改动，止损只需加"穿越触发"一小步。等用户确认后实施。
+
+## Next Action
+用户查看药丸效果后：① 反馈样式微调；② 确认是否实施 A股穿越式止损触发判定；
+③ 若 8000 打不开则重跑 `启动项目.bat`。
+
+## Redesign: 价格线浮层按 AICoin 规格重做（v2）(2026-09-12)
+用户否掉 v1（"做太差了，哪些字体等"）并给出 4 点详细规格。
+
+### v1 被否的两个真正原因（已修）
+1. **线上写了全宽文字**——v1 把 `title` 放在价格线上，Lightweight Charts 会渲染成横贯整条线的文字带，很脏。
+   AICoin 线上**没有文字**，信息全在右侧浮层 + 轴上价格框。
+2. **凭空出现的虚线**——v1 在"持仓无止盈止损"时自动画了 ±2% 的虚线占位线，
+   用户看到就以为"我没设置怎么有线"（他原话）。→ 改为不画线，只给「止盈/止损」徽标入口。
+
+### 本轮改动（main_enhanced.js + style_enhanced.css）
+- **线上不再写字**：所有价格线 title 置空；**拖动过程中也不写**（原来会临时写"修改挂单: xxx"），
+  提示只留在跟随光标的气泡里。
+- **AICoin 风格分段浮层**：持仓 `多 0.003 @ 61,704.8 │ +0 USDT (+0.02%) │ [止盈][止损]`；
+  保护线 `止盈 │ 市价 │ 预估收益 +25.96 (+140.25%) │ 距当前价 +14.02% │ 0.003 │ ✕`；
+  挂单 `[止盈][止损] │ 限价卖出平仓 │ 0.003 │ ✕`。
+  配色对齐 AICoin：**止盈绿 #0ecb81、止损琥珀 #f0a020**（v1 止损是红色）。
+  字体排版重写：11px / tabular-nums / 分段分隔线 / 20px 行高。
+- **徽标拖动放置**（规格 1、3）：`buildProtectivePlacementChip()` +
+  `beginProtectiveLinePlacement()`——按下徽标即建临时线并接管拖动，松手创建保护单；
+  `finishDrag` 的占位分支提到"未移动即回滚"之前（点一下=按默认 ±2%，拖动=按拖到价位），
+  失败走 `removeProtectivePlaceholderLine()` 清理。
+- **平仓单按相对成本价的位置判定角色**（规格 4）：引擎里手工平仓单无 `protection_type`，
+  现按"多头在上=止盈、在下=止损（空头相反）"判定 → 平仓线自动获得与止盈止损线一致的浮层/配色/拖动/✕。
+- **修盈亏符号 bug**：`computeProtectiveLinePnl()` 原来用 `item.side` 判多空，而平仓单 side 是 sell/buy，
+  会把多头止盈算成亏损（实测 -25.96）。改为读 `currentTraining.position.side` 后为 +25.96 ✓。
+
+### 门禁与实测
+`node --check` 通过；全量 `pytest -q` → **838 passed, 89 subtests passed**。
+浏览器实测：开仓后 `lineTitles:[""]`（线上无文字）、`hasDashedPlaceholder:false`（无凭空虚线）、
+浮层与 2 个徽标正确；按住「止盈」徽标拖动发出
+`POST /trade {"action":"close","order_type":"limit","limit_price":70358.85}` → **200**，pendingCount=1；
+生成行 `is-tp`：`止盈 市价 预估收益 +25.96 (+140.25%) 距当前价 +14.02% 0.003 ✕`；
+持仓行的止盈徽标自动消失。
+
+### 两个测试基建坑（重要）
+1. **`node -e <整段脚本>` 撞 Windows 命令行长度上限（~32KB）**，报
+   `FileNotFoundError: [WinError 206] 文件名或扩展名太长`。本仓库多个前端测试这样执行抽取代码，
+   代码一变长就炸。已把 `test_chart_workspace_frontend.py::ChartTradePriceLinesTests` 改为
+   **写临时文件 + `node <file>`**（补 `import tempfile`）。以后遇到 WinError 206 同样处理。
+2. 该测试断言写死旧设计（线上含文字、止损红色），已更新为"**线上 title 必须为空** + 止损 #f0a020"。
+   它还**抓到一个真 bug**：删掉 `const title` 后漏改一处 `title: title` → `ReferenceError: title is not defined`
+   （浏览器里同样会抛，会导致持仓线画不出来）。→ 改前端后必跑门禁。
+
+## Pending（等用户确认）
+1. **规格 1「挂单时」设置止盈止损需要后端小改动**：引擎 `modify_order_price()` 只支持改价，
+   挂单的 `tp_price/sl_price` 目前**只能在提交时**给定（成交时据此生成保护子单）。
+   需：该方法增加可选 tp/sl 参数 + 路由 `PUT /orders/{id}` 透传 + 校验（多头 tp 高于/sl 低于委托价）。
+   属后端语义改动，想先与用户对齐再动。
+2. AICoin 持仓行的「平 / 市 / 反」快捷按钮：用户描述里出现但未明确要求，且「反」是新下单流程，可后续再加。
+
+## Next Action
+用户硬刷新查看新浮层；确认规格 1 是否实施后端改动；反馈样式微调。
+若 8000 打不开则重跑 `启动项目.bat`（临时实例可能已被回收）。
+
+## Feature: 画图默认样式记忆 (2026-09-10)
+- **用户需求**：线条设置（颜色/线宽/线型/显示价格标签）改一次就丢，每次画图都要重设——要求记住设定。
+- **方案**："上次怎么设，下次就怎么画"——设置面板改动同步进默认样式（localStorage `kline-drawing-default-style-v1`），之后**新建**的所有画图图形（draft 与正式同入口）自动应用这套外观。
+- **落地**（drawing_tools.js）：
+  1. `normalizeDrawingDefaultStyle`（仅 color/lineWidth/lineStyle/labelVisible 四个通用字段，非法丢弃；fillColor/透明度/字号等不纳入）+ load/save（localStorage 带 guard，node 测试环境降级）；
+  2. `_createModelForTool` 合并默认样式（显式 options 优先）——全部工具类型的新建路径统一生效；
+  3. `updateSelectedLineSettings` 成功更新后记忆 patch 中的通用字段（所有类型设置面板共用此入口：线条/矩形/文字）；
+  4. UMD 导出 normalizeDrawingDefaultStyle + 新增 2 个 node:test 用例。
+- **质量门禁**：`node --check` 通过；JS 单测 **51 passed**；ESLint 0 告警；全量 `pytest -q` → **800 passed, 89 subtests passed**。
+- 严格遵循指令：**未执行 git 提交与远程推送**。
+
+## Next Action
+用户硬刷新验收：改某图形样式（如线宽 4.5 + 换色）→ 删除重画/切换周期/刷新页面后新建图形 → 直接就是上次设置的样式。
+
+## Critical Fix: 止损线未到价就被平仓（平仓单必须区分「限价=止盈」与「突破=止损」）(2026-09-12)
+
+### 用户报告
+开多后把止损线拖到现价下方，**价格还没到，点一下"下一根 K 线"就立刻被平仓**（附两张截图：
+止损 53257.48 距离现价 -8.50%，点下一根后持仓直接消失）。
+
+### 根因（上一轮自己挖的坑，必须记住这条领域规则）
+拖动创建保护单时**无条件发平仓限价单**（`order_type: 'limit'`），而引擎对"卖出限价"的撮合条件是
+**`high >= 限价`**。止损挂在现价下方 → `high >= 止损价` 恒成立 → **下一根 K 线必然成交**。
+上一轮我把 `_validate_pending_direction` 里"平多限价必须高于现价"的方向校验删掉了（理由是"平仓不设限制"），
+恰好拆掉了唯一拦住这个组合的护栏。**"限价平仓挂在现价外侧"在交易所语义里是可立即成交的单，
+它只能当止盈，不能当止损。**
+
+引擎其实一直有正确实现（`_create_tp_sl_orders`）：**TP 用 limit（`high >= tp`）、SL 用 breakout
+（`low <= trigger`）**。缺的只是把这条规则用到"用户手工拖出来的保护单"上。
+
+### 修复
+**前端 `main_enhanced.js`**
+- 新增 `resolveCloseOrderType(price, currentPrice, closeSide)`（唯一真源）：
+  多头价在上=止盈(limit)、在下=止损(breakout)；空头相反。
+- `createProtectiveOrderFromDrag()` 复用它 → 止损发
+  `{action:'close', order_type:'breakout', trigger_price}`，止盈发 `limit + limit_price`；
+  并新增"保护价不能等于标记价"与"无持仓直接拒绝"的前置守卫。
+- `submitCryptoOrder()`：`action==='close'` 时按价位**自动改判类型**后再提交（用户只填价位，不再撞校验），
+  并在成功提示里注明"（已按价位自动选为突破止损）"。
+- `validateCryptoPendingPrice()`：恢复平仓方向校验（限价=止盈侧、突破=止损侧），错误文案直接指路"改用突破单"。
+- 角色显示改为**以订单类型为准**（平仓 limit=止盈、平仓 breakout=止损），只有类型不明才退化为
+  按成本价上下侧判断——原来按成本价判断会在"持仓浮盈、止损放在成本价之上"时把止损误标成止盈。
+- `getCryptoProtectivePrices()` 不再要求 `parent_order_id`，改为按类型识别 → 手工拖出的保护单也能出现在
+  持仓卡片的「止盈 / 止损」一行。
+- 浮层第二个分段原来**写死「市价」**（会让人误以为挂单会市价成交）→ 改为真实类型（限价/突破）。
+
+**后端 `backend/crypto/futures_orders.py`**
+- `_validate_pending_direction()` 恢复平仓限价方向护栏，文案指路："平多限价必须高于当前标记价，否则会立即成交。
+  低于标记价的止损请改用突破单。"（开仓限价/突破限制不变）
+- 新增 `_retarget_reduce_only_order()` + `modify_order_price(current_price=...)`：
+  **保护线拖过现价另一侧时自动改判类型**（限价↔突破，`protection_type` 同步），
+  拖到正好等于标记价则报 400 `invalid_limit_direction`。新增 `_validate_amend_direction()` 拒绝把**开仓挂单**
+  改到会立即成交的一侧。
+- 新增 `_protective_priority()`（模块级）：把"手工拖出的平仓突破单=止损"也纳入同根 K 线内的撮合优先级，
+  与显式子单同规则（止损优先于止盈，保守撮合）。
+- `backend/routes/training_routes.py`：`PUT /orders/{id}` 透传标记价，并把 `FuturesOrderError` 映射为 400 + code。
+
+### 门禁与实测（真实 Chromium + api 级回归）
+`node --check` 通过；全量 `pytest -q` → **853 passed, 89 subtests passed**（838 → +15）。
+浏览器实测（BTCUSDT 市价开多 0.016，现价 61704.8，止损拖到 -10% 即 55534.32）：
+- 请求体 `{"action":"close","order_type":"breakout","trigger_price":55534.32}` → **200** ✓
+- 浮层文案 `止损 | 突破 | 预估收益 -98.73 (-100.00%) | 距当前价 -10.00% | 0.016 | ✕`（不再是「市价」）✓
+- **点下一根 K 线：`sideBefore=long → sideAfter=long`，`closedPrematurely:false`** ✓（用户报的 bug 已消失）
+- 对称验证（紧贴现价下方的止损）：bar1 low=62464.4 > 62435.75 → 仍持仓；bar2 low=61779.6 穿越 → 成交平仓 ✓
+- 控制台无报错。
+
+新增回归测试：
+- `tests/test_crypto_binance_orders.py`：恢复"平仓限价挂可立即成交侧必须被拒"，
+  新增"止损突破单在价格穿越前不成交 / 止盈限价只在 high 触及才成交 / 拖过界自动改判类型 / 拖到标记价被拒 /
+  开仓挂单改到可成交侧被拒"。
+- `tests/test_crypto_futures_api.py::test_stop_loss_survives_bars_that_do_not_reach_it`：
+  走 HTTP 复刻用户场景（旧写法 400 → 突破单 200 → 推进一根不成交 → 再推进一根成交）。
+- `tests/test_crypto_order_modification.py`：补 `PUT /orders/{id}` 拖过界改判类型 + 拖到标记价 400。
+- 新增 `tests/test_crypto_protective_order_type_static.py`（9 项，含在 Node 里真跑 `resolveCloseOrderType`
+  的几何用例），把"拖动必须发 breakout"钉死。**这个守卫当场抓到一次漂移**（拖动路径一开始自己内联算类型、
+  没复用 `resolveCloseOrderType`），已改为一处真源。
+
+### ⚠️ 用户必须重启后端
+8000 端口当前进程启动于 22:07，而本轮后端改动在 22:14 之后 → **跑的是旧代码**（无 --debug 不自动重载）。
+前端改动由 static 直接 serving，**硬刷新即生效**（止损不再提前平仓只靠前端改动就已修复）；
+但**"拖动改价跨过现价自动改判类型"和 API 层护栏需要重启后端**才生效。
+
+## Next Action
+用户 `Ctrl+Shift+R` 硬刷新 + **重跑 `启动项目.bat`**（后端必须重启）后验收：
+1. 开多 → 拖「止损」徽标到现价下方 → 连点几根 K 线，**持仓应保持**直到价格真的跌破止损价；
+2. 浮层第二段应显示「突破」（止损）/「限价」（止盈），不再是「市价」；
+3. 把已有保护线拖到现价另一侧 → 类型自动在止盈/止损间切换，不会立刻成交；
+4. 若 8000 打不开，重跑 `启动项目.bat`（8000 被占会自动换 5000）。
+
+## Critical Fix: 画图「锁定」按钮点了没反应 —— 按钮被绑定了两次 (2026-09-13)
+
+### 用户报告
+选中画线后按浮动工具条 🔒，**毫无反应**，对象照样能被拖动。（这是对上一轮"锁定修复"的否定。）
+
+### 根因
+`#drawing-floating-toolbar` 里的按钮同时命中**两个**绑定器：
+通用 `document.querySelectorAll('[data-drawing-action]')` 循环 + `bindDrawingFloatingToolbar()` 专属绑定
+→ 每个按钮挂了 2 个 click 监听 → 一次点击 `toggleLock()` 跑 **2 次** → `false→true→false`，净效果为零。
+取证：给 `toggleLock` 打计数桩，一次点击 `calls: 2`；用 `cloneNode` 克隆按钮只挂一个监听 → `calls: 1`、立即锁定成功。
+
+**为什么只有 锁定/隐藏 坏**：它们是纯 toggle（跑两次=原样）；`delete` 第二次是 no-op、
+`settings/sync-order/drag` 不在通用 `methodMap` 里 → 都"看起来正常"。
+
+> ⚠️ 上一轮误判的原因：我**直接调 `drawingController.toggleLock()`** 验证，绕过事件链，测不出重复绑定，
+> 还误诊成"功能正常、只是缺视觉反馈"。**测 UI 按钮必须派发真实事件序列。**
+
+### 修复（仅前端 main_enhanced.js，硬刷新即生效，无需重启后端）
+1. 通用绑定跳过浮动工具条按钮：`if (button.closest('#drawing-floating-toolbar')) return;`
+   （必须放在写入 `drawingBound` 标记**之前**）。
+2. `applyDrawingLockVisualState()` 只对 24×24 锁体几何替换 `d`，避免污染主工具条 16×16 图标
+   （原来会把锁体画到 viewBox 外导致图标消失）。
+3. 控制器 `drawing_tools.js` 零改动 —— 它本来就有完整的 `locked` 拦截。
+
+### 验证（带阳性对照）
+第一轮合成拖动连未锁定的线都"拖不动" → 发现 `_capturePointer()` 的 `setPointerCapture` 对
+合成 pointerId 抛 `NotFoundError`，手势没建立 → 给该元素垫 try/catch 垫片后重测：
+- 阳性对照：未锁定线 `59853.66 → 66446.1` ✅（证明拖动手段有效）
+- 锁定后同法拖动：`66446.1 → 66446.1`，`moved:false` ✅
+- 隔离性：另一条未锁定线 `63555.94 → 56472.44` ✅ 锁 A 不影响 B
+- 点击 → `locked:true` + 按钮高亮 + 锁体闭合 + 🔒 提示；再点 → 解锁 ✅
+- 全量 `pytest -q` → **859 passed, 89 subtests**（853 → +6）
+
+新增 `tests/test_drawing_lock_binding_static.py`（6 项）。
+交接：`.agent/handoffs/2026-09-13-drawing-lock-double-binding.md`。
+
+### 经验
+1. 测 UI 按钮必须走真实事件（pointerdown→click, detail:1），不能直接调方法。
+2. "没反应"先打计数桩分流：事件没到 vs 到了但被抵消。
+3. 合成 pointer 拖动要先垫 `setPointerCapture` 垫片，且必须做阳性对照，否则"没动"不可信。
+4. toggle 型按钮是重复绑定的天然探针：哪个 toggle "没反应"，先查双重绑定。
+
+## Next Action
+用户硬刷新（Ctrl+Shift+R）验收：选中画线 → 点浮动工具条 🔒 → 按钮高亮、锁体闭合、
+提示「🔒 已锁定」→ 再拖该线应**拖不动**；其他未锁定的线不受影响。
+
+## Critical Fix: 全局画线隐藏、工具专属样式隔离、副图 MACD 贴底失真与价格轴自适应 (2026-09-21)
+
+### 修复内容
+1. **一键隐藏/恢复全部画线**：
+   - `DrawingController` 提供 `areAllHidden()` 与 `toggleAllHidden()`。
+   - `main_enhanced.js` 的 `handleDrawingHideAction` 区分事件来源：左侧工具栏一键切换全局隐藏/显示所有画线，浮动工具栏单线隐藏。
+   - 同步眼睛按钮高亮状态、Tooltip 文案与状态栏轻提示。
+2. **各画图工具独立继承专属样式配置**：
+   - 废除全局单一画线样式覆盖机制，引入 `loadDrawingToolStyle(toolType)` / `saveDrawingToolStyle(toolType, style)`。
+   - 趋势线、水平线、射线、折线、矩形、测量尺、文本、斐波那契回调线等工具各自隔离独立记忆颜色、线宽、线型及透明度。
+3. **副图 MACD 回放推进贴底失真与自适应量程修复**：
+   - 根因：高频步进时重建 Series 且副图价格轴丢失 `autoScale: true`，导致 ETH 暴跌至 -212 的 DIF 负值溢出画布下底边被裁剪平切，产生贴底直线和红绿柱消失的假象；开启 MACD2 时因重新实例化全屏自适应画布偶然恢复了视野。
+   - 修复：Series 复用更新（`series.setData(...)` 零抖动更新），每次刷新显式调用 `inst.chart.priceScale('right')?.applyOptions({ autoScale: true })`；移除副图时重置 `currentIndicatorType` 避免指针残留。
+4. **README.md 全面重构升级**：
+   - 详细呈现桌面独立客户端（PyWebView）与 Web 双模、加密合约拟真强平与拖拽改单、A 股实时看盘与 16 周期预警、K 线切片回放、多副图指标自适应、矢量画线系统等完整特性矩阵。
+
+### 自动化验证
+- Python 静态契约与前端测试：252 passed
+- Node.js 前端单元测试：82 passed
+- main_enhanced.js 与 drawing_tools.js 语法校验通过

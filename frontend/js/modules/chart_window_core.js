@@ -52,6 +52,11 @@ function formatIntradayPeriodBadge(period) {
         case '8h': return '8h';
         case '12h': return '12h';
         case '4h_session': return '4h';
+        case '60m': return '60m';
+        case '120m': return '120m';
+        case '240m': return '240m';
+        case 'monthly':
+        case 'month': return '1M';
         case 'weekly': return '1W';
         case '1d': return '1D';
         case '2d': return '2D';

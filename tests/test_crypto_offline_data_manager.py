@@ -41,8 +41,8 @@ class CryptoOfflineDataManagerTests(unittest.TestCase):
         self.assertIn("symbols", res)
         self.assertGreaterEqual(res["total_symbols"], 1)
 
-        # BTCUSDT should be in the list
-        btc = next((s for s in res["symbols"] if s["symbol"] == "BTCUSDT"), None)
+        # BTCUSDT (binance) should be in the list
+        btc = next((s for s in res["symbols"] if s["symbol"] == "BTCUSDT" and s["source"] == "binance"), None)
         self.assertIsNotNone(btc)
         self.assertEqual(btc["source"], "binance")
         self.assertGreaterEqual(btc["trade_count"], 32)

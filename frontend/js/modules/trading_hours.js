@@ -45,13 +45,14 @@
 
     /**
      * 计算可视时间范围内的做单时段分段（图表时间秒）。
-     * 图表 X 轴以 Date.UTC 保留市场墙上时间（08:00 即 08:00:00 UTC），
-     * 默认 tzOffsetMinutes 为 0 以与图表时间坐标 100% 对齐。
+     * 图表显示层已统一按北京时间（UTC+8）渲染（十字光标与时间轴刻度 +8h），
+     * 用户选的时段即北京时间窗口；底层数据时间戳仍为 UTC，
+     * 因此默认 tzOffsetMinutes = 480：把北京时间窗口换算回 UTC 时间戳再投影到坐标。
      * @returns {Array<[number, number]>} 有序且互不重叠的 [startSec, endSec]
      */
     function computeTradingHourSegments(fromSec, toSec, hours, tzOffsetMinutes) {
         const hoursInput = hours || getTradingHours();
-        const tz = (tzOffsetMinutes === undefined ? 0 : tzOffsetMinutes) * 60;
+        const tz = (tzOffsetMinutes === undefined ? 480 : tzOffsetMinutes) * 60;
         const from = Number(fromSec);
         const to = Number(toSec);
         if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return [];

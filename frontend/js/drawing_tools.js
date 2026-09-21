@@ -143,6 +143,96 @@
     );
   }
 
+  function getBarDateString(ts) {
+    if (!ts) return null;
+    if (typeof ts === 'object' && ts.year) {
+      return `${ts.year}-${String(ts.month).padStart(2, '0')}-${String(ts.day).padStart(2, '0')}`;
+    }
+    const n = Number(ts);
+    if (Number.isFinite(n)) {
+      const sec = n > 1e11 ? Math.floor(n / 1000) : Math.floor(n);
+      return new Date(sec * 1000).toISOString().slice(0, 10);
+    }
+    return null;
+  }
+
+  function anchorToCoordinate(timeScale, anchor, bars, timeProjection) {
+    if (!timeScale || !anchor || !Number.isFinite(anchor.time)) return null;
+
+    // 1. 直连精确时间匹配
+    const directX = timeScale.timeToCoordinate(anchor.time);
+    if (Number.isFinite(directX)) return directX;
+
+    const list = Array.isArray(bars) ? bars : [];
+    if (!list.length) {
+      return projectedTimeToCoordinate(timeScale, anchor.time, timeProjection);
+    }
+
+    const firstBar = list[0];
+    const lastBar = list[list.length - 1];
+
+    // 2. 锚点在最新 K 线右侧（未来预测投影区）
+    if (lastBar && anchor.time > lastBar.time) {
+      return projectedTimeToCoordinate(timeScale, anchor.time, timeProjection);
+    }
+
+    // 3. 跨周期对齐：优先查找同自然日 (UTC) 的 K 线（解决日K 00:00 与分时 11:30/15:00 无法直接命中的问题）
+    const targetDate = getBarDateString(anchor.time);
+    let matchedBar = null;
+
+    if (targetDate) {
+      const sameDayBars = list.filter((b) => getBarDateString(b.time) === targetDate);
+      if (sameDayBars.length === 1) {
+        matchedBar = sameDayBars[0];
+      } else if (sameDayBars.length > 1) {
+        if (Number.isFinite(anchor.price)) {
+          // 多个分时 bar 时，优先匹配高/低/收/开与锚点价格最接近的 bar（精准吸附峰值/谷值）
+          matchedBar = sameDayBars.reduce((best, b) => {
+            const bestDist = Math.min(
+              Math.abs(best.high - anchor.price),
+              Math.abs(best.low - anchor.price),
+              Math.abs(best.close - anchor.price),
+              Math.abs(best.open - anchor.price)
+            );
+            const curDist = Math.min(
+              Math.abs(b.high - anchor.price),
+              Math.abs(b.low - anchor.price),
+              Math.abs(b.close - anchor.price),
+              Math.abs(b.open - anchor.price)
+            );
+            return curDist < bestDist ? b : best;
+          }, sameDayBars[0]);
+        } else {
+          matchedBar = sameDayBars.reduce((best, b) => (
+            Math.abs(b.time - anchor.time) < Math.abs(best.time - anchor.time) ? b : best
+          ), sameDayBars[0]);
+        }
+      }
+    }
+
+    // 4. 若无同日精确匹配且在数据历史范围内（如周K/月K跨越或周末非交易日）
+    if (!matchedBar && firstBar && lastBar && anchor.time >= firstBar.time) {
+      matchedBar = list.reduce((best, b) => (
+        !best || Math.abs(b.time - anchor.time) < Math.abs(best.time - anchor.time) ? b : best
+      ), null);
+    }
+
+    if (matchedBar) {
+      const matchedX = timeScale.timeToCoordinate(matchedBar.time);
+      if (Number.isFinite(matchedX)) return matchedX;
+    }
+
+    // 5. 锚点早于最旧 K 线（超出历史深度）：
+    // 若仅微幅早于首根（如周末相差3日内），对齐到首根
+    if (firstBar && (firstBar.time - anchor.time) <= 3 * 86400) {
+      const firstX = timeScale.timeToCoordinate(firstBar.time);
+      if (Number.isFinite(firstX)) return firstX;
+    }
+
+    // 若远早于当前周期数据首根，严禁向负数坐标外推产生对角跨屏乱线，直接返回 null
+    return null;
+  }
+
   function normalizeAnchor(anchor) {
     if (!anchor || typeof anchor !== 'object') {
       throw new TypeError('anchor must be an object');
@@ -198,6 +288,134 @@
    * 的 model.options 都会经过此函数，确保字段一致。这样前端设置面板可以按统一字段读写。
    * 注意：color 字段不在此处强制 fallback（保留 undefined 让渲染时回退到主题色 strokeColor）。
    */
+  // 画图样式记忆：每种画图工具（趋势线、水平线、射线、折线、矩形、文字等）拥有自己专属独立的样式记忆，
+  // 互相完全隔离，不再全局共用覆盖（"每种画图工具单独一种设置，自己继承自己的"）。
+  const DRAWING_STYLE_STORAGE_KEY = 'kline-drawing-default-style-v1';
+  const DRAWING_TOOL_STYLES_STORAGE_KEY = 'kline-drawing-tool-styles-v2';
+
+  const DEFAULT_TOOL_STYLES = Object.freeze({
+    trend: { color: '#2962ff', lineWidth: 1, lineStyle: 'solid', labelVisible: true },
+    horizontal: { color: '#2962ff', lineWidth: 1, lineStyle: 'solid', labelVisible: true },
+    ray: { color: '#2962ff', lineWidth: 1, lineStyle: 'solid', labelVisible: true },
+    polyline: { color: '#2962ff', lineWidth: 1, lineStyle: 'solid', labelVisible: false },
+    rectangle: { color: '#2962ff', fillColor: '#2962ff', fillOpacity: 0.12, lineWidth: 1, lineStyle: 'solid' },
+    ruler: { color: '#2962ff', lineWidth: 1, lineStyle: 'solid' },
+    text: { color: '#f0b90b', fontSize: 14, text: 'Text' },
+    fibonacci: { levels: DEFAULT_FIBONACCI_LEVELS, reverse: false },
+    'fib-trend-time': { levels: DEFAULT_FIB_TREND_TIME_LEVELS, reverse: false },
+  });
+
+  function normalizeDrawingDefaultStyle(raw) {
+    const source = (raw && typeof raw === 'object') ? raw : {};
+    const style = {};
+    if (typeof source.color === 'string' && source.color.trim()) style.color = source.color.trim();
+    if (Number.isFinite(source.lineWidth) && source.lineWidth > 0) style.lineWidth = source.lineWidth;
+    if (source.lineStyle === 'solid' || source.lineStyle === 'dashed' || source.lineStyle === 'dotted') {
+      style.lineStyle = source.lineStyle;
+    }
+    if (typeof source.labelVisible === 'boolean') style.labelVisible = source.labelVisible;
+    return style;
+  }
+
+  function normalizeDrawingToolStyle(toolType, raw) {
+    const type = normalizeDrawingType(toolType);
+    const source = (raw && typeof raw === 'object') ? raw : {};
+    const normalized = {};
+
+    if (typeof source.color === 'string' && source.color.trim()) {
+      normalized.color = source.color.trim();
+    }
+    if (Number.isFinite(source.lineWidth) && source.lineWidth > 0) {
+      normalized.lineWidth = source.lineWidth;
+    }
+    if (source.lineStyle === 'solid' || source.lineStyle === 'dashed' || source.lineStyle === 'dotted') {
+      normalized.lineStyle = source.lineStyle;
+    }
+    if (typeof source.labelVisible === 'boolean') {
+      normalized.labelVisible = source.labelVisible;
+    }
+    if (typeof source.fillColor === 'string' && source.fillColor.trim()) {
+      normalized.fillColor = source.fillColor.trim();
+    }
+    if (Number.isFinite(source.fillOpacity) && source.fillOpacity >= 0 && source.fillOpacity <= 1) {
+      normalized.fillOpacity = source.fillOpacity;
+    }
+    if (Number.isFinite(source.fontSize) && source.fontSize > 0) {
+      normalized.fontSize = source.fontSize;
+    }
+    if (typeof source.text === 'string') {
+      normalized.text = source.text;
+    }
+    if (typeof source.reverse === 'boolean') {
+      normalized.reverse = source.reverse;
+    }
+    if (Array.isArray(source.levels)) {
+      normalized.levels = clone(source.levels);
+    }
+    return normalized;
+  }
+
+  function loadDrawingToolStyle(toolType) {
+    const type = normalizeDrawingType(toolType);
+    const fallback = DEFAULT_TOOL_STYLES[type] || { color: '#2962ff', lineWidth: 1, lineStyle: 'solid' };
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(DRAWING_TOOL_STYLES_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object' && parsed[type] && typeof parsed[type] === 'object') {
+            return { ...clone(fallback), ...normalizeDrawingToolStyle(type, parsed[type]) };
+          }
+        }
+      }
+    } catch (error) {}
+    return clone(fallback);
+  }
+
+  function saveDrawingToolStyle(toolType, patch) {
+    if (!toolType || !patch || typeof patch !== 'object') return;
+    const type = normalizeDrawingType(toolType);
+    const cleaned = normalizeDrawingToolStyle(type, patch);
+    if (!Object.keys(cleaned).length) return;
+    try {
+      if (typeof localStorage === 'undefined') return;
+      let allStyles = {};
+      const raw = localStorage.getItem(DRAWING_TOOL_STYLES_STORAGE_KEY);
+      if (raw) {
+        try { allStyles = JSON.parse(raw) || {}; } catch (e) {}
+      }
+      const current = allStyles[type] || loadDrawingToolStyle(type);
+      allStyles[type] = { ...current, ...cleaned };
+      localStorage.setItem(DRAWING_TOOL_STYLES_STORAGE_KEY, JSON.stringify(allStyles));
+    } catch (error) {}
+  }
+
+  function loadDrawingDefaultStyle(toolType) {
+    if (toolType) return loadDrawingToolStyle(toolType);
+    try {
+      if (typeof localStorage === 'undefined') return {};
+      const raw = localStorage.getItem(DRAWING_STYLE_STORAGE_KEY);
+      if (!raw) return {};
+      return normalizeDrawingDefaultStyle(JSON.parse(raw));
+    } catch (error) {
+      return {};
+    }
+  }
+
+  function saveDrawingDefaultStyle(patch, toolType) {
+    if (toolType) {
+      saveDrawingToolStyle(toolType, patch);
+      return;
+    }
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const merged = { ...loadDrawingDefaultStyle(), ...normalizeDrawingDefaultStyle(patch) };
+      localStorage.setItem(DRAWING_STYLE_STORAGE_KEY, JSON.stringify(merged));
+    } catch (error) {
+      // 存储不可用时静默降级（样式记忆是非关键路径）
+    }
+  }
+
   function normalizeLineOptions(options, defaults = {}) {
     const config = options || {};
     const fallback = {
@@ -517,6 +735,16 @@
       return clone(next[index]);
     }
 
+    updateAll(updater) {
+      if (this._drawings.length === 0) return [];
+      const next = this.snapshot().map((drawing) => {
+        const updated = typeof updater === 'function' ? updater(drawing) : { ...drawing, ...updater };
+        return serializeDrawing({ ...updated, id: drawing.id });
+      });
+      this._commit(next);
+      return this.snapshot();
+    }
+
     remove(id) {
       const next = this._drawings.filter((drawing) => drawing.id !== id);
       if (next.length === this._drawings.length) return false;
@@ -760,7 +988,7 @@
 
         const first = points[0];
         const second = points[1] || first;
-        const requiresTwoAnchors = !['horizontal', 'text'].includes(model.type);
+        const requiresTwoAnchors = !['horizontal', 'text', 'polyline'].includes(model.type);
         if (!first || (requiresTwoAnchors && !second)) {
           context.restore();
           return;
@@ -1014,6 +1242,29 @@
                 ratioX, ratioY, {width, height}
               );
             });
+          }
+        } else if (model.type === 'polyline') {
+          const visible = points.filter(Boolean);
+          if (visible.length >= 2) {
+            context.strokeStyle = strokeColor;
+            context.lineWidth = model.options.lineWidth * Math.max(ratioX, ratioY);
+            applyLineStyle(context, model.options.lineStyle, ratioX);
+            context.beginPath();
+            context.moveTo(visible[0].x, visible[0].y);
+            for (let index = 1; index < visible.length; index += 1) {
+              context.lineTo(visible[index].x, visible[index].y);
+            }
+            context.stroke();
+          }
+          // AICoin 风格连续折线：每个锚点白底圆圈（绘制中/悬停/选中时显示）
+          if ((model.hovered || model.selected) && !model.locked) {
+            context.fillStyle = '#ffffff';
+            for (const anchor of visible) {
+              context.beginPath();
+              context.arc(anchor.x, anchor.y, 4 * Math.max(ratioX, ratioY), 0, Math.PI * 2);
+              context.fill();
+              context.stroke();
+            }
           }
         } else {
           drawLine(context, first, second);
@@ -1297,17 +1548,11 @@
     projectAnchors() {
       if (!this._chart || !this._series) return [];
       const timeScale = this._chart.timeScale();
+      const modelType = this._model?.type;
       return this._model.anchors.map((anchor) => {
-        let projectedTime = anchor.time;
-        let x = projectedTimeToCoordinate(timeScale, projectedTime, this._timeProjection);
-        if (!Number.isFinite(x) && this._bars.length) {
-          const nearest = this._bars.reduce((best, bar) => (
-            !best || Math.abs(bar.time - anchor.time) < Math.abs(best.time - anchor.time) ? bar : best
-          ), null);
-          if (nearest) {
-            projectedTime = nearest.time;
-            x = timeScale.timeToCoordinate(projectedTime);
-          }
+        let x = anchorToCoordinate(timeScale, anchor, this._bars, this._timeProjection);
+        if (modelType === 'horizontal') {
+          x = Number.isFinite(x) ? x : 0;
         }
         const y = this._series.priceToCoordinate(anchor.price);
         return Number.isFinite(x) && Number.isFinite(y) ? {x, y} : null;
@@ -1382,6 +1627,16 @@
       if (this._model.type === 'text') {
         return Math.abs(point.x - first.x) <= 40 && Math.abs(point.y - first.y) <= 16 ? 0 : null;
       }
+      if (this._model.type === 'polyline') {
+        const visible = anchors.filter(Boolean);
+        if (visible.length < 2) return null;
+        let best = null;
+        for (let index = 0; index < visible.length - 1; index += 1) {
+          const distance = distanceToSegment(point, visible[index], visible[index + 1]);
+          if (distance != null && (best == null || distance < best)) best = distance;
+        }
+        return best != null && best <= tolerance ? best : null;
+      }
       if (this._model.type === 'fibonacci') {
         if (!second) return null;
         const left = Math.min(first.x, second.x) - tolerance;
@@ -1451,6 +1706,7 @@
     'long-position': 3,
     'short-position': 3,
     'risk-reward': 3,
+    'polyline': Infinity,
   });
 
   class DrawingController {
@@ -1505,6 +1761,14 @@
       this._boundPointerDown = (event) => this._onPointerDown(event);
       this._boundPointerMove = (event) => this._onPointerMove(event);
       this._boundPointerUp = (event) => this._onPointerUp(event);
+      this._boundDblClick = (event) => this._onDblClick(event);
+      this._boundContextMenu = (event) => {
+        // 连续折线绘制中：右键用于结束成线，屏蔽浏览器右键菜单
+        if (this._gesture && this._gesture.type === 'polyline-create'
+            && typeof event.preventDefault === 'function') {
+          event.preventDefault();
+        }
+      };
       this._boundPointerCancel = (event) => this._onPointerCancel(event);
       this._boundPointerLeave = () => this._onPointerLeave();
       this._boundKeyDown = (event) => this._onKeyDown(event);
@@ -1516,6 +1780,8 @@
       this.element.addEventListener('pointerdown', this._boundPointerDown);
       this.element.addEventListener('pointermove', this._boundPointerMove);
       this.element.addEventListener('pointerup', this._boundPointerUp);
+      this.element.addEventListener('dblclick', this._boundDblClick);
+      this.element.addEventListener('contextmenu', this._boundContextMenu);
       this.element.addEventListener('pointercancel', this._boundPointerCancel);
       this.element.addEventListener('pointerleave', this._boundPointerLeave);
       this.keyTarget.addEventListener('keydown', this._boundKeyDown);
@@ -1661,6 +1927,13 @@
       const options = normalizeFibonacciSettings({...model.options, ...incoming}, defaults);
       this.store.update(drawingId, {...model, options});
       this.refresh();
+      // 样式记忆：为该斐波那契类型保存独立样式记忆
+      saveDrawingToolStyle(model.type, {
+        levels: options.levels,
+        reverse: options.reverse,
+        lineWidth: options.lineWidth,
+        lineStyle: options.lineStyle,
+      });
       return clone(options);
     }
 
@@ -1764,6 +2037,10 @@
       }
       this.store.update(model.id, {...model, options: next});
       this.refresh();
+      // 样式记忆：为当前工具类型保存独立专属记忆，各种工具完全隔离、自己继承自己
+      if (patch && typeof patch === 'object') {
+        saveDrawingToolStyle(type, patch);
+      }
       return clone(next);
     }
 
@@ -1809,6 +2086,9 @@
       const updated = this.store.update(this.selectedId, (model) => ({...model, locked: !model.locked}));
       if (!updated) return false;
       this.refresh();
+      // 锁定的对象仍然处于选中态：必须通知上层，否则浮动工具条的"锁定"高亮
+      // 永远不会更新，用户点完看不出到底锁上没有。
+      if (this._emitSelectionChange) this._emitSelectionChange();
       return true;
     }
 
@@ -1817,7 +2097,28 @@
       const updated = this.store.update(this.selectedId, (model) => ({...model, hidden: !model.hidden}));
       if (!updated) return false;
       this.refresh();
+      if (this._emitSelectionChange) this._emitSelectionChange();
       return true;
+    }
+
+    areAllHidden() {
+      const all = this.store.getAll();
+      if (all.length === 0) return false;
+      return all.every((m) => Boolean(m.hidden));
+    }
+
+    toggleAllHidden() {
+      const all = this.store.getAll();
+      if (all.length === 0) return false;
+      // 若存在任何一个非隐藏的画线，则全部置为隐藏；若已经全部隐藏，则全部恢复显示
+      const shouldHide = !all.every((m) => Boolean(m.hidden));
+      this.store.updateAll((model) => ({ ...model, hidden: shouldHide }));
+      if (shouldHide && this.selectedId) {
+        this.selectedId = null;
+      }
+      this.refresh();
+      if (this._emitSelectionChange) this._emitSelectionChange();
+      return shouldHide;
     }
 
     deleteSelected() {
@@ -1830,6 +2131,60 @@
         this.refresh();
       }
       return removed;
+    }
+
+    /**
+     * 连续折线：提交已落锚点（>=2 点成线），结束手势并回到选择模式。
+     */
+    _commitPolyline() {
+      const gesture = this._gesture;
+      if (!gesture || gesture.type !== 'polyline-create') return;
+      if (gesture.anchors.length >= 2) {
+        try {
+          const model = this._createModelForTool('polyline', gesture.anchors);
+          this.store.add(model);
+          this.selectedId = model.id;
+          this._hoveredId = model.id;
+        } catch (error) {
+          if (this.onError) this.onError(error);
+        }
+      }
+      this.activeTool = null;
+      if (this.onToolChange) this.onToolChange(null);
+      this._clearDraftPrimitive();
+      this.refresh();
+      this._gesture = null;
+      this._setInteractionState(false, 'polyline-create');
+    }
+
+    /**
+     * 连续折线：回退最后一个已落锚点；仅剩一点时取消整个手势。
+     * @returns {boolean} 是否处于折线手势且已处理
+     */
+    _removeLastPolylinePoint() {
+      const gesture = this._gesture;
+      if (!gesture || gesture.type !== 'polyline-create') return false;
+      if (gesture.anchors.length <= 1) {
+        this.cancelGesture();
+        this.activeTool = null;
+        if (this.onToolChange) this.onToolChange(null);
+        return true;
+      }
+      gesture.anchors.pop();
+      this._updatePolylineDraft();
+      return true;
+    }
+
+    _updatePolylineDraft() {
+      const gesture = this._gesture;
+      if (!gesture || gesture.type !== 'polyline-create') return;
+      try {
+        const preview = this._createModelForTool('polyline', gesture.anchors, DRAFT_DRAWING_ID);
+        gesture.invalid = false;
+        this._setDraftModel(preview);
+      } catch (error) {
+        if (this.onError) this.onError(error);
+      }
     }
 
     cancelGesture() {
@@ -1846,6 +2201,8 @@
     destroy() {
       this.cancelGesture();
       this.element.removeEventListener('pointerdown', this._boundPointerDown);
+      this.element.removeEventListener('dblclick', this._boundDblClick);
+      this.element.removeEventListener('contextmenu', this._boundContextMenu);
       this.element.removeEventListener('pointermove', this._boundPointerMove);
       this.element.removeEventListener('pointerup', this._boundPointerUp);
       this.element.removeEventListener('pointercancel', this._boundPointerCancel);
@@ -1943,6 +2300,11 @@
     _createModelForTool(tool, anchors, id) {
       const normalizedType = normalizeDrawingType(tool);
       const config = {id, selected: Boolean(id)};
+      // 应用当前画图工具专属记忆的默认样式（每种工具独立记忆、自己继承自己的）
+      const toolStyle = loadDrawingToolStyle(normalizedType);
+      if (toolStyle && Object.keys(toolStyle).length) {
+        config.options = {...toolStyle, ...(config.options || {})};
+      }
       if (this._lastActiveSnapPoint) {
         config.snapPoint = clone(this._lastActiveSnapPoint);
       }
@@ -2110,6 +2472,33 @@
     _onPointerDown(event) {
       const point = this._safePointerEvent(event);
       if (!point) return;
+      if (this.activeTool === 'polyline') {
+        // 连续折线：左键单击加点，右键/双击/Enter 结束成线；手势跨多次 pointerdown 保持
+        if (event.button === 2) {  // 原生事件字段：_safePointerEvent 不透传 button
+          if (this._gesture && this._gesture.type === 'polyline-create') {
+            this._commitPolyline();
+          }
+          if (event.preventDefault) event.preventDefault();
+          return;
+        }
+        const anchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
+        if (!anchor) return;
+        if (event.preventDefault) event.preventDefault();
+        if (this._gesture && this._gesture.type === 'polyline-create') {
+          const last = this._gesture.anchors[this._gesture.anchors.length - 1];
+          const sameAsLast = last && last.time === anchor.time && Math.abs(last.price - anchor.price) < 1e-12;
+          if (!sameAsLast) {
+            this._gesture.anchors.push(anchor);
+            this._updatePolylineDraft();
+          }
+          return;
+        }
+        this._gesture = { type: 'polyline-create', tool: 'polyline', anchors: [anchor], invalid: false };
+        this._updatePolylineDraft();
+        this._capturePointer(point.pointerId);
+        this._setInteractionState(true, 'polyline-create');
+        return;
+      }
       if (this.activeTool && this.activeTool !== 'select') {
         const anchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
         if (!anchor) return;
@@ -2163,6 +2552,19 @@
     _processPointerMove(point) {
       const gesture = this._gesture;
       if (!gesture) return;
+      if (gesture.type === 'polyline-create') {
+        const anchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
+        if (!anchor) return;
+        const previewAnchors = [...gesture.anchors, anchor];
+        try {
+          const preview = this._createModelForTool('polyline', previewAnchors, DRAFT_DRAWING_ID);
+          gesture.invalid = false;
+          this._setDraftModel(preview);
+        } catch (error) {
+          if (this.onError) this.onError(error);
+        }
+        return;
+      }
       if (gesture.type === 'create') {
         const endAnchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
         const anchors = endAnchor
@@ -2196,8 +2598,8 @@
         const deltaX = point.x - gesture.startPoint.x;
         const deltaY = point.y - gesture.startPoint.y;
         anchors = gesture.original.anchors.map((anchor) => {
-          const originalX = projectedTimeToCoordinate(
-            this.chart.timeScale(), anchor.time, this._timeProjection
+          const originalX = anchorToCoordinate(
+            this.chart.timeScale(), anchor, this._bars, this._timeProjection
           );
           const originalY = this.series.priceToCoordinate(anchor.price);
           if (!Number.isFinite(originalX) || !Number.isFinite(originalY)) return clone(anchor);
@@ -2254,6 +2656,13 @@
       const point = this._safePointerEvent(event);
       this._cancelPendingPointerMove();
       if (point) this._processPointerMove(point);
+      if (gesture.type === 'polyline-create') {
+        // 连续折线：pointerup 不提交不结束，等待下一次单击/双击/Enter/Esc
+        this._releasePointerCapture();
+        this._lastActiveSnapPoint = null;
+        if (event.preventDefault) event.preventDefault();
+        return;
+      }
       if (gesture.type === 'create') {
         if (!gesture.invalid && gesture.preview && point) {
           try {
@@ -2283,6 +2692,25 @@
       if (event.preventDefault) event.preventDefault();
     }
 
+    /**
+     * 连续折线：原生 dblclick 结束成线（PointerEvent.detail 规范恒为 0，不能用于双击判断）。
+     */
+    _onDblClick(event) {
+      if (!this._gesture || this._gesture.type !== 'polyline-create') return;
+      if (typeof event.preventDefault === 'function') event.preventDefault();
+      const point = this._safePointerEvent(event);
+      if (point) {
+        const anchor = this._anchorFromPoint(point, point.altKey, point.ctrlKey);
+        const last = this._gesture.anchors[this._gesture.anchors.length - 1];
+        const sameAsLast = anchor && last && last.time === anchor.time
+          && Math.abs(last.price - anchor.price) < 1e-12;
+        if (anchor && !sameAsLast) {
+          this._gesture.anchors.push(anchor);
+        }
+      }
+      this._commitPolyline();
+    }
+
     _onPointerCancel(event) {
       this.cancelGesture();
       if (event && event.preventDefault) event.preventDefault();
@@ -2310,7 +2738,17 @@
         if (this.onToolChange) this.onToolChange(null);
         this.select(null);
       } else if (key === 'delete' || key === 'backspace') {
-        this.deleteSelected();
+        if (this._gesture && this._gesture.type === 'polyline-create') {
+          this._removeLastPolylinePoint();
+        } else {
+          this.deleteSelected();
+        }
+      } else if (key === 'enter') {
+        if (this._gesture && this._gesture.type === 'polyline-create') {
+          this._commitPolyline();
+        } else {
+          return;
+        }
       } else if ((event.ctrlKey || event.metaKey) && key === 'z' && event.shiftKey) {
         this.redo();
       } else if ((event.ctrlKey || event.metaKey) && key === 'z') {
@@ -2348,9 +2786,20 @@
     createRulerModel,
     createRiskRewardModel,
     serializeDrawing,
+    normalizeDrawingDefaultStyle,
+    normalizeDrawingToolStyle,
+    loadDrawingToolStyle,
+    saveDrawingToolStyle,
+    loadDrawingDefaultStyle,
+    saveDrawingDefaultStyle,
+    DRAWING_STYLE_STORAGE_KEY,
+    DRAWING_TOOL_STYLES_STORAGE_KEY,
+    DEFAULT_TOOL_STYLES,
     DrawingStore,
     DrawingPrimitive,
     normalizePointerEvent,
     DrawingController,
+    getBarDateString,
+    anchorToCoordinate,
   };
 }));

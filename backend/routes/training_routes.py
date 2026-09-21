@@ -5,6 +5,7 @@ state late-bound via `import backend.app_enhanced as ae`.)
 from flask import Blueprint, jsonify, request
 from backend.kline_processor_enhanced import KLineProcessorEnhanced
 from backend.order_manager import PendingOrderManager
+from backend.crypto.futures_orders import FuturesOrderError
 from backend.trade_simulator_enhanced import TradeSimulatorEnhanced
 import base64
 from datetime import datetime, timezone
@@ -803,12 +804,16 @@ def modify_pending_order(training_id, order_id):
         if ae._is_crypto_session(training):
             lock = training.setdefault('_crypto_next_lock', Lock())
             with lock:
-                order_book = training['futures_executor'].engine.order_book
+                engine = training['futures_executor'].engine
+                order_book = engine.order_book
                 normalized_order_id = str(order_id)
+                simulator = engine.simulator
+                mark_price = simulator.last_mark_price or simulator.position.entry_price
                 updated_order = order_book.modify_order_price(
                     normalized_order_id,
                     new_price,
                     training['crypto_session'].clock.current_time,
+                    current_price=mark_price if mark_price and mark_price > 0 else None,
                 )
                 if updated_order:
                     ae._checkpoint_crypto_futures(training)
@@ -828,6 +833,8 @@ def modify_pending_order(training_id, order_id):
             })
 
         return jsonify({'error': 'A股暂不支持拖拽改单'}), 400
+    except FuturesOrderError as error:
+        return jsonify({'error': error.message, 'message': error.message, 'code': error.code}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

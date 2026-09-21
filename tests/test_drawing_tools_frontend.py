@@ -1710,5 +1710,193 @@ class FibTrendTimeRuntimeTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
+    def test_cross_period_anchor_projection_and_null_rejection(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        assert.equal(typeof drawing.anchorToCoordinate, 'function');
+        assert.equal(typeof drawing.getBarDateString, 'function');
+
+        // 日K转120分吸附到同日峰值
+        const anchor = {{ time: 1773100800, price: 44.06 }};
+        const bars = [
+            {{ time: 1773142200, high: 42.7, low: 40.74, open: 41, close: 42 }},
+            {{ time: 1773154800, high: 44.03, low: 41.64, open: 42, close: 43.5 }}
+        ];
+        const timeScale = {{
+            timeToCoordinate(t) {{ return t === 1773154800 ? 260 : null; }}
+        }};
+        const x = drawing.anchorToCoordinate(timeScale, anchor, bars);
+        assert.equal(x, 260);
+
+        // 超出历史深度数月的点返回 null
+        const oldAnchor = {{ time: 1000, price: 20 }};
+        const recentBars = [{{ time: 10000000 }}, {{ time: 10000100 }}];
+        assert.equal(drawing.anchorToCoordinate(timeScale, oldAnchor, recentBars), null);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_drawing_toggle_all_hidden_and_are_all_hidden(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{
+          priceToCoordinate: v => v, coordinateToPrice: v => v,
+          attachPrimitive() {{}}, detachPrimitive() {{}},
+        }};
+        const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
+
+        // 1. 空画线时
+        assert.equal(controller.areAllHidden(), false);
+        assert.equal(controller.toggleAllHidden(), false);
+
+        // 2. 添加两根线
+        controller.store.add(drawing.createHorizontalModel([{{time: 1, price: 2}}], {{id: 'h1'}}));
+        controller.store.add(drawing.createTrendModel([{{time: 1, price: 2}}, {{time: 3, price: 4}}], {{id: 't1'}}));
+        controller.refresh();
+        controller.select('h1');
+        assert.equal(controller.selectedId, 'h1');
+        assert.equal(controller.areAllHidden(), false);
+
+        // 3. 执行 toggleAllHidden -> 全部隐藏，选中态清除，返回 true
+        const hidAll = controller.toggleAllHidden();
+        assert.equal(hidAll, true);
+        assert.equal(controller.areAllHidden(), true);
+        assert.equal(controller.store.get('h1').hidden, true);
+        assert.equal(controller.store.get('t1').hidden, true);
+        assert.equal(controller.selectedId, null);
+
+        // 4. 再次执行 toggleAllHidden -> 全部恢复显示，返回 false
+        const unhidAll = controller.toggleAllHidden();
+        assert.equal(unhidAll, false);
+        assert.equal(controller.areAllHidden(), false);
+        assert.equal(controller.store.get('h1').hidden, false);
+        assert.equal(controller.store.get('t1').hidden, false);
+
+        // 5. 单个隐藏时，toggleAllHidden 依然视作"存在可见项"，执行全部隐藏
+        controller.select('h1');
+        controller.toggleHidden(); // 只有 h1 隐藏，t1 依然显示
+        assert.equal(controller.store.get('h1').hidden, true);
+        assert.equal(controller.store.get('t1').hidden, false);
+        assert.equal(controller.areAllHidden(), false);
+        assert.equal(controller.toggleAllHidden(), true);
+        assert.equal(controller.store.get('h1').hidden, true);
+        assert.equal(controller.store.get('t1').hidden, true);
+        assert.equal(controller.areAllHidden(), true);
+
+        // 6. 原子撤销 (updateAll)
+        assert.equal(controller.undo(), true);
+        assert.equal(controller.store.get('t1').hidden, false);
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_drawing_tool_styles_independent_memory(self):
+        script = f"""
+        const drawing = require({json.dumps(str(DRAWING_TOOLS_PATH))});
+        const assert = require('node:assert/strict');
+
+        // Mock localStorage
+        const storage = new Map();
+        global.localStorage = {{
+          getItem: (k) => storage.get(k) || null,
+          setItem: (k, v) => storage.set(k, String(v)),
+          removeItem: (k) => storage.delete(k),
+          clear: () => storage.clear(),
+        }};
+
+        class Target {{
+          constructor() {{ this.listeners = new Map(); }}
+          addEventListener(type, handler) {{ this.listeners.set(type, handler); }}
+          removeEventListener(type) {{ this.listeners.delete(type); }}
+          dispatch(type, event) {{ this.listeners.get(type)?.({{preventDefault() {{}}, ...event}}); }}
+          setPointerCapture() {{}}
+          releasePointerCapture() {{}}
+          getBoundingClientRect() {{ return {{left: 0, top: 0}}; }}
+        }}
+        const element = new Target();
+        const keyTarget = new Target();
+        const chart = {{timeScale: () => ({{timeToCoordinate: v => v, coordinateToTime: v => v}})}};
+        const series = {{
+          priceToCoordinate: v => v, coordinateToPrice: v => v,
+          attachPrimitive() {{}}, detachPrimitive() {{}},
+        }};
+        const controller = new drawing.DrawingController({{chart, series, element, keyTarget}});
+
+        // 1. 初始各工具默认样式独立
+        const hStyle = drawing.loadDrawingToolStyle('horizontal');
+        const tStyle = drawing.loadDrawingToolStyle('trend');
+        const rStyle = drawing.loadDrawingToolStyle('rectangle');
+        const txtStyle = drawing.loadDrawingToolStyle('text');
+        assert.equal(hStyle.color, '#2962ff');
+        assert.equal(tStyle.color, '#2962ff');
+        assert.equal(txtStyle.color, '#f0b90b');
+
+        // 2. 用户在水平线上修改粗细与颜色
+        controller.store.add(drawing.createHorizontalModel([{{time: 1, price: 100}}], {{id: 'h1'}}));
+        controller.refresh();
+        controller.select('h1');
+        controller.updateSelectedLineSettings({{ color: '#e02424', lineWidth: 4, lineStyle: 'dashed' }});
+
+        // 3. 验证水平线专属记忆已更新
+        const newHStyle = drawing.loadDrawingToolStyle('horizontal');
+        assert.equal(newHStyle.color, '#e02424');
+        assert.equal(newHStyle.lineWidth, 4);
+        assert.equal(newHStyle.lineStyle, 'dashed');
+
+        // 4. 重点验证：趋势线、折线、矩形、文字等绝不继承水平线的改动！
+        const trendStillDefault = drawing.loadDrawingToolStyle('trend');
+        assert.equal(trendStillDefault.color, '#2962ff');
+        assert.equal(trendStillDefault.lineWidth, 1);
+        assert.equal(trendStillDefault.lineStyle, 'solid');
+
+        const rectStillDefault = drawing.loadDrawingToolStyle('rectangle');
+        assert.equal(rectStillDefault.color, '#2962ff');
+        assert.equal(rectStillDefault.lineWidth, 1);
+
+        // 5. 新建一根趋势线，应该继承趋势线自己的样式，而不是水平线的红线粗线
+        const newTrendModel = controller._createModelForTool('trend', [{{time: 2, price: 50}}, {{time: 4, price: 60}}], 't_new');
+        assert.equal(newTrendModel.options.color, '#2962ff');
+        assert.equal(newTrendModel.options.lineWidth, 1);
+        assert.equal(newTrendModel.options.lineStyle, 'solid');
+
+        // 6. 新建一根水平线，应该继承水平线自己保存的样式
+        const newHorizontalModel = controller._createModelForTool('horizontal', [{{time: 5, price: 80}}], 'h_new');
+        assert.equal(newHorizontalModel.options.color, '#e02424');
+        assert.equal(newHorizontalModel.options.lineWidth, 4);
+        assert.equal(newHorizontalModel.options.lineStyle, 'dashed');
+
+        // 7. 用户修改矩形填充与线条，矩形自己继承自己的
+        controller.store.add(drawing.createRectangleModel([{{time: 10, price: 100}}, {{time: 20, price: 200}}], {{id: 'rect1'}}));
+        controller.refresh();
+        controller.select('rect1');
+        controller.updateSelectedLineSettings({{ color: '#059669', fillColor: '#10b981', fillOpacity: 0.35, lineWidth: 2 }});
+        const rectMem = drawing.loadDrawingToolStyle('rectangle');
+        assert.equal(rectMem.color, '#059669');
+        assert.equal(rectMem.fillColor, '#10b981');
+        assert.equal(rectMem.fillOpacity, 0.35);
+        assert.equal(rectMem.lineWidth, 2);
+
+        // 再次验证水平线与趋势线没有被矩形覆盖
+        assert.equal(drawing.loadDrawingToolStyle('horizontal').color, '#e02424');
+        assert.equal(drawing.loadDrawingToolStyle('trend').color, '#2962ff');
+        """
+        completed = run_node(script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

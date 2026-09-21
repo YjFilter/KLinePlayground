@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -244,20 +245,22 @@ updateChartTradePriceLines();
 if (lines.length !== 4) {
   throw new Error(`Expected 4 price lines (pos, tp, sl, limit), got ${lines.length}`);
 }
+// AICoin 观感：价格线上不再写文字（信息全部在右侧浮层 + 轴上的价格框里），
+// 因此改为断言"线上一律无文字"以及各角色的颜色。
 const posLine = lines.find(l => l.price === 64200);
-if (!posLine || !posLine.title.includes('多') || !posLine.title.includes('1.5') || posLine.color !== '#2196f3') {
+if (!posLine || posLine.title !== '' || posLine.color !== '#2196f3') {
   throw new Error('Position price line invalid: ' + JSON.stringify(posLine));
 }
 const tpLine = lines.find(l => l.price === 66000);
-if (!tpLine || !tpLine.title.includes('止盈') || tpLine.color !== '#0ecb81') {
+if (!tpLine || tpLine.title !== '' || tpLine.color !== '#0ecb81') {
   throw new Error('TP price line invalid: ' + JSON.stringify(tpLine));
 }
 const slLine = lines.find(l => l.price === 63000);
-if (!slLine || !slLine.title.includes('止损') || slLine.color !== '#f6465d') {
+if (!slLine || slLine.title !== '' || slLine.color !== '#f0a020') {
   throw new Error('SL price line invalid: ' + JSON.stringify(slLine));
 }
 const limitLine = lines.find(l => l.price === 68000);
-if (!limitLine || !limitLine.title.includes('限价') || limitLine.color !== '#2962ff') {
+if (!limitLine || limitLine.title !== '' || limitLine.color !== '#2962ff') {
   throw new Error('Limit order price line invalid: ' + JSON.stringify(limitLine));
 }
 
@@ -267,14 +270,19 @@ if (lines.length !== 0) {
   throw new Error('Failed to clear price lines');
 }
 """
-        completed = subprocess.run(
-            ["node", "-e", script],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-        )
+        # 脚本较大，必须写成临时文件再执行：Windows 命令行长度上限（约 32KB）
+        # 会让 `node -e <整段脚本>` 直接报 WinError 206。
+        with tempfile.TemporaryDirectory() as tmpdir:
+            script_path = Path(tmpdir) / "trade_price_lines_check.js"
+            script_path.write_text(script, encoding="utf-8")
+            completed = subprocess.run(
+                ["node", str(script_path)],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
@@ -417,16 +425,26 @@ class ChartTimeMinutePrecisionTests(unittest.TestCase):
         const fs = require('fs');
         const js = fs.readFileSync('frontend/js/main_enhanced.js', 'utf8');
         let isCrypto = true;
+        let isAshareLiveMode = false;
         function isCryptoMode() { return isCrypto; }
         function isIntradayMode() { return false; }
         eval(js.substring(js.indexOf('function formatChartCrosshairTime'), js.indexOf('// 图表管理')));
 
+        // 币圈模式：显示层换区为北京时间（UTC+8）。
         // 2026-08-14 17:00 UTC timestamp: Date.UTC(2026, 7, 14, 17, 0, 0) / 1000
         const timestamp = Math.floor(Date.UTC(2026, 7, 14, 17, 0, 0) / 1000);
         const formatted = formatChartCrosshairTime(timestamp);
-        if (formatted !== '2026-08-14 17:00') {
-            throw new Error(`Expected '2026-08-14 17:00' but got '${formatted}'`);
+        if (formatted !== '2026-08-15 01:00') {
+            throw new Error(`Expected '2026-08-15 01:00' (UTC+8) but got '${formatted}'`);
         }
+
+        // A股实时看盘模式：数据原文即北京时间，不偏移。
+        isAshareLiveMode = true;
+        const ashareFormatted = formatChartCrosshairTime(timestamp);
+        if (ashareFormatted !== '2026-08-14 17:00') {
+            throw new Error(`Expected '2026-08-14 17:00' (ashare raw) but got '${ashareFormatted}'`);
+        }
+        isAshareLiveMode = false;
 
         // BusinessDay object: { year: 2026, month: 8, day: 14 }
         const objFormatted = formatChartCrosshairTime({ year: 2026, month: 8, day: 14 });
@@ -460,6 +478,34 @@ class CrossMarginAndLiquidationPriceLineTests(unittest.TestCase):
         self.assertIn("type: 'liquidation'", self.js)
         self.assertIn("💀 强平 (Liq):", self.js)
         self.assertIn("color: '#d50000'", self.js)
+
+
+class MultiSubchartSplitterAndResizingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.css = CSS_PATH.read_text(encoding="utf-8")
+        cls.js = JS_PATH.read_text(encoding="utf-8")
+
+    def test_subchart_splitter_styles_defined(self):
+        self.assertIn(".subchart-splitter", self.css)
+        self.assertIn("cursor: row-resize", self.css)
+        self.assertIn(".subchart-splitter::after", self.css)
+
+    def test_subchart_splitters_and_proportional_resizing_in_js(self):
+        self.assertIn("class=\"subchart-splitter\"", self.js)
+        self.assertIn("function applySubchartHeights", self.js)
+        self.assertIn("function setupSubchartSplitters", self.js)
+        self.assertIn("function resizeSubchartPair", self.js)
+        self.assertIn("kline-subchart-ratios-v1", self.js)
+
+    def test_indicator_splitter_cascading_into_main_chart(self):
+        self.assertIn("splitter.id === 'indicator-splitter'", self.js)
+        self.assertIn("chartStart + (showVolume ? volumeStart : 0) + indicatorStart", self.js)
+
+    def test_subcharts_right_price_scale_has_scale_margins(self):
+        self.assertIn("scaleMargins:", self.js)
+        self.assertIn("top: 0.12", self.js)
+        self.assertIn("bottom: 0.12", self.js)
 
 
 if __name__ == "__main__":

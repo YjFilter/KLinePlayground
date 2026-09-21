@@ -120,7 +120,9 @@ from backend.routes import (
     user_bp, init_user_routes,
     stock_bp, init_stock_routes,
     crypto_bp, init_crypto_routes,
-    training_bp, init_training_routes
+    training_bp, init_training_routes,
+    ashare_live_bp,
+    state_bp
 )
 init_user_routes(user_manager, cloud_user_store)
 init_stock_routes(data_manager)
@@ -129,6 +131,8 @@ app.register_blueprint(user_bp)
 app.register_blueprint(stock_bp)
 app.register_blueprint(crypto_bp)
 app.register_blueprint(training_bp)
+app.register_blueprint(ashare_live_bp)
+app.register_blueprint(state_bp)
 
 
 def _restore_cloud_users():
@@ -2038,7 +2042,10 @@ def _save_intraday_session_report(training, training_id, report, status):
 def _parse_crypto_timestamp(value):
     if not value:
         raise ValueError('crypto start_time is required')
-    parsed = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    norm_value = str(value).strip().replace('/', '-').replace('Z', '+00:00')
+    if ' ' in norm_value and 'T' not in norm_value:
+        norm_value = norm_value.replace(' ', 'T')
+    parsed = datetime.fromisoformat(norm_value)
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
     parsed = parsed.astimezone(timezone.utc)
@@ -2124,13 +2131,22 @@ def _crypto_prepare_candidate(
     if training_days is None:
         try:
             cache = service.cache
-            for kind in ('trade',):
-                for src in ('binance', 'bybit'):
-                    cov = cache.coverage(src, symbol, kind)
-                    # 仅当缓存覆盖到训练窗口内才裁剪 range_end，
-                    # 否则（缓存早于训练开始日）保留原 range_end，避免 start > end。
-                    if cov and training_start <= cov.end < range_end:
-                        range_end = cov.end
+            for src in ('bybit', 'binance'):
+                cov = cache.coverage(src, symbol, 'trade')
+                mark_cov = cache.coverage(src, symbol, 'mark')
+                if cov and mark_cov and cov.start <= training_start <= min(cov.end, mark_cov.end):
+                    max_cov_end = min(cov.end, mark_cov.end)
+                    funding_dir = cache._directory(src, symbol, 'funding')
+                    if funding_dir.exists():
+                        f_ranges = []
+                        for fp in sorted(funding_dir.glob('*.json')):
+                            f_ranges.extend(json.loads(fp.read_text(encoding='utf-8')).get('coverage_ranges', []))
+                        for f_left, f_right in cache._merge_ranges(f_ranges):
+                            if datetime.fromisoformat(f_left) <= training_start <= datetime.fromisoformat(f_right):
+                                max_cov_end = min(max_cov_end, datetime.fromisoformat(f_right))
+                                break
+                    if training_start <= max_cov_end < range_end:
+                        range_end = max_cov_end
                         break
         except Exception:
             pass
@@ -2152,6 +2168,9 @@ def _crypto_prepare_candidate(
             history_start = _parse_crypto_timestamp(history_start)
     else:
         history_start = _subtract_calendar_years(training_start, history_years)
+
+    if preferred_source and str(preferred_source).strip().lower() in ('auto', 'none', ''):
+        preferred_source = None
     candidate_sources = []
     if preferred_source:
         candidate_sources.append(str(preferred_source))
@@ -2166,6 +2185,14 @@ def _crypto_prepare_candidate(
     for requested_source in candidate_sources:
         if cancel_check is not None and cancel_check():
             raise ValueError('crypto history preparation cancelled')
+        if progress_callback is not None:
+            progress_callback({
+                'symbol': symbol,
+                'source': requested_source or 'auto',
+                'status_text': f'正在验证离线合约基准数据 ({symbol})...',
+                'completed_chunks': 0,
+                'total_chunks': 0,
+            })
         try:
             bundle = service.get_bundle(
                 symbol, context_start, range_end, source=requested_source,
@@ -2231,12 +2258,18 @@ def _prepare_crypto_history_job(user, payload, progress_callback, cancel_check):
         if not symbol:
             raise ValueError('crypto symbol is required')
         training_start = _parse_crypto_timestamp((payload or {}).get('start_time'))
+        raw_source = (payload or {}).get('source') or (payload or {}).get('data_source')
+        preferred_source = (
+            str(raw_source).strip()
+            if raw_source and str(raw_source).strip().lower() not in ('auto', 'none', '')
+            else None
+        )
         return _crypto_prepare_candidate(
             symbol=symbol,
             training_start=training_start,
             training_days=training_days,
             history_years=history_years,
-            preferred_source=(payload or {}).get('source'),
+            preferred_source=preferred_source,
             progress_callback=progress_callback,
             cancel_check=cancel_check,
             history_months=(payload or {}).get('history_months'),

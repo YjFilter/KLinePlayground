@@ -900,6 +900,351 @@ body[data-theme="dark"] .chart-header {
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
 }
 
+/* ===== 价格预警（A股实时看盘，AICoin 风格） ===== */
+
+/* 工具栏「预警」按钮：落线模式高亮 */
+.alert-add-btn.is-adding {
+    color: #f0a020;
+    background: rgba(240, 160, 32, 0.18);
+    border-color: rgba(240, 160, 32, 0.55);
+}
+
+/* 落线模式：图表区域显示十字光标 */
+.chart-container.alert-adding #chart {
+    cursor: crosshair;
+}
+
+/* 右侧预警标签：贴价格轴左侧，可整体拖动改价 */
+.alert-chip {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    height: 20px;
+    padding: 0 3px 0 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    white-space: nowrap;
+    color: #1b1204;
+    background: #f0a020;
+    border: 1px solid #d98b12;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    user-select: none;
+    z-index: 16;
+    transform: translateY(-50%);
+}
+
+.alert-chip.is-triggered {
+    color: #eef1f5;
+    background: rgba(110, 118, 130, 0.92);
+    border-color: rgba(88, 96, 108, 0.92);
+}
+
+.alert-chip-text {
+    pointer-events: none;
+}
+
+.alert-chip-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.75;
+}
+
+.alert-chip-close:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.2);
+}
+
+/* 拖动手柄：上下拖动改价 */
+.alert-chip-grip {
+    width: 8px;
+    height: 13px;
+    border-radius: 2px;
+    background-image: linear-gradient(to bottom, currentColor 1px, transparent 1px);
+    background-size: 100% 4px;
+    opacity: 0.55;
+    cursor: ns-resize;
+}
+
+.alert-chip-grip:hover {
+    opacity: 0.9;
+}
+
+[data-theme="light"] .alert-chip,
+[data-crypto-theme="light"] .alert-chip {
+    color: #3d2a05;
+    background: #f6b73c;
+    border-color: #dc9a1c;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+}
+
+/* 触发提醒弹窗堆栈 */
+.alert-popup-stack {
+    position: absolute;
+    top: 12px;
+    right: 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 42;
+    pointer-events: none;
+}
+
+.alert-popup {
+    pointer-events: auto;
+    min-width: 210px;
+    max-width: 290px;
+    padding: 9px 11px;
+    border-radius: 8px;
+    background: rgba(20, 26, 36, 0.97);
+    border: 1px solid rgba(240, 160, 32, 0.6);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    color: #e6edf3;
+    font-size: 12px;
+    line-height: 1.55;
+    animation: alert-popup-in 160ms ease-out;
+}
+
+@keyframes alert-popup-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.alert-popup-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-weight: 600;
+    color: #f0a020;
+}
+
+.alert-popup-close {
+    padding: 0 2px;
+    border: none;
+    background: transparent;
+    color: #8b949e;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.alert-popup-close:hover {
+    color: #e6edf3;
+}
+
+.alert-popup-body b {
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.alert-popup-meta {
+    margin-top: 3px;
+    color: #8b949e;
+    font-size: 11px;
+}
+
+[data-theme="light"] .alert-popup,
+[data-crypto-theme="light"] .alert-popup {
+    background: rgba(255, 255, 255, 0.98);
+    border-color: rgba(220, 154, 28, 0.7);
+    color: #1f2328;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="light"] .alert-popup-body b,
+[data-crypto-theme="light"] .alert-popup-body b {
+    color: #111418;
+}
+
+[data-theme="light"] .alert-popup-meta,
+[data-crypto-theme="light"] .alert-popup-meta {
+    color: #656d76;
+}
+
+/* 添加成功等轻提示（浅色卡片，与 AICoin 观感一致，不随主题变化） */
+.alert-toast-stack {
+    position: absolute;
+    top: 46%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 46;
+    pointer-events: none;
+}
+
+.alert-toast {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 14px;
+    border-radius: 6px;
+    background: rgba(242, 244, 247, 0.97);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    color: #1f2328;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    animation: alert-toast-in 160ms ease-out;
+}
+
+@keyframes alert-toast-in {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.alert-toast-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #2fb344;
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.alert-toast.is-warning .alert-toast-icon {
+    background: #f0a020;
+}
+
+/* ===== AICoin 风格价格线浮层（贴价格轴左侧，分段显示）===== */
+.trade-line-pill {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    height: 20px;
+    border-radius: 3px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1;
+    white-space: nowrap;
+    user-select: none;
+    cursor: ns-resize;
+    z-index: 17;
+    transform: translateY(-50%);
+    overflow: hidden;
+    color: #d5dae2;
+    background: rgba(24, 28, 36, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.trade-line-pill .pill-seg {
+    display: inline-flex;
+    align-items: center;
+    height: 100%;
+    padding: 0 7px;
+    font-variant-numeric: tabular-nums;
+}
+
+.trade-line-pill .pill-seg + .pill-seg {
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.trade-line-pill .seg-role { font-weight: 600; }
+.trade-line-pill .seg-strong { color: #f0f3f5; }
+.trade-line-pill .seg-muted { color: #8b949e; }
+.trade-line-pill .seg-qty { color: #b7bec7; }
+.trade-line-pill .seg-up { color: #0ecb81; font-weight: 600; }
+.trade-line-pill .seg-down { color: #f0a020; font-weight: 600; }
+
+.trade-line-pill.is-tp {
+    border-color: rgba(14, 203, 129, 0.75);
+    background: rgba(14, 203, 129, 0.12);
+}
+.trade-line-pill.is-tp .seg-role { color: #0ecb81; }
+
+.trade-line-pill.is-sl {
+    border-color: rgba(240, 160, 32, 0.75);
+    background: rgba(240, 160, 32, 0.12);
+}
+.trade-line-pill.is-sl .seg-role { color: #f0a020; }
+
+.trade-line-pill.is-position { border-color: rgba(33, 150, 243, 0.7); }
+.trade-line-pill.is-entry { border-color: rgba(41, 98, 255, 0.7); }
+.trade-line-pill.is-placeholder { border-style: dashed; }
+
+/* 「止盈 / 止损」放置徽标：按住拖动即可放置对应保护线 */
+.trade-line-pill .pill-chip {
+    display: inline-flex;
+    align-items: center;
+    height: 14px;
+    margin: 0 3px;
+    padding: 0 6px;
+    border-radius: 2px;
+    border: 1px dashed;
+    background: transparent;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: ns-resize;
+}
+
+.trade-line-pill .chip-tp {
+    color: #0ecb81;
+    border-color: rgba(14, 203, 129, 0.8);
+}
+.trade-line-pill .chip-sl {
+    color: #f0a020;
+    border-color: rgba(240, 160, 32, 0.8);
+}
+.trade-line-pill .chip-tp:hover { background: rgba(14, 203, 129, 0.22); }
+.trade-line-pill .chip-sl:hover { background: rgba(240, 160, 32, 0.22); }
+
+.trade-line-pill .pill-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 17px;
+    height: 100%;
+    padding: 0;
+    border: none;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    background: transparent;
+    color: inherit;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.trade-line-pill .pill-close:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.14);
+}
+
+[data-theme="light"] .trade-line-pill {
+    color: #1f2328;
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(0, 0, 0, 0.14);
+}
+
+[data-theme="light"] .trade-line-pill .pill-seg + .pill-seg,
+[data-theme="light"] .trade-line-pill .pill-close {
+    border-left-color: rgba(0, 0, 0, 0.1);
+}
+
 .chart-extreme-price-tag.point-left {
     transform: translateY(-50%);
 }
@@ -3082,11 +3427,204 @@ body[data-theme="dark"] .chip-current-line {
     flex: 0 0 112px;
     min-height: 52px;
     height: auto;
+    display: flex;
+    flex-direction: column;
 }
 
-.chart-panels > .indicator-chart.indicator-collapsed {
-    min-height: 52px;
-    height: auto;
+.chart-panels > .indicator-chart.panel-collapsed,
+.chart-panels > .indicator-chart.indicator-collapsed,
+#indicator-chart.panel-collapsed {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    flex: 0 0 0px !important;
+    overflow: hidden !important;
+}
+
+.chart-panels > .volume-chart.panel-collapsed,
+#volume-chart.panel-collapsed {
+    display: none !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    flex: 0 0 0px !important;
+    overflow: hidden !important;
+}
+
+.chart-panel-splitter.splitter-hidden {
+    display: none !important;
+}
+
+/* ===== 多副图堆叠容器与子窗格 ===== */
+.subcharts-wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.subchart-pane {
+    flex: 1 1 0px;
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+}
+
+/* 多副图之间的拖动分割条 */
+.subchart-splitter {
+    position: relative;
+    z-index: 20;
+    flex: 0 0 6px;
+    height: 6px;
+    cursor: row-resize;
+    touch-action: none;
+    outline: none;
+    background: var(--surface-muted);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    transition: background-color 0.15s ease;
+}
+
+.subchart-splitter::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--border-strong);
+    transform: translate(-50%, -50%);
+    transition: width 0.16s ease, background-color 0.16s ease;
+}
+
+.subchart-splitter:hover::after,
+.subchart-splitter:focus-visible::after,
+.subchart-splitter.is-dragging::after {
+    width: 72px;
+    background: var(--primary);
+}
+
+#main-app.crypto-training-active .subchart-splitter {
+    background: var(--crypto-panel-raised, var(--surface-muted));
+    border-color: var(--crypto-border, var(--border));
+}
+
+#main-app.crypto-training-active .subchart-splitter::after {
+    background: var(--crypto-text-muted, var(--border-strong));
+}
+
+#main-app.crypto-training-active .subchart-splitter:hover::after,
+#main-app.crypto-training-active .subchart-splitter:focus-visible::after,
+#main-app.crypto-training-active .subchart-splitter.is-dragging::after {
+    background: var(--crypto-primary, var(--primary, #f0b90b));
+}
+
+.subchart-pane + .subchart-pane {
+    border-top: 1px solid var(--border);
+}
+
+.subchart-header {
+    position: absolute;
+    top: 4px;
+    left: 10px;
+    right: 10px;
+    z-index: 12;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    pointer-events: none;
+    user-select: none;
+}
+
+.subchart-header > * {
+    pointer-events: auto;
+}
+
+.subchart-title-box {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: default;
+    white-space: nowrap;
+}
+
+.subchart-name {
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.subchart-params {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.subchart-values {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-family: var(--font-mono, monospace);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.subchart-values .iv-macd { color: #999; }
+.subchart-values .iv-up { color: #ff6b6b; }
+.subchart-values .iv-down { color: #4ecdc4; }
+.subchart-values .iv-highlight { color: #f0b90b; }
+
+.subchart-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: auto;
+    opacity: 0.5;
+    transition: opacity 0.15s ease;
+}
+
+.subchart-pane:hover .subchart-actions {
+    opacity: 1;
+}
+
+.subchart-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.subchart-action-btn:hover {
+    background: var(--surface-muted);
+    color: var(--text-primary);
+}
+
+.subchart-action-btn.subchart-btn-close:hover {
+    color: #ff4d4f;
+    background: rgba(255, 77, 79, 0.15);
+}
+
+.subchart-canvas {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    position: relative;
 }
 
 .chart-panel-splitter {
@@ -3250,13 +3788,16 @@ body.chart-panel-resizing {
     color: #f0b90b !important;
     border: 1px solid rgba(240, 185, 11, 0.4) !important;
     border-radius: 6px !important;
-    display: inline-flex !important;
+    display: inline-flex;
     align-items: center !important;
     gap: 5px !important;
     margin-right: 4px !important;
     cursor: pointer !important;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) !important;
     transition: all 0.15s ease !important;
+}
+.drawing-floating-toolbar button.drawing-sync-order-btn.hidden {
+    display: none !important;
 }
 .drawing-floating-toolbar button.drawing-sync-order-btn:hover {
     background: #f0b90b !important;
@@ -4280,46 +4821,68 @@ body.crypto-console-resizing {
     outline-offset: 1px;
 }
 
-/* === Crypto console collapsed tab === */
-#main-app.crypto-training-active .crypto-console-collapsed-tab {
+/* === Crypto & A-share console collapsed tab === */
+#main-app.crypto-training-active .crypto-console-collapsed-tab,
+#main-app.ashare-live-active .crypto-console-collapsed-tab {
     display: none;
     width: 32px;
     min-height: 120px;
-    padding: 10px 2px;
+    padding: 12px 2px;
     background: var(--crypto-panel);
     border-left: 1px solid var(--crypto-border);
     color: var(--crypto-muted);
     font-size: 12px;
-    writing-mode: vertical-rl;
     text-align: center;
-    letter-spacing: 4px;
     cursor: pointer;
     user-select: none;
-    transition: background 0.15s, color 0.15s;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
-#main-app.crypto-training-active .crypto-console-collapsed-tab:hover {
+.crypto-console-collapsed-tab .collapsed-tab-icon {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1;
+    display: block;
+}
+
+.crypto-console-collapsed-tab .collapsed-tab-text {
+    writing-mode: vertical-rl;
+    letter-spacing: 4px;
+    line-height: 1;
+    display: block;
+}
+
+#main-app.crypto-training-active .crypto-console-collapsed-tab:hover,
+#main-app.ashare-live-active .crypto-console-collapsed-tab:hover {
     background: var(--crypto-panel-raised);
     color: var(--crypto-text);
 }
 
-#main-app.crypto-training-active .crypto-console-collapsed-tab:active {
+#main-app.crypto-training-active .crypto-console-collapsed-tab:active,
+#main-app.ashare-live-active .crypto-console-collapsed-tab:active {
     background: var(--crypto-border);
     color: #ffffff;
 }
 
-#main-app.crypto-training-active .crypto-console-collapsed-tab:focus-visible {
+#main-app.crypto-training-active .crypto-console-collapsed-tab:focus-visible,
+#main-app.ashare-live-active .crypto-console-collapsed-tab:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: -2px;
 }
 
-#main-app.crypto-training-active.crypto-console-collapsed .crypto-console-collapsed-tab {
-    display: flex;
+#main-app.crypto-training-active.crypto-console-collapsed .crypto-console-collapsed-tab,
+#main-app.ashare-live-active.crypto-console-collapsed .crypto-console-collapsed-tab {
+    display: flex !important;
     align-items: center;
     justify-content: center;
 }
 
-#main-app.crypto-training-active.crypto-console-collapsed .trade-console {
+#main-app.crypto-training-active.crypto-console-collapsed .trade-console,
+#main-app.ashare-live-active.crypto-console-collapsed .trade-console {
     display: none !important;
 }
 
@@ -4422,66 +4985,113 @@ body.chart-focus-active {
 
 #main-app.chart-focus-mode #training-interface > :not(.chart-workbench),
 #main-app.chart-focus-mode .chart-workbench > :not(#chart-panels):not(.chart-header),
-#main-app.chart-focus-mode #volume-chart,
-#main-app.chart-focus-mode #indicator-chart,
-#main-app.chart-focus-mode .chart-panel-splitter,
-#main-app.chart-focus-mode .drawing-status,
-#main-app.chart-focus-mode .drawing-settings,
 #main-app.chart-focus-mode .chart-window-toolbar,
 #main-app.chart-focus-mode .replay-status-bar,
-#main-app.chart-focus-mode .stock-info,
-#main-app.chart-focus-mode .view-period-switch,
-#main-app.chart-focus-mode .chart-panel-controls,
-#main-app.chart-focus-mode .toolbar-group-separator {
+#main-app.chart-focus-mode #ashare-wl-expand-btn {
     display: none !important;
 }
 
+#main-app.chart-focus-mode .chart-workbench {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+}
+
 #main-app.chart-focus-mode .chart-header {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 50;
-    background: rgba(11, 14, 17, 0.85);
-    backdrop-filter: blur(6px);
+    position: relative !important;
+    flex: 0 0 auto !important;
+    width: 100% !important;
+    z-index: 20 !important;
+    background: #14171a;
+}
+
+#main-app.chart-focus-mode .chart-actions {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+}
+
+#main-app.chart-focus-mode .view-period-switch {
+    display: flex !important;
+    align-items: center !important;
 }
 
 #main-app.chart-focus-mode .drawing-toolbar {
     display: flex !important;
     justify-content: center;
-    width: 100%;
 }
 
-#main-app.chart-focus-mode .chart-workbench,
+#main-app.chart-focus-mode .chart-panel-controls {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px;
+    margin-left: auto;
+}
+
+#main-app.chart-focus-mode #chart-fullscreen-btn.active {
+    background: rgba(240, 185, 11, 0.18) !important;
+    border-color: #f0b90b !important;
+    color: #f0b90b !important;
+    font-weight: 600 !important;
+}
+
 #main-app.chart-focus-mode #chart-panels {
-    width: 100%;
-    height: 100%;
-    min-height: 0;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
-    border: 0;
-    border-radius: 0;
+    position: relative !important;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    border-radius: 0 !important;
 }
 
 #main-app.chart-focus-mode #chart {
+    position: relative !important;
     display: block !important;
     flex: 1 1 auto !important;
-    width: 100%;
-    height: 100%;
-    min-height: 0;
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 0 !important;
 }
 
 #main-app.chart-focus-mode #chart-focus-exit-btn {
+    position: absolute !important;
+    top: 8px !important;
+    right: 75px !important;
+    z-index: 65 !important;
     display: inline-flex !important;
-    align-items: center;
-    justify-content: center;
-    width: auto;
-    min-width: 68px;
-    margin-left: auto;
-    border-color: #526071;
-    color: var(--crypto-strong-text);
-    background: var(--crypto-popover);
+    align-items: center !important;
+    gap: 5px !important;
+    padding: 4px 12px !important;
+    border-radius: 4px !important;
+    border: 1px solid rgba(240, 185, 11, 0.6) !important;
+    background: rgba(20, 24, 30, 0.9) !important;
+    backdrop-filter: blur(6px) !important;
+    color: #f0b90b !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    cursor: pointer !important;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45) !important;
+    transition: all 0.18s ease !important;
+}
+
+#main-app.chart-focus-mode #chart-focus-exit-btn:hover {
+    background: #f0b90b !important;
+    color: #0b0e11 !important;
+    border-color: #f0b90b !important;
+    box-shadow: 0 4px 18px rgba(240, 185, 11, 0.5) !important;
 }
 
 #main-app.crypto-training-active .crypto-order-status {
@@ -4633,8 +5243,14 @@ body.chart-focus-active {
     flex-direction: column;
     gap: 7px;
     padding: 8px 10px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--crypto-border);
     border-radius: 6px;
+    background: var(--crypto-card);
+    box-shadow: var(--crypto-shadow, 0 2px 8px rgba(0, 0, 0, 0.25));
+}
+#main-app.crypto-training-active[data-crypto-theme="dark"] .crypto-pos-card,
+#main-app.crypto-training-active:not([data-crypto-theme="light"]) .crypto-pos-card {
+    border: 1px solid rgba(255, 255, 255, 0.12);
     background: linear-gradient(180deg, rgba(30, 36, 48, 0.75) 0%, rgba(18, 22, 30, 0.9) 100%);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
@@ -4670,6 +5286,7 @@ body.chart-focus-active {
     color: var(--crypto-muted);
     font-size: 10.5px;
     line-height: 1.2;
+    background: var(--crypto-panel-raised, rgba(0, 0, 0, 0.1));
 }
 #main-app.crypto-training-active .crypto-pos-pnl {
     margin-left: auto;
@@ -4686,8 +5303,13 @@ body.chart-focus-active {
     grid-template-columns: 1fr 1fr;
     gap: 4px 10px;
     padding: 6px 8px;
-    background: rgba(0, 0, 0, 0.22);
+    background: var(--crypto-panel-raised);
     border-radius: 4px;
+    border: 1px solid var(--crypto-border);
+}
+#main-app.crypto-training-active[data-crypto-theme="dark"] .crypto-pos-grid,
+#main-app.crypto-training-active:not([data-crypto-theme="light"]) .crypto-pos-grid {
+    background: rgba(0, 0, 0, 0.22);
     border: 1px solid rgba(255, 255, 255, 0.04);
 }
 #main-app.crypto-training-active .crypto-pos-grid > div {
@@ -4741,9 +5363,79 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pos-actions button:hover {
     background: var(--crypto-control-hover);
     color: var(--crypto-strong-text);
+    border-color: var(--crypto-border);
+}
+#main-app.crypto-training-active[data-crypto-theme="dark"] .crypto-pos-actions button:hover,
+#main-app.crypto-training-active:not([data-crypto-theme="light"]) .crypto-pos-actions button:hover {
     border-color: rgba(255, 255, 255, 0.25);
 }
 #main-app.crypto-training-active .crypto-pos-actions button[data-crypto-pos-action="close-all"]:hover {
+    border-color: var(--crypto-short);
+    color: var(--crypto-short);
+}
+
+/* 亮色主题持仓卡片自适应 */
+#main-app[data-crypto-theme="light"] .crypto-pos-card,
+[data-theme="light"] #main-app .crypto-pos-card,
+[data-crypto-theme="light"] .crypto-pos-card {
+    border: 1px solid #d6dee8;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(35, 52, 73, 0.08);
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-symbol,
+[data-theme="light"] #main-app .crypto-pos-symbol,
+[data-crypto-theme="light"] .crypto-pos-symbol {
+    color: #101828;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-tag,
+[data-theme="light"] #main-app .crypto-pos-tag,
+[data-crypto-theme="light"] .crypto-pos-tag {
+    background: #edf2f7;
+    border-color: #cbd5e1;
+    color: #475569;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-grid,
+[data-theme="light"] #main-app .crypto-pos-grid,
+[data-crypto-theme="light"] .crypto-pos-grid {
+    background: #f4f7fa;
+    border: 1px solid #e2e8f0;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-grid span,
+[data-theme="light"] #main-app .crypto-pos-grid span,
+[data-crypto-theme="light"] .crypto-pos-grid span {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-grid strong,
+[data-theme="light"] #main-app .crypto-pos-grid strong,
+[data-crypto-theme="light"] .crypto-pos-grid strong {
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-actions button,
+[data-theme="light"] #main-app .crypto-pos-actions button,
+[data-crypto-theme="light"] .crypto-pos-actions button {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #1e293b;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-actions button:hover,
+[data-theme="light"] #main-app .crypto-pos-actions button:hover,
+[data-crypto-theme="light"] .crypto-pos-actions button:hover {
+    background: #e5edf8;
+    border-color: #94a3b8;
+    color: #0f172a;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pos-actions button[data-crypto-pos-action="close-all"]:hover,
+[data-theme="light"] #main-app .crypto-pos-actions button[data-crypto-pos-action="close-all"]:hover,
+[data-crypto-theme="light"] .crypto-pos-actions button[data-crypto-pos-action="close-all"]:hover {
+    background: rgba(214, 69, 80, 0.08);
     border-color: var(--crypto-short);
     color: var(--crypto-short);
 }
@@ -4825,6 +5517,45 @@ body.chart-focus-active {
 #main-app.crypto-training-active .crypto-pending-order-actions .crypto-cancel-order {
     border-color: #74343b;
     color: #ff8b94;
+}
+
+/* 亮色主题挂单列表与撤单自适应 */
+#main-app[data-crypto-theme="light"] .crypto-pending-order,
+[data-theme="light"] #main-app .crypto-pending-order,
+[data-crypto-theme="light"] .crypto-pending-order {
+    background: #ffffff;
+    border-color: #d6dee8;
+    box-shadow: 0 1px 4px rgba(35, 52, 73, 0.05);
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pending-order-title span,
+[data-theme="light"] #main-app .crypto-pending-order-title span,
+[data-crypto-theme="light"] .crypto-pending-order-title span {
+    background: #edf2f7;
+    color: #475569;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pending-order-title em,
+[data-theme="light"] #main-app .crypto-pending-order-title em,
+[data-crypto-theme="light"] .crypto-pending-order-title em {
+    background: rgba(37, 99, 235, 0.1);
+    color: #2563eb;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pending-order-actions .crypto-cancel-order,
+[data-theme="light"] #main-app .crypto-pending-order-actions .crypto-cancel-order,
+[data-crypto-theme="light"] .crypto-pending-order-actions .crypto-cancel-order {
+    background: #fef2f2;
+    border-color: #fca5a5;
+    color: #dc2626;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-pending-order-actions .crypto-cancel-order:hover,
+[data-theme="light"] #main-app .crypto-pending-order-actions .crypto-cancel-order:hover,
+[data-crypto-theme="light"] .crypto-pending-order-actions .crypto-cancel-order:hover {
+    background: #fee2e2;
+    border-color: #f87171;
+    color: #b91c1c;
 }
 
 /* === 做单时段色带与工具栏时段选择 === */
@@ -5082,3 +5813,2046 @@ body.chart-focus-active {
     color: #b98700;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
 }
+/* ==========================================================================
+   A股实时看盘与模拟交易 - 100% 像素级对齐 BTC 暗黑高级工作区与右侧交易台
+   ========================================================================== */
+#main-app.ashare-live-active .training-workspace {
+    display: grid !important;
+    grid-template-columns: var(--ashare-watchlist-width, 270px) minmax(0, 1fr) auto var(--crypto-console-width, 340px) !important;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--crypto-shell);
+}
+
+#main-app.ashare-live-active.crypto-console-collapsed .training-workspace {
+    grid-template-columns: var(--ashare-watchlist-width, 270px) minmax(0, 1fr) 32px !important;
+}
+
+#main-app.ashare-live-active.ashare-watchlist-collapsed .training-workspace {
+    grid-template-columns: minmax(0, 1fr) auto var(--crypto-console-width, 340px) !important;
+}
+
+#main-app.ashare-live-active.ashare-watchlist-collapsed.crypto-console-collapsed .training-workspace {
+    grid-template-columns: minmax(0, 1fr) 32px !important;
+}
+
+#main-app.ashare-live-active.ashare-watchlist-collapsed #ashare-live-watchlist-panel {
+    display: none !important;
+}
+
+#main-app.ashare-live-active.ashare-watchlist-collapsed #ashare-wl-expand-btn {
+    display: inline-flex !important;
+}
+
+#main-app.ashare-live-active .chart-workbench {
+    min-width: 0;
+    padding: 0;
+    background: #0b0e11 !important;
+}
+
+#main-app.ashare-live-active .chart-panels,
+#main-app.ashare-live-active #chart,
+#main-app.ashare-live-active #volume-chart,
+#main-app.ashare-live-active #indicator-chart,
+#main-app.ashare-live-active #indicator-canvas {
+    background: #0b0e11 !important;
+}
+
+/* 隐藏无关面板：全局顶部导航栏、旧复盘操作栏、历史走势加载栏、沙盒回放状态栏等 */
+#main-app.ashare-live-active > .toolbar,
+#main-app.ashare-live-active .chart-window-toolbar,
+#main-app.ashare-live-active .replay-status-bar,
+#main-app.ashare-live-active .workspace-sidebar,
+#main-app.ashare-live-active .training-setup,
+#main-app.ashare-live-active #a-share-trading-panel,
+#main-app.ashare-live-active #crypto-trading-panel,
+#main-app.ashare-live-active [data-crypto-workspace-only]:not(#crypto-theme-toggle-btn):not(#crypto-console-collapse-btn):not(#crypto-console-collapsed-tab):not(#crypto-console-splitter),
+#main-app.ashare-live-active [data-a-share-workspace-only],
+#main-app.ashare-live-active [data-replay-only],
+#main-app.ashare-live-active .playback-controls,
+#main-app.ashare-live-active .speed-control,
+#main-app.ashare-live-active .crypto-session-actions {
+    display: none !important;
+}
+
+/* 非 A 股实时模式下隐藏 A 股专属下单控制台与指标内联条 */
+#main-app:not(.ashare-live-active) [data-ashare-live-only],
+#main-app:not(.ashare-live-active) #ashare-live-header-metrics,
+#main-app:not(.ashare-live-active) #ashare-header-change,
+#main-app:not(.ashare-live-active) #ashare-live-market-status,
+#main-app:not(.ashare-live-active) #ashare-live-exit-btn {
+    display: none !important;
+}
+
+/* 激活 A 股专属下单控制台及分割拖拽条 */
+#main-app.ashare-live-active .trade-console {
+    display: block !important;
+    padding: 8px !important;
+    overflow-y: auto;
+    border-left: 0;
+    background: var(--crypto-panel) !important;
+    color: var(--crypto-text);
+}
+
+#main-app.ashare-live-active .crypto-console-splitter {
+    display: block !important;
+}
+
+#main-app.ashare-live-active.crypto-console-collapsed .crypto-console-splitter {
+    display: none !important;
+}
+
+#main-app.ashare-live-active.crypto-console-collapsed .trade-console {
+    display: none !important;
+}
+
+#main-app.ashare-live-active.crypto-console-collapsed .crypto-console-collapsed-tab {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+}
+
+#main-app.ashare-live-active .crypto-console-collapse-btn {
+    display: flex !important;
+}
+
+#main-app.ashare-live-active #crypto-theme-toggle-btn {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 26px !important;
+    height: 24px !important;
+    min-width: 26px !important;
+    min-height: 24px !important;
+    max-height: 24px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    font-size: 14px !important;
+    line-height: 1 !important;
+    text-align: center !important;
+    vertical-align: middle !important;
+    border-radius: 4px !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    background: rgba(255, 255, 255, 0.06) !important;
+    color: #d1d4dc !important;
+    cursor: pointer !important;
+    box-sizing: border-box !important;
+    transition: all 0.15s ease !important;
+}
+
+#main-app.ashare-live-active #crypto-theme-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.12) !important;
+    border-color: #f0b90b !important;
+    color: #f0b90b !important;
+}
+
+#main-app.ashare-live-active .chart-panel-controls {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+}
+
+#main-app.ashare-live-active .chart-panel-controls button {
+    height: 24px !important;
+    min-height: 24px !important;
+    max-height: 24px !important;
+    padding: 0 6px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-sizing: border-box !important;
+    font-size: 11px !important;
+    line-height: 1 !important;
+    border-radius: 4px !important;
+}
+
+#ashare-live-search-btn {
+    border: 1px solid var(--crypto-border, rgba(255, 255, 255, 0.15));
+    background: var(--crypto-panel-raised, #262d38);
+    color: var(--crypto-text, #eaecef);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+#ashare-live-search-btn:hover {
+    background: var(--crypto-control-hover, #2f3846);
+    border-color: var(--crypto-accent, #f0b90b);
+    color: var(--crypto-strong-text, #ffffff);
+}
+
+/* ==========================================================================
+   A 股实时看盘：3 层专业行情与工具栏结构 (高规格对齐 TradingView / AICoin)
+   - Layer 1: 核心标的行情与退出看盘栏 (高度 38px)
+   - Layer 2: 10 周期快捷切换与画线工具栏 (高度 34px)
+   - Layer 3: 当日高低开收/量额/振幅统计栏 (高度 28px)
+   ========================================================================== */
+
+/* 容器：垂直排列 3 层，消除外边距与圆角 */
+#main-app.ashare-live-active .chart-workbench .chart-header {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    border-bottom: 1px solid var(--crypto-border, #2a2e39) !important;
+    background: #131722 !important;
+    box-sizing: border-box;
+    z-index: 10;
+}
+
+#main-app.ashare-live-active .chart-header .market-period-toolbar {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    gap: 0 !important;
+}
+
+/* ---- Layer 1: 核心行情栏 (Row 1) ---- */
+#main-app.ashare-live-active .stock-info {
+    display: flex !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 12px !important;
+    gap: 12px !important;
+    font-size: 13px !important;
+    box-sizing: border-box !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: #181c27 !important;
+}
+
+/* 展开自选股按钮 */
+#main-app.ashare-live-active #ashare-wl-expand-btn {
+    padding: 2px 8px !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    background: #2a2e39 !important;
+    border: 1px solid #363c4e !important;
+    color: #d1d4dc !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+}
+
+/* 股票名称与代码 */
+#main-app.ashare-live-active #stock-name {
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    color: #ffffff !important;
+    white-space: nowrap !important;
+    letter-spacing: 0.3px;
+}
+
+/* 换股搜索按钮 */
+#main-app.ashare-live-active #ashare-live-search-btn {
+    padding: 2px 8px !important;
+    font-size: 11px !important;
+    border-radius: 4px !important;
+    border: 1px solid #363c4e !important;
+    background: #202430 !important;
+    color: #b2b5be !important;
+    cursor: pointer;
+}
+#main-app.ashare-live-active #ashare-live-search-btn:hover {
+    background: #2a2e39 !important;
+    color: #f0b90b !important;
+    border-color: #f0b90b !important;
+}
+
+/* 大字号现价 */
+#main-app.ashare-live-active #current-price {
+    font-size: 18px !important;
+    font-weight: 700 !important;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap !important;
+    padding: 0 4px;
+}
+
+/* 涨跌额与百分比 */
+#main-app.ashare-live-active .ashare-header-change {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap !important;
+}
+
+/* 交易状态胶囊徽章 (盘中交易/已收盘/休市) */
+#main-app.ashare-live-active .ashare-header-status-pill {
+    font-size: 11px !important;
+    padding: 1px 7px !important;
+    border-radius: 3px !important;
+    font-weight: 500 !important;
+    white-space: nowrap !important;
+    background: rgba(38, 166, 154, 0.15) !important;
+    color: #26a69a !important;
+    border: 1px solid rgba(38, 166, 154, 0.35) !important;
+}
+
+#main-app.ashare-live-active .ashare-header-status-pill.closed {
+    background: rgba(132, 142, 156, 0.12) !important;
+    color: #848e9c !important;
+    border-color: rgba(132, 142, 156, 0.25) !important;
+}
+
+/* 格式化时间 */
+#main-app.ashare-live-active #current-date {
+    font-size: 12px !important;
+    color: #787b86 !important;
+    font-family: monospace;
+    white-space: nowrap !important;
+}
+
+/* 周期 badge 在实时模式下隐藏，因为周期切换按钮已高亮 */
+#main-app.ashare-live-active #current-period {
+    display: none !important;
+}
+
+/* 退出看盘按钮：置于 Layer 1 最右侧 */
+#main-app.ashare-live-active .ashare-live-exit-btn {
+    margin-left: auto !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    padding: 3px 12px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    background: rgba(235, 77, 91, 0.12) !important;
+    color: #eb4d5b !important;
+    border: 1px solid rgba(235, 77, 91, 0.4) !important;
+    border-radius: 4px !important;
+    cursor: pointer !important;
+    white-space: nowrap !important;
+    transition: all 0.2s ease !important;
+}
+
+#main-app.ashare-live-active .ashare-live-exit-btn:hover {
+    background: #eb4d5b !important;
+    color: #ffffff !important;
+    border-color: #eb4d5b !important;
+    box-shadow: 0 0 8px rgba(235, 77, 91, 0.35) !important;
+}
+
+/* ---- Layer 2: 周期与工具栏 (Row 2) ---- */
+#main-app.ashare-live-active .chart-actions {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    padding: 0 12px !important;
+    box-sizing: border-box !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+    background: #131722 !important;
+}
+
+/* 周期切换按钮组：居左 */
+#main-app.ashare-live-active .view-period-switch {
+    display: flex !important;
+    align-items: center !important;
+    gap: 3px !important;
+}
+
+#main-app.ashare-live-active .view-period-btn.ashare-live-period {
+    padding: 3px 9px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    border-radius: 4px !important;
+    color: #b2b5be !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    cursor: pointer !important;
+    transition: all 0.15s ease !important;
+}
+
+#main-app.ashare-live-active .view-period-btn.ashare-live-period:hover {
+    color: #ffffff !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+#main-app.ashare-live-active .view-period-btn.ashare-live-period.active {
+    color: #ffffff !important;
+    background: #2a2e39 !important;
+    border-color: #363c4e !important;
+    font-weight: 600 !important;
+}
+
+/* ---- Layer 3: 当日关键数据统计栏 (Row 3) ---- */
+#main-app.ashare-live-active .ashare-live-header-metrics {
+    display: flex !important;
+    align-items: center !important;
+    width: 100% !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    padding: 0 14px !important;
+    box-sizing: border-box !important;
+    gap: 20px !important;
+    background: rgba(11, 14, 17, 0.7) !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    overflow-x: auto;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+}
+
+#main-app.ashare-live-active .ashare-live-header-metrics .metric-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+#main-app.ashare-live-active .ashare-live-header-metrics .lbl {
+    color: #787b86 !important;
+    font-size: 12px !important;
+}
+
+#main-app.ashare-live-active .ashare-live-header-metrics strong {
+    color: #d1d4dc !important;
+    font-weight: 500 !important;
+    font-variant-numeric: tabular-nums;
+    font-size: 12px !important;
+}
+
+/* A 股专属控制台视觉细节（100% 像素级对齐 AICoin 风格） */
+.ashare-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.ashare-section-header h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--crypto-strong-text, #ffffff);
+}
+
+.ashare-gear-btn {
+    background: transparent;
+    border: none;
+    color: var(--crypto-muted, #848e9c);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    transition: color 0.15s ease;
+}
+
+.ashare-gear-btn:hover {
+    color: var(--crypto-accent, #f0b90b);
+}
+
+.ashare-clear-link {
+    background: transparent;
+    border: none;
+    color: var(--crypto-muted, #848e9c);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0 4px;
+    transition: color 0.15s ease;
+}
+
+.ashare-clear-link:hover {
+    color: #f6465d;
+}
+
+.ashare-section-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ashare-badge-spot {
+    display: inline-block;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 3px;
+    background: rgba(240, 185, 11, 0.15);
+    color: #f0b90b;
+    border: 1px solid rgba(240, 185, 11, 0.3);
+}
+
+.ashare-stock-badge {
+    font-size: 11px;
+    color: var(--crypto-muted);
+    font-family: monospace;
+}
+
+.ashare-btn-mini {
+    padding: 2px 7px;
+    font-size: 11px;
+    border-radius: 4px;
+    border: 1px solid var(--crypto-border);
+    background: var(--crypto-panel-raised);
+    color: var(--crypto-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ashare-btn-mini:hover {
+    background: var(--crypto-control-hover);
+    color: var(--crypto-strong-text);
+    border-color: var(--crypto-accent);
+}
+
+/* 买卖方向选项卡（与 BTC 截图方向胶囊按钮一致） */
+.ashare-direction-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.ashare-direction-buy,
+.ashare-direction-sell {
+    min-height: 32px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: #1e2329;
+    color: #848e9c;
+}
+
+.ashare-direction-buy.active {
+    background: #f6465d;
+    color: #ffffff;
+    border-color: #f6465d;
+    box-shadow: 0 2px 8px rgba(246, 70, 93, 0.35);
+}
+
+.ashare-direction-sell.active {
+    background: #0ecb81;
+    color: #ffffff;
+    border-color: #0ecb81;
+    box-shadow: 0 2px 8px rgba(14, 203, 129, 0.35);
+}
+
+/* 下单网格与字段 */
+.ashare-order-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.ashare-order-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 10px;
+    color: var(--crypto-muted);
+}
+
+.ashare-static-field {
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    padding: 0 7px;
+    background: var(--crypto-panel-raised);
+    border: 1px solid var(--crypto-border);
+    border-radius: 4px;
+    color: var(--crypto-text);
+    font-size: 11px;
+}
+
+.ashare-price-field {
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    padding: 0 7px;
+    background: var(--crypto-panel-raised);
+    border: 1px solid var(--crypto-border);
+    border-radius: 4px;
+    color: #f0b90b;
+    font-size: 12px;
+    font-weight: 700;
+    font-family: monospace;
+}
+
+.ashare-input-group {
+    margin-bottom: 8px;
+}
+
+.ashare-input-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    font-size: 10px;
+    color: var(--crypto-muted);
+}
+
+.ashare-hint-text {
+    color: var(--crypto-muted);
+    font-size: 10px;
+}
+
+.ashare-hint-text strong {
+    color: var(--crypto-text);
+    font-weight: 600;
+}
+
+.ashare-input-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.ashare-input-wrapper input {
+    width: 100%;
+    min-height: 32px;
+    padding: 4px 68px 4px 8px;
+    border: 1px solid var(--crypto-input-border);
+    border-radius: 4px;
+    background: var(--crypto-input);
+    color: var(--crypto-text);
+    font-size: 13px;
+    font-weight: 600;
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.ashare-input-wrapper input:focus {
+    border-color: var(--crypto-accent);
+}
+
+.ashare-input-suffix {
+    position: absolute;
+    right: 8px;
+    font-size: 11px;
+    color: var(--crypto-muted);
+    pointer-events: none;
+}
+
+/* 快捷比例按钮 */
+.ashare-fraction-buttons {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    margin-bottom: 8px;
+}
+
+.ashare-fraction-buttons button {
+    padding: 5px 2px;
+    border: 1px solid var(--crypto-border);
+    border-radius: 4px;
+    background: var(--crypto-panel-raised);
+    color: var(--crypto-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ashare-fraction-buttons button:hover {
+    background: var(--crypto-control-hover);
+    color: var(--crypto-text);
+    border-color: #3a4555;
+}
+
+.ashare-fraction-buttons button:active {
+    transform: scale(0.96);
+}
+
+/* 预估概要 */
+.ashare-order-preview {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
+    padding: 6px 8px;
+    background: var(--crypto-panel-raised);
+    border-radius: 4px;
+    border: 1px solid var(--crypto-border);
+    margin-bottom: 8px;
+}
+
+.ashare-order-preview > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 10px;
+    color: var(--crypto-muted);
+}
+
+.ashare-order-preview strong {
+    font-size: 12px;
+    color: var(--crypto-text);
+    font-weight: 600;
+    font-family: monospace;
+}
+
+/* 下单提交按钮 */
+/* 下单提交按钮（100% 像素级对齐 BTC 截图 AICoin 蓝色主操作按钮） */
+.ashare-submit-btn {
+    width: 100%;
+    min-height: 36px;
+    border: 0;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    cursor: pointer;
+    background: #2962ff;
+    box-shadow: 0 2px 8px rgba(41, 98, 255, 0.35);
+    transition: background 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+}
+
+.ashare-submit-btn:hover {
+    background: #1e50ff;
+    box-shadow: 0 3px 12px rgba(30, 80, 255, 0.45);
+}
+
+.ashare-submit-btn:active {
+    transform: scale(0.98);
+}
+
+.ashare-rule-note {
+    margin-top: 6px;
+    font-size: 10px;
+    line-height: 1.4;
+    color: var(--crypto-muted);
+}
+
+/* 持仓卡片细节 */
+.ashare-pos-card {
+    background: var(--crypto-panel-raised);
+    border: 1px solid var(--crypto-border);
+    border-radius: 4px;
+    padding: 8px;
+    margin-bottom: 4px;
+}
+
+.ashare-pos-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.ashare-pos-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    font-size: 11px;
+}
+
+.ashare-pos-grid-item {
+    display: flex;
+    justify-content: space-between;
+    color: var(--crypto-muted);
+}
+
+.ashare-pos-grid-item strong {
+    color: var(--crypto-text);
+}
+
+.ashare-pos-frozen-tag {
+    margin-top: 6px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    background: rgba(255, 152, 0, 0.12);
+    color: #ff9800;
+    border: 1px solid rgba(255, 152, 0, 0.3);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* 成交明细条目 */
+.ashare-trade-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 2px;
+    border-bottom: 1px dashed var(--crypto-border);
+    font-size: 11px;
+}
+
+.ashare-trade-type.buy {
+    color: #f6465d;
+    font-weight: 600;
+}
+
+.ashare-trade-type.sell {
+    color: #0ecb81;
+    font-weight: 600;
+}
+
+.ashare-trade-time {
+    color: var(--crypto-muted);
+    font-size: 10px;
+}
+
+#main-app.ashare-live-active .no-positions,
+#main-app.ashare-live-active .no-trades {
+    color: var(--crypto-muted, #848e9c);
+    font-size: 12px;
+    text-align: center;
+    padding: 16px 8px;
+    background: transparent;
+    border: none;
+}
+
+/* ==========================================================================
+   AICoin 风格 A 股自选/收藏股票面板 (Watchlist Panel)
+   ========================================================================== */
+.ashare-live-watchlist-panel {
+    display: flex;
+    flex-direction: column;
+    background: #0b0e11;
+    border-right: 1px solid #1e2329;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    user-select: none;
+    z-index: 10;
+}
+
+.ashare-wl-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 38px;
+    min-height: 38px;
+    padding: 0 8px;
+    background: #11151c;
+    border-bottom: 1px solid #1e2329;
+}
+
+.ashare-wl-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 100%;
+}
+
+.ashare-wl-tab {
+    position: relative;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #848e9c;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 0 10px;
+    height: 100%;
+    cursor: pointer;
+    transition: color 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+}
+
+.ashare-wl-tab:hover {
+    color: #eaecef;
+}
+
+.ashare-wl-tab.active {
+    color: #f0b90b;
+    font-weight: 600;
+}
+
+.ashare-wl-tab.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background: #f0b90b;
+    border-radius: 2px 2px 0 0;
+}
+
+.ashare-wl-icon-btn {
+    background: transparent;
+    border: none;
+    color: #848e9c;
+    font-size: 11px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.ashare-wl-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #eaecef;
+}
+
+.ashare-wl-table-head {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    min-height: 28px;
+    padding: 0 10px;
+    background: #0e1217;
+    border-bottom: 1px solid #1a1e24;
+    font-size: 11px;
+    color: #848e9c;
+}
+
+.ashare-wl-col-head {
+    display: flex;
+    align-items: center;
+}
+
+.ashare-wl-col-head.col-symbol {
+    flex: 1;
+    min-width: 0;
+}
+
+.ashare-wl-col-head.col-price {
+    width: 78px;
+    justify-content: flex-end;
+    cursor: pointer;
+    gap: 2px;
+}
+
+.ashare-wl-col-head.col-change {
+    width: 78px;
+    justify-content: flex-end;
+    padding-right: 4px;
+    cursor: pointer;
+    gap: 2px;
+}
+
+.ashare-wl-col-head:hover .sort-arrow {
+    color: #f0b90b;
+}
+
+.ashare-wl-col-head .sort-arrow {
+    font-size: 10px;
+    opacity: 0.6;
+}
+
+.ashare-wl-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.ashare-wl-list::-webkit-scrollbar {
+    width: 4px;
+}
+
+.ashare-wl-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
+}
+
+.ashare-wl-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.ashare-wl-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 44px;
+    padding: 0 8px 0 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+
+.ashare-wl-item:hover {
+    background: #151a21;
+}
+
+.ashare-wl-item.active {
+    background: rgba(240, 185, 11, 0.06);
+    border-left: 3px solid #f0b90b;
+    padding-left: 7px;
+}
+
+.ashare-wl-item-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.ashare-wl-name-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    line-height: 1.2;
+}
+
+.ashare-wl-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: #eaecef;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ashare-wl-tag {
+    font-size: 9px;
+    line-height: 1;
+    padding: 1px 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #848e9c;
+    flex-shrink: 0;
+}
+
+.ashare-wl-tag.sh {
+    background: rgba(246, 70, 93, 0.15);
+    color: #f6465d;
+}
+
+.ashare-wl-tag.sz {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+}
+
+.ashare-wl-tag.cyb {
+    background: rgba(168, 85, 247, 0.15);
+    color: #c084fc;
+}
+
+.ashare-wl-tag.kcb {
+    background: rgba(234, 179, 8, 0.15);
+    color: #facc15;
+}
+
+.ashare-wl-tag.idx {
+    background: rgba(240, 185, 11, 0.18);
+    color: #f0b90b;
+}
+
+.ashare-wl-code {
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    color: #848e9c;
+    margin-top: 2px;
+}
+
+.ashare-wl-item-price {
+    width: 78px;
+    text-align: right;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    white-space: nowrap;
+    padding-right: 6px;
+}
+
+.ashare-wl-item-change {
+    width: 70px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+.ashare-wl-pill {
+    width: 62px;
+    height: 24px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+}
+
+.ashare-wl-pill.up,
+.ashare-wl-item-price.up {
+    color: #f6465d;
+}
+
+.ashare-wl-pill.up {
+    background: rgba(246, 70, 93, 0.16);
+}
+
+.ashare-wl-pill.down,
+.ashare-wl-item-price.down {
+    color: #0ecb81;
+}
+
+.ashare-wl-pill.down {
+    background: rgba(14, 203, 129, 0.16);
+}
+
+.ashare-wl-pill.flat,
+.ashare-wl-item-price.flat {
+    color: #848e9c;
+}
+
+.ashare-wl-pill.flat {
+    background: rgba(132, 142, 156, 0.12);
+}
+
+.ashare-wl-remove-btn {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #1e2329;
+    border: none;
+    color: #848e9c;
+    font-size: 13px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+.ashare-wl-item:hover .ashare-wl-remove-btn {
+    opacity: 0.85;
+    pointer-events: auto;
+}
+
+.ashare-wl-remove-btn:hover {
+    opacity: 1;
+    color: #f6465d;
+    background: rgba(246, 70, 93, 0.2);
+}
+
+.ashare-wl-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 140px;
+    color: #848e9c;
+    font-size: 12px;
+    text-align: center;
+    gap: 8px;
+}
+
+.ashare-wl-footer {
+    height: 42px;
+    min-height: 42px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    background: #11151c;
+    border-top: 1px solid #1e2329;
+}
+
+.ashare-wl-add-btn {
+    width: 100%;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(41, 98, 255, 0.12);
+    border: 1px solid rgba(41, 98, 255, 0.3);
+    color: #4080ff;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.ashare-wl-add-btn:hover {
+    background: rgba(41, 98, 255, 0.22);
+    border-color: #4080ff;
+    color: #60a5fa;
+}
+
+/* 搜索结果项样式增强 */
+.ashare-search-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.ashare-search-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.ashare-search-item-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ashare-search-item-code {
+    font-family: monospace;
+    font-weight: 600;
+    color: #f0b90b;
+}
+
+.ashare-search-item-name {
+    color: #eaecef;
+    font-size: 13px;
+}
+
+.ashare-search-add-btn {
+    background: rgba(41, 98, 255, 0.18);
+    border: 1px solid rgba(41, 98, 255, 0.4);
+    color: #60a5fa;
+    border-radius: 3px;
+    padding: 3px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ashare-search-add-btn:hover {
+    background: #2962ff;
+    color: #ffffff;
+}
+
+.ashare-search-add-btn.added {
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.15);
+    color: #848e9c;
+    cursor: default;
+}
+
+
+
+
+/* ==========================================================================
+   A 股实时看盘：委托方式切换（市价/限价）+ 限价输入 + 挂单列表
+   亮暗主题全部走 --crypto-* 变量，与既有面板变量体系一致
+   ========================================================================== */
+.ashare-order-type-switch {
+    display: flex;
+    gap: 4px;
+}
+
+.ashare-order-type-btn {
+    flex: 1;
+    min-height: 26px;
+    padding: 0 8px;
+    background: var(--crypto-panel-raised);
+    border: 1px solid var(--crypto-border);
+    border-radius: 4px;
+    color: var(--crypto-muted, #848e9c);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.ashare-order-type-btn:hover {
+    border-color: var(--crypto-accent, #f0b90b);
+    color: var(--crypto-text);
+}
+
+.ashare-order-type-btn.active {
+    background: rgba(240, 185, 11, 0.14);
+    border-color: var(--crypto-accent, #f0b90b);
+    color: var(--crypto-accent, #f0b90b);
+    font-weight: 700;
+}
+
+.ashare-limit-input {
+    width: 100%;
+    min-height: 28px;
+    margin-top: 4px;
+    padding: 0 7px;
+    box-sizing: border-box;
+    background: var(--crypto-panel-raised);
+    border: 1px solid var(--crypto-border);
+    border-radius: 4px;
+    color: var(--crypto-text);
+    font-size: 12px;
+    font-family: monospace;
+}
+
+.ashare-limit-input:focus {
+    outline: none;
+    border-color: var(--crypto-accent, #f0b90b);
+}
+
+.ashare-order-row {
+    background: rgba(128, 128, 128, 0.08);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    margin-bottom: 5px;
+}
+
+.ashare-order-row .ashare-order-side {
+    font-weight: 700;
+}
+
+.ashare-order-row .ashare-order-side.buy { color: #f6465d; }
+.ashare-order-row .ashare-order-side.sell { color: #0ecb81; }
+
+.ashare-cancel-order-btn {
+    border: 1px solid var(--crypto-border);
+    background: transparent;
+    color: var(--crypto-muted, #848e9c);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.ashare-cancel-order-btn:hover {
+    border-color: #f6465d;
+    color: #f6465d;
+}
+
+.ashare-position-row.current-symbol {
+    border: 1px solid var(--crypto-accent, #f0b90b);
+}
+
+/* ==========================================================================
+   K线任意截断复盘 (Bar Replay) 样式
+   对标 AICoin / TradingView 截断复盘交互与视觉体验
+   ========================================================================== */
+
+/* 顶部工具栏复盘按钮激活状态 */
+#chart-bar-replay-btn.active {
+    background: rgba(41, 98, 255, 0.2) !important;
+    border-color: #2962ff !important;
+    color: #3b82f6 !important;
+    box-shadow: 0 0 8px rgba(41, 98, 255, 0.35);
+}
+
+/* 截断选择模式下图表十字线手势 */
+.chart-panels.bar-replay-cutting,
+.chart-panels.bar-replay-cutting * {
+    cursor: crosshair !important;
+}
+
+/* 跟随光标移动的截断辅助线与提示标签 */
+.chart-replay-cut-indicator {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 0;
+    pointer-events: none;
+    z-index: 70;
+    transition: none;
+}
+
+.chart-replay-cut-indicator .cut-indicator-line {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 1px;
+    border-left: 1.5px dashed #2962ff;
+    box-shadow: 0 0 6px rgba(41, 98, 255, 0.6);
+}
+
+.chart-replay-cut-indicator .cut-indicator-badge {
+    position: absolute;
+    top: 10px;
+    left: 6px;
+    background: #2962ff;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    white-space: nowrap;
+    pointer-events: none;
+    letter-spacing: 0.5px;
+}
+
+/* 顶部中央悬浮复盘控制条 (HUD，支持拖拽移动) */
+.chart-bar-replay-bar {
+    position: absolute;
+    top: 64px;
+    bottom: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 85;
+    background: rgba(18, 22, 28, 0.94);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 12px;
+    user-select: none;
+    color: #eaecef;
+    transition: opacity 0.2s ease;
+}
+
+.chart-bar-replay-bar.dragging {
+    transition: none !important;
+    user-select: none;
+    cursor: grabbing;
+}
+
+.chart-bar-replay-bar.hidden {
+    display: none !important;
+}
+
+.replay-bar-drag-handle {
+    font-size: 12px;
+    font-weight: 600;
+    color: #60a5fa;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 6px;
+    white-space: nowrap;
+    cursor: grab;
+    user-select: none;
+    border-radius: 4px;
+}
+
+.replay-bar-drag-handle:hover {
+    background: rgba(96, 165, 250, 0.12);
+}
+
+.replay-bar-drag-handle:active,
+.chart-bar-replay-bar.dragging .replay-bar-drag-handle {
+    cursor: grabbing;
+}
+
+.replay-bar-divider {
+    width: 1px;
+    height: 18px;
+    background: rgba(255, 255, 255, 0.12);
+    margin: 0 2px;
+}
+
+.replay-bar-btn {
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 4px;
+    color: #eaecef;
+    height: 28px;
+    padding: 0 9px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.replay-bar-btn:hover {
+    background: rgba(255, 255, 255, 0.15);
+    border-color: rgba(255, 255, 255, 0.28);
+    color: #ffffff;
+}
+
+.replay-bar-btn:active {
+    transform: scale(0.96);
+}
+
+.replay-play-btn {
+    background: rgba(41, 98, 255, 0.2);
+    border-color: rgba(41, 98, 255, 0.45);
+    color: #60a5fa;
+    min-width: 32px;
+    justify-content: center;
+}
+
+.replay-play-btn:hover {
+    background: #2962ff;
+    border-color: #2962ff;
+    color: #ffffff;
+}
+
+.replay-play-btn.playing {
+    background: rgba(240, 185, 11, 0.2);
+    border-color: #f0b90b;
+    color: #f0b90b;
+}
+
+.replay-speed-select {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    color: #eaecef;
+    height: 28px;
+    padding: 0 6px;
+    font-size: 11px;
+    outline: none;
+    cursor: pointer;
+}
+
+.replay-speed-select option {
+    background: #181d24;
+    color: #eaecef;
+}
+
+.replay-bar-progress {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+    font-size: 11px;
+    color: #848e9c;
+    padding: 0 4px;
+    white-space: nowrap;
+}
+
+.replay-progress-time {
+    color: #eaecef;
+    font-weight: 500;
+}
+
+.replay-progress-fraction {
+    color: #848e9c;
+}
+
+.replay-exit-btn {
+    background: rgba(246, 70, 93, 0.12);
+    border-color: rgba(246, 70, 93, 0.35);
+    color: #f6465d;
+    font-weight: 500;
+}
+
+.replay-exit-btn:hover {
+    background: #f6465d;
+    border-color: #f6465d;
+    color: #ffffff;
+}
+
+/* ==========================================================================
+   A 股实时看盘：亮色主题（Light Theme）自适应规则
+   匹配 #main-app.ashare-live-active[data-crypto-theme="light"] 与 [data-theme="light"]
+   ========================================================================== */
+
+/* 主工作区与图表面板 */
+#main-app.ashare-live-active[data-crypto-theme="light"] .chart-workbench,
+#main-app.ashare-live-active[data-crypto-theme="light"] .chart-panels,
+#main-app.ashare-live-active[data-crypto-theme="light"] #chart,
+#main-app.ashare-live-active[data-crypto-theme="light"] #volume-chart,
+#main-app.ashare-live-active[data-crypto-theme="light"] #indicator-chart,
+#main-app.ashare-live-active[data-crypto-theme="light"] #indicator-canvas,
+[data-theme="light"] #main-app.ashare-live-active .chart-workbench,
+[data-theme="light"] #main-app.ashare-live-active .chart-panels,
+[data-theme="light"] #main-app.ashare-live-active #chart,
+[data-theme="light"] #main-app.ashare-live-active #volume-chart,
+[data-theme="light"] #main-app.ashare-live-active #indicator-chart,
+[data-theme="light"] #main-app.ashare-live-active #indicator-canvas {
+    background: #ffffff !important;
+}
+
+/* Layer 1, 2, 3 头部工具栏 */
+#main-app.ashare-live-active[data-crypto-theme="light"] .chart-workbench .chart-header,
+[data-theme="light"] #main-app.ashare-live-active .chart-workbench .chart-header {
+    background: #ffffff !important;
+    border-bottom: 1px solid #d6dee8 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .stock-info,
+[data-theme="light"] #main-app.ashare-live-active .stock-info {
+    background: #ffffff !important;
+    border-bottom: 1px solid #d6dee8 !important;
+    color: #182230 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #stock-name,
+[data-theme="light"] #main-app.ashare-live-active #stock-name {
+    color: #101828 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #ashare-wl-expand-btn,
+[data-theme="light"] #main-app.ashare-live-active #ashare-wl-expand-btn {
+    background: #f4f7fa !important;
+    border: 1px solid #cbd5e1 !important;
+    color: #182230 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #ashare-wl-expand-btn:hover,
+[data-theme="light"] #main-app.ashare-live-active #ashare-wl-expand-btn:hover {
+    background: #e2e8f0 !important;
+    border-color: #94a3b8 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #ashare-live-search-btn,
+[data-theme="light"] #main-app.ashare-live-active #ashare-live-search-btn {
+    background: #f4f7fa !important;
+    border: 1px solid #cbd5e1 !important;
+    color: #182230 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #ashare-live-search-btn:hover,
+[data-theme="light"] #main-app.ashare-live-active #ashare-live-search-btn:hover {
+    background: #e5edf8 !important;
+    color: #b98700 !important;
+    border-color: #b98700 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #current-date,
+[data-theme="light"] #main-app.ashare-live-active #current-date {
+    color: #68778a !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .ashare-live-exit-btn,
+[data-theme="light"] #main-app.ashare-live-active .ashare-live-exit-btn {
+    background: rgba(214, 69, 80, 0.08) !important;
+    color: #d64550 !important;
+    border: 1px solid rgba(214, 69, 80, 0.3) !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .ashare-live-exit-btn:hover,
+[data-theme="light"] #main-app.ashare-live-active .ashare-live-exit-btn:hover {
+    background: #d64550 !important;
+    color: #ffffff !important;
+    border-color: #d64550 !important;
+    box-shadow: 0 0 8px rgba(214, 69, 80, 0.35) !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .chart-actions,
+[data-theme="light"] #main-app.ashare-live-active .chart-actions {
+    background: #ffffff !important;
+    border-bottom: 1px solid #d6dee8 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .view-period-btn.ashare-live-period,
+[data-theme="light"] #main-app.ashare-live-active .view-period-btn.ashare-live-period {
+    color: #68778a !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .view-period-btn.ashare-live-period:hover,
+[data-theme="light"] #main-app.ashare-live-active .view-period-btn.ashare-live-period:hover {
+    color: #101828 !important;
+    background: #e5edf8 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .view-period-btn.ashare-live-period.active,
+[data-theme="light"] #main-app.ashare-live-active .view-period-btn.ashare-live-period.active {
+    color: #101828 !important;
+    background: #e2e8f0 !important;
+    border-color: #cbd5e1 !important;
+    font-weight: 600 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .ashare-live-header-metrics,
+[data-theme="light"] #main-app.ashare-live-active .ashare-live-header-metrics {
+    background: #f8fafc !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .ashare-live-header-metrics .lbl,
+[data-theme="light"] #main-app.ashare-live-active .ashare-live-header-metrics .lbl {
+    color: #68778a !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .ashare-live-header-metrics strong,
+[data-theme="light"] #main-app.ashare-live-active .ashare-live-header-metrics strong {
+    color: #182230 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #crypto-theme-toggle-btn,
+[data-theme="light"] #main-app.ashare-live-active #crypto-theme-toggle-btn,
+#main-app[data-crypto-theme="light"] #crypto-theme-toggle-btn,
+[data-theme="light"] #main-app #crypto-theme-toggle-btn {
+    color: #182230 !important;
+    background: #f4f7fa !important;
+    border: 1px solid #d6dee8 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] #crypto-theme-toggle-btn:hover,
+[data-theme="light"] #main-app.ashare-live-active #crypto-theme-toggle-btn:hover,
+#main-app[data-crypto-theme="light"] #crypto-theme-toggle-btn:hover,
+[data-theme="light"] #main-app #crypto-theme-toggle-btn:hover {
+    background: #e5edf8 !important;
+    color: #b98700 !important;
+    border-color: #b98700 !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .chart-panel-controls button {
+    color: #4a5568 !important;
+    background: transparent !important;
+}
+
+#main-app.ashare-live-active[data-crypto-theme="light"] .chart-panel-controls button:hover {
+    color: #182230 !important;
+    background: #e2e8f0 !important;
+}
+
+/* 左侧自选股票面板 */
+#main-app[data-crypto-theme="light"] .ashare-live-watchlist-panel,
+[data-theme="light"] #main-app .ashare-live-watchlist-panel {
+    background: #ffffff !important;
+    border-right: 1px solid #d6dee8 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-topbar,
+[data-theme="light"] #main-app .ashare-wl-topbar {
+    background: #f8fafc !important;
+    border-bottom: 1px solid #d6dee8 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-tab,
+[data-theme="light"] #main-app .ashare-wl-tab {
+    color: #68778a !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-tab:hover,
+[data-theme="light"] #main-app .ashare-wl-tab:hover {
+    color: #101828 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-tab.active,
+[data-theme="light"] #main-app .ashare-wl-tab.active {
+    color: #b98700 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-tab.active::after,
+[data-theme="light"] #main-app .ashare-wl-tab.active::after {
+    background: #b98700 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-icon-btn,
+[data-theme="light"] #main-app .ashare-wl-icon-btn {
+    color: #68778a !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-icon-btn:hover,
+[data-theme="light"] #main-app .ashare-wl-icon-btn:hover {
+    background: #e2e8f0 !important;
+    color: #101828 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-table-head,
+[data-theme="light"] #main-app .ashare-wl-table-head {
+    background: #edf2f7 !important;
+    border-bottom: 1px solid #d6dee8 !important;
+    color: #68778a !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-item,
+[data-theme="light"] #main-app .ashare-wl-item {
+    border-bottom: 1px solid #f1f5f9 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-item:hover,
+[data-theme="light"] #main-app .ashare-wl-item:hover {
+    background: #f8fafc !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-item.active,
+[data-theme="light"] #main-app .ashare-wl-item.active {
+    background: rgba(185, 135, 0, 0.08) !important;
+    border-left: 3px solid #b98700 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-name,
+[data-theme="light"] #main-app .ashare-wl-name {
+    color: #182230 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-code,
+[data-theme="light"] #main-app .ashare-wl-code {
+    color: #68778a !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-tag,
+[data-theme="light"] #main-app .ashare-wl-tag {
+    background: #e2e8f0 !important;
+    color: #475569 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-footer,
+[data-theme="light"] #main-app .ashare-wl-footer {
+    background: #f8fafc !important;
+    border-top: 1px solid #d6dee8 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-remove-btn,
+[data-theme="light"] #main-app .ashare-wl-remove-btn {
+    background: #e2e8f0 !important;
+    color: #68778a !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-remove-btn:hover,
+[data-theme="light"] #main-app .ashare-wl-remove-btn:hover {
+    background: rgba(214, 69, 80, 0.15) !important;
+    color: #d64550 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-wl-list::-webkit-scrollbar-thumb,
+[data-theme="light"] #main-app .ashare-wl-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.15) !important;
+}
+
+/* 右侧交易台与表单 */
+#main-app.ashare-live-active[data-crypto-theme="light"] .trade-console,
+[data-theme="light"] #main-app.ashare-live-active .trade-console {
+    background: #ffffff !important;
+    border-left: 1px solid #d6dee8 !important;
+    color: #182230 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-section-header h3,
+[data-theme="light"] #main-app .ashare-section-header h3 {
+    color: #101828 !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-gear-btn,
+[data-theme="light"] #main-app .ashare-gear-btn {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-gear-btn:hover,
+[data-theme="light"] #main-app .ashare-gear-btn:hover {
+    color: #b98700;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-direction-buy,
+#main-app[data-crypto-theme="light"] .ashare-direction-sell,
+[data-theme="light"] #main-app .ashare-direction-buy,
+[data-theme="light"] #main-app .ashare-direction-sell {
+    background: #f4f7fa;
+    color: #68778a;
+    border: 1px solid #d6dee8;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-direction-buy.active,
+[data-theme="light"] #main-app .ashare-direction-buy.active {
+    background: #d64550 !important;
+    color: #ffffff !important;
+    border-color: #d64550 !important;
+    box-shadow: 0 2px 8px rgba(214, 69, 80, 0.25) !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-direction-sell.active,
+[data-theme="light"] #main-app .ashare-direction-sell.active {
+    background: #0f9f6e !important;
+    color: #ffffff !important;
+    border-color: #0f9f6e !important;
+    box-shadow: 0 2px 8px rgba(15, 159, 110, 0.25) !important;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-grid label,
+[data-theme="light"] #main-app .ashare-order-grid label {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-type-btn,
+[data-theme="light"] #main-app .ashare-order-type-btn {
+    background: #f8fafc;
+    border: 1px solid #d6dee8;
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-type-btn:hover,
+[data-theme="light"] #main-app .ashare-order-type-btn:hover {
+    background: #e2e8f0;
+    color: #101828;
+    border-color: #b98700;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-type-btn.active,
+[data-theme="light"] #main-app .ashare-order-type-btn.active {
+    background: rgba(185, 135, 0, 0.12);
+    border-color: #b98700;
+    color: #b98700;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-price-field,
+[data-theme="light"] #main-app .ashare-price-field {
+    background: #f8fafc;
+    border: 1px solid #d6dee8;
+    color: #b98700;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-limit-input,
+[data-theme="light"] #main-app .ashare-limit-input {
+    background: #ffffff;
+    border: 1px solid #d6dee8;
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-input-header,
+[data-theme="light"] #main-app .ashare-input-header,
+#main-app[data-crypto-theme="light"] .ashare-hint-text,
+[data-theme="light"] #main-app .ashare-hint-text {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-hint-text strong,
+[data-theme="light"] #main-app .ashare-hint-text strong {
+    color: #101828;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-input-wrapper input,
+[data-theme="light"] #main-app .ashare-input-wrapper input {
+    background: #ffffff;
+    border: 1px solid #d6dee8;
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-fraction-buttons button,
+[data-theme="light"] #main-app .ashare-fraction-buttons button {
+    background: #f8fafc;
+    border: 1px solid #d6dee8;
+    color: #475569;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-fraction-buttons button:hover,
+[data-theme="light"] #main-app .ashare-fraction-buttons button:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+    border-color: #cbd5e1;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-preview,
+[data-theme="light"] #main-app .ashare-order-preview {
+    background: #f4f7fa;
+    border: 1px solid #e2e8f0;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-preview > div,
+[data-theme="light"] #main-app .ashare-order-preview > div {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-preview strong,
+[data-theme="light"] #main-app .ashare-order-preview strong {
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-rule-note,
+[data-theme="light"] #main-app .ashare-rule-note {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-pos-card,
+[data-theme="light"] #main-app .ashare-pos-card {
+    background: #f8fafc;
+    border: 1px solid #d6dee8;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-pos-grid-item strong,
+[data-theme="light"] #main-app .ashare-pos-grid-item strong {
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-pos-grid-item,
+[data-theme="light"] #main-app .ashare-pos-grid-item {
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-pos-header,
+[data-theme="light"] #main-app .ashare-pos-header {
+    color: #101828;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-trade-item,
+[data-theme="light"] #main-app .ashare-trade-item {
+    border-bottom: 1px dashed #d6dee8;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-order-row,
+[data-theme="light"] #main-app .ashare-order-row {
+    background: #f4f7fa;
+    border: 1px solid #e2e8f0;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-cancel-order-btn,
+[data-theme="light"] #main-app .ashare-cancel-order-btn {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #68778a;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-cancel-order-btn:hover,
+[data-theme="light"] #main-app .ashare-cancel-order-btn:hover {
+    background: #fef2f2;
+    border-color: #fca5a5;
+    color: #dc2626;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-position-row.current-symbol,
+[data-theme="light"] #main-app .ashare-position-row.current-symbol {
+    border: 1px solid #b98700;
+}
+
+/* 股票搜索浮窗亮色适配 */
+#main-app[data-crypto-theme="light"] .ashare-search-item,
+[data-theme="light"] #main-app .ashare-search-item {
+    border-bottom: 1px solid #e2e8f0;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-search-item:hover,
+[data-theme="light"] #main-app .ashare-search-item:hover {
+    background: #f1f5f9;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-search-item-code,
+[data-theme="light"] #main-app .ashare-search-item-code {
+    color: #b98700;
+}
+
+#main-app[data-crypto-theme="light"] .ashare-search-item-name,
+[data-theme="light"] #main-app .ashare-search-item-name {
+    color: #101828;
+}
+
+/* 折叠标签栏亮色主题 */
+#main-app[data-crypto-theme="light"] .crypto-console-collapsed-tab,
+[data-theme="light"] #main-app .crypto-console-collapsed-tab {
+    background: #ffffff !important;
+    border-left: 1px solid #d6dee8 !important;
+    color: #68778a !important;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-console-collapsed-tab:hover,
+[data-theme="light"] #main-app .crypto-console-collapsed-tab:hover {
+    background: #f1f5f9 !important;
+    color: #101828 !important;
+    border-color: #b98700 !important;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-console-collapse-btn,
+[data-theme="light"] #main-app .crypto-console-collapse-btn {
+    background: #f4f7fa;
+    border: 1px solid #d6dee8;
+    border-right: none;
+    color: #182230;
+}
+
+#main-app[data-crypto-theme="light"] .crypto-console-collapse-btn:hover,
+[data-theme="light"] #main-app .crypto-console-collapse-btn:hover {
+    background: #e5edf8;
+    color: #b98700;
+    border-color: #b98700;
+}
+

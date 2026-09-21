@@ -1,4 +1,4 @@
-﻿(function (root, factory) {
+(function (root, factory) {
     const api = factory();
     if (typeof module === 'object' && module.exports) module.exports = api;
     if (root) root.KLineIndicatorMath = api;
@@ -40,7 +40,7 @@
         return output;
     }
 
-    function calculateMacd(bars, config) {
+    function calculateMacd(bars, config, indicatorType = 'MACD') {
         const fast = positiveInteger(config.fast, 12);
         const slow = Math.max(positiveInteger(config.slow, 26), fast + 1);
         const signal = positiveInteger(config.signal, 9);
@@ -50,7 +50,7 @@
         const difValues = closes.map((_, index) => fastValues[index] - slowValues[index]);
         const deaValues = ema(difValues, signal);
         return {
-            type: 'MACD',
+            type: indicatorType,
             data: bars.map((bar, index) => ({
                 time: bar.time,
                 dif: difValues[index],
@@ -133,7 +133,7 @@
         const normalizedType = String(type || 'MACD').toUpperCase();
         const safeConfig = config || {};
         if (bars.length === 0) return { type: normalizedType, data: [] };
-        if (normalizedType === 'MACD') return calculateMacd(bars, safeConfig);
+        if (normalizedType === 'MACD' || normalizedType === 'MACD2') return calculateMacd(bars, safeConfig, normalizedType);
         if (normalizedType === 'KDJ') return calculateKdj(bars, safeConfig);
         if (normalizedType === 'RSI') return calculateRsi(bars, safeConfig);
         if (normalizedType === 'BOLL') return calculateBoll(bars, safeConfig);

@@ -91,6 +91,9 @@ class CryptoBinanceOrderTests(unittest.TestCase):
                     ),
                 )
 
+        # 平仓限价只能挂在"不会立刻成交"的一侧（= 止盈侧）。
+        # 回归：曾经放开过这个限制，导致"低于现价的平多限价"在下一根 K 线立刻成交，
+        # 用户设置的止损线还没到就被平仓（因为卖出限价的撮合条件是 high >= 限价）。
         for opening_action, price in (
             ('open_long', '100'), ('open_long', '99'),
             ('open_short', '100'), ('open_short', '101'),
@@ -105,6 +108,103 @@ class CryptoBinanceOrderTests(unittest.TestCase):
                         timestamp=T1, current_price='100',
                     ),
                 )
+
+        # 止盈侧的平仓限价照常受理
+        _, book = self.make_book()
+        self.open_position(book, 'open_long')
+        self.assertTrue(book.submit_order(
+            action='close', order_type='limit', limit_price='101',
+            timestamp=T1, current_price='100',
+        ).reduce_only)
+
+    def test_stop_loss_breakout_does_not_fill_until_price_crosses(self):
+        """回归：止损必须用突破单，且只有价格真的穿越触发价才成交。
+
+        用户反馈的 bug —— 多头在 100 开仓、止损挂在 95，点下一根 K 线就被平仓。
+        根因是当时把止损发成了 limit 单，而"卖出限价"的条件是 high >= 95，必然成立。
+        """
+        _, book = self.make_book()
+        self.open_position(book, 'open_long')
+        stop = book.submit_order(
+            action='close', order_type='breakout', trigger_price='95',
+            timestamp=T0, current_price='100',
+        )
+        self.assertEqual(stop.side, 'sell')
+
+        # 下一根 K 线的低点没有碰到止损价 → 绝不能成交
+        untouched = book.process_bar(timestamp=T1, open='100', high='101', low='98', close='99')
+        self.assertEqual(untouched, [])
+        self.assertEqual(stop.status, 'active')
+
+        # 价格跌破触发价 → 成交在触发价
+        T2 = T1 + timedelta(minutes=5)
+        crossed = book.process_bar(timestamp=T2, open='99', high='99', low='94', close='94.5')
+        self.assertEqual(len(crossed), 1)
+        self.assertEqual(crossed[0].price, Decimal('95'))
+        self.assertEqual(stop.status, 'filled')
+
+    def test_take_profit_limit_only_fills_when_high_reaches_it(self):
+        """止盈用限价单：只有最高价触及止盈价才成交（对称地不会提前成交）。"""
+        _, book = self.make_book()
+        self.open_position(book, 'open_long')
+        target = book.submit_order(
+            action='close', order_type='limit', limit_price='110',
+            timestamp=T0, current_price='100',
+        )
+        self.assertEqual(book.process_bar(timestamp=T1, open='100', high='105', low='99', close='104'), [])
+        self.assertEqual(target.status, 'active')
+        T2 = T1 + timedelta(minutes=5)
+        filled = book.process_bar(timestamp=T2, open='105', high='111', low='104', close='110')
+        self.assertEqual(len(filled), 1)
+        self.assertEqual(filled[0].price, Decimal('110'))
+
+    def test_amending_protective_order_across_market_switches_order_type(self):
+        """把保护线拖到现价另一侧时必须改判类型，否则下一根 K 线会立刻成交。"""
+        _, book = self.make_book()
+        self.open_position(book, 'open_long')
+        stop = book.submit_order(
+            action='close', order_type='breakout', trigger_price='95',
+            timestamp=T0, current_price='100',
+        )
+        # 拖到现价上方 → 变成止盈限价单
+        book.modify_order_price(stop.order_id, '110', T0, current_price='100')
+        self.assertEqual(stop.order_type, 'limit')
+        self.assertEqual(stop.protection_type, 'tp')
+        self.assertEqual(stop.limit_price, Decimal('110'))
+        self.assertIsNone(stop.trigger_price)
+        self.assertEqual(book.process_bar(timestamp=T1, open='100', high='105', low='99', close='104'), [])
+
+        # 再拖回现价下方 → 变回止损突破单，且不会立刻成交
+        book.modify_order_price(stop.order_id, '90', T0, current_price='100')
+        self.assertEqual(stop.order_type, 'breakout')
+        self.assertEqual(stop.protection_type, 'sl')
+        self.assertEqual(stop.trigger_price, Decimal('90'))
+        self.assertIsNone(stop.limit_price)
+        self.assertEqual(book.process_bar(timestamp=T1, open='100', high='101', low='98', close='99'), [])
+
+    def test_amending_protective_order_onto_mark_price_is_rejected(self):
+        _, book = self.make_book()
+        self.open_position(book, 'open_long')
+        stop = book.submit_order(
+            action='close', order_type='breakout', trigger_price='95',
+            timestamp=T0, current_price='100',
+        )
+        self.assert_order_error(
+            'invalid_limit_direction',
+            lambda: book.modify_order_price(stop.order_id, '100', T0, current_price='100'),
+        )
+
+    def test_amending_entry_order_onto_marketable_side_is_rejected(self):
+        """开仓挂单也不能改到会立即成交的一侧（否则静默变成市价单）。"""
+        _, book = self.make_book()
+        entry = self.submit_entry(book, 'open_long', 'limit', '99')
+        self.assert_order_error(
+            'invalid_limit_direction',
+            lambda: book.modify_order_price(entry.order_id, '101', T0, current_price='100'),
+        )
+        # 仍在安全一侧 → 正常改价
+        book.modify_order_price(entry.order_id, '98', T0, current_price='100')
+        self.assertEqual(entry.limit_price, Decimal('98'))
 
     def test_pending_order_never_fills_on_submission_bar(self):
         simulator, book = self.make_book()

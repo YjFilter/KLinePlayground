@@ -40,6 +40,8 @@ class CryptoDataService:
         end = utc_datetime(end)
         if start > end:
             raise ValueError("crypto data start must not be after end")
+        if source is not None and str(source).strip().lower() in ("auto", "none", ""):
+            source = None
         candidates = [item for item in self.sources if source is None or item.name == source]
         if not candidates:
             raise CryptoDataUnavailable(f"unknown crypto source: {source}")
@@ -67,6 +69,8 @@ class CryptoDataService:
         end = utc_datetime(end)
         if start > end:
             raise ValueError("crypto data start must not be after end")
+        if source is not None and str(source).strip().lower() in ("auto", "none", ""):
+            source = None
         candidates = [item for item in self.sources if source is None or item.name == source]
         if not candidates:
             raise CryptoDataUnavailable(f"unknown crypto source: {source}")

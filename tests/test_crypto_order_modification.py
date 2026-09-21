@@ -202,6 +202,42 @@ class CryptoOrderModificationTests(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["order"]["limit_price"], 58500)
 
+        # 6. 保护单拖到现价另一侧 → 自动改判类型，避免拖过界后下一根 K 线立刻成交
+        #    （MockExecutor 只实现了改单路径，这里直接在建仓于 order_book 上；
+        #      setUp 的模拟器已设杠杆 10，存在挂单时不能再改杠杆）
+        self.order_book.submit_order(
+            action="open_long",
+            order_type="market",
+            timestamp=self.now,
+            current_price=Decimal("60000"),
+            margin=Decimal("100"),
+        )
+        self.order_book.simulator.last_mark_price = Decimal("60000")
+        stop = self.order_book.submit_order(
+            action="close",
+            order_type="breakout",
+            timestamp=self.now,
+            current_price=Decimal("60000"),
+            trigger_price=Decimal("58000"),
+        )
+
+        # 拖到现价上方 → 变成止盈限价单
+        res = client.put(f"/api/training/{training_id}/orders/{stop.order_id}", json={"price": 62000})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["order"]["order_type"], "limit")
+        self.assertEqual(res.get_json()["order"]["protection_type"], "tp")
+
+        # 拖到现价下方 → 变回止损突破单
+        res = client.put(f"/api/training/{training_id}/orders/{stop.order_id}", json={"price": 57000})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()["order"]["order_type"], "breakout")
+        self.assertEqual(res.get_json()["order"]["protection_type"], "sl")
+
+        # 拖到正好等于标记价 → 400（无法判断止盈还是止损）
+        res = client.put(f"/api/training/{training_id}/orders/{stop.order_id}", json={"price": 60000})
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertEqual(res.get_json()["code"], "invalid_limit_direction")
+
         # Clean up
         active_trainings.pop(training_id, None)
 
