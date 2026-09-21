@@ -1,5 +1,5 @@
 """
-K-Line Playground - 桌面端应用打包构建脚本 (PyInstaller)
+KLineStudio - 桌面端应用打包构建脚本 (PyInstaller)
 用于将应用编译并打包为独立的 Windows 桌面客户端目录与安装分发包。
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def build():
     print("=" * 66)
-    print("  开始打包 K-Line Playground Windows 桌面客户端...")
+    print("  开始打包 KLineStudio Windows 桌面客户端...")
     print("=" * 66)
 
     # 检查 PyInstaller
@@ -41,7 +41,7 @@ def build():
         "--noconfirm",
         "--onedir",
         "--windowed",
-        "--name", "KLinePlayground",
+        "--name", "KLineStudio",
         f"--icon={icon_path}",
         f"--add-data={PROJECT_ROOT / 'frontend'}{os.pathsep}frontend",
         f"--add-data={PROJECT_ROOT / 'data'}{os.pathsep}data",
@@ -57,7 +57,7 @@ def build():
     print(f"执行命令: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=str(PROJECT_ROOT), check=True)
 
-    exe_path = PROJECT_ROOT / "dist" / "KLinePlayground" / "KLinePlayground.exe"
+    exe_path = PROJECT_ROOT / "dist" / "KLineStudio" / "KLineStudio.exe"
     print("\n" + "=" * 66)
     print(f"  ★ 打包完成！")
     print(f"  ★ 可执行文件路径: {exe_path}")

@@ -1,4 +1,4 @@
-# KLinePlayground 📈
+# KLineStudio 📈
 ### 专业级 A 股 & 币圈永续合约 K 线复盘与实战交易模拟平台 (Desktop & Web)
 
 <p align="center">
@@ -13,7 +13,7 @@
 
 ## 🌟 项目简介
 
-**KLinePlayground** 是一款专为量化交易员、技术分析爱好者与个人投资者打造的**专业级、本地化 K 线复盘与裸 K 实战模拟训练平台**。
+**KLineStudio** 是一款专为量化交易员、技术分析爱好者与个人投资者打造的**专业级、本地化 K 线复盘与裸 K 实战模拟训练平台**。
 
 系统全面支持 **A 股实时看盘与历史复盘** 以及 **币圈 USDT 永续合约高精度拟真撮合**。交互与视觉深度对标 **AICoin** 与 **TradingView**，提供原生流畅的多周期无缝推演、图上拖拽挂单与止盈止损微调、全仓/逐仓高倍杠杆强平模拟、毫秒级 OHLC 极值磁吸画线分析、独立多副图自由分屏以及详尽的资金风控评测报告。
 
@@ -124,8 +124,8 @@
 
 ```powershell
 # 1. 克隆仓库
-git clone https://github.com/YjFilter/KLinePlayground.git
-cd KLinePlayground
+git clone https://github.com/YjFilter/KLineStudio.git
+cd KLineStudio
 
 # 2. 创建并激活 Python 虚拟环境
 python -m venv .venv
@@ -162,7 +162,7 @@ http://192.168.x.x:5000
 ## 📁 目录结构
 
 ```text
-KLinePlayground/
+KLineStudio/
 ├── backend/                       # 后端核心源码
 │   ├── app_enhanced.py            # 主 API 服务入口与应用编排
 │   ├── crypto/                    # 币圈永续合约引擎（回放、撮合、缓存、全仓强平计算）

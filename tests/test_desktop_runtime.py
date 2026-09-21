@@ -46,7 +46,7 @@ class DesktopRuntimeTest(unittest.TestCase):
         """Should return existing persistent storage directory."""
         path = get_desktop_storage_path()
         self.assertTrue(os.path.isdir(path))
-        self.assertIn('KLinePlayground', path)
+        self.assertIn('KLineStudio', path)
 
     def test_get_desktop_icon_path(self):
         """Should resolve a valid application icon."""

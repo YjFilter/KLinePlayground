@@ -38,9 +38,9 @@ def get_desktop_storage_path() -> str:
     """获取桌面端专用的 WebView2 用户数据持久化目录"""
     if sys.platform == 'win32':
         base_dir = os.environ.get('APPDATA', os.path.expanduser('~'))
-        storage_dir = os.path.join(base_dir, 'KLinePlayground', 'webview_storage')
+        storage_dir = os.path.join(base_dir, 'KLineStudio', 'webview_storage')
     else:
-        storage_dir = os.path.expanduser('~/.kline-playground/webview_storage')
+        storage_dir = os.path.expanduser('~/.kline-studio/webview_storage')
     os.makedirs(storage_dir, exist_ok=True)
     return storage_dir
 
@@ -118,7 +118,7 @@ def launch_desktop(
     host: str = '127.0.0.1',
     port: Optional[int] = None,
     debug: bool = False,
-    title: str = "K-Line Playground 复盘与看盘终端"
+    title: str = "KLineStudio - 专业级 K 线复盘与交易模拟平台"
 ):
     """启动桌面端窗口与后台服务"""
     import webview
@@ -132,7 +132,7 @@ def launch_desktop(
     if port is None and is_kline_server_healthy(host, 5000):
         app_url = f"http://{host}:5000"
         print("\n" + "=" * 66)
-        print(f"  ★ K-Line Playground 桌面端已连接至正在运行的本地服务！")
+        print(f"  ★ KLineStudio 桌面端已连接至正在运行的本地服务！")
         print(f"  ★ 服务地址: {app_url} (与 Web 浏览器共享同源及实时数据)")
         print(f"  ★ 数据持久化目录: {storage_path}")
         print("=" * 66 + "\n")
@@ -140,7 +140,7 @@ def launch_desktop(
         server_mgr = DesktopServerManager(host=host, port=port)
         app_url = server_mgr.start()
         print("\n" + "=" * 66)
-        print(f"  ★ K-Line Playground 桌面端已启动！")
+        print(f"  ★ KLineStudio 桌面端已启动！")
         print(f"  ★ 桌面原生窗口: 正在唤起 (WebView2 Chromium 内核)...")
         print(f"  ★ 本地 Web 访问链接: {app_url} (外部浏览器亦可同步访问)")
         print(f"  ★ 数据持久化目录: {storage_path}")

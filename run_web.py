@@ -1,5 +1,5 @@
 """
-K-Line Playground - Web 端便捷启动入口 (无桌面窗口，纯 Web 服务器)
+KLineStudio - Web 端便捷启动入口 (无桌面窗口，纯 Web 服务器)
 用法: python run_web.py [--port 5000] [--host 0.0.0.0]
 """
 import os
@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="K-Line Playground Web 服务启动器")
+    parser = argparse.ArgumentParser(description="KLineStudio Web 服务启动器")
     parser.add_argument("--port", type=int, default=5000, help="Web 服务监听端口（默认 5000）")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Web 服务监听地址（默认 0.0.0.0）")
     parser.add_argument("--debug", action="store_true", default=False, help="开启 Flask 调试模式")
@@ -26,7 +26,7 @@ def main():
     from backend.app_enhanced import app
 
     print("\n" + "=" * 66)
-    print(f"  ★ K-Line Playground Web 服务已启动！")
+    print(f"  ★ KLineStudio Web 服务已启动！")
     print(f"  ★ 本地访问地址:   http://127.0.0.1:{args.port}")
     if args.host == "0.0.0.0":
         print(f"  ★ 局域网访问地址: http://0.0.0.0:{args.port} (同一局域网设备可用)")

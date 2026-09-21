@@ -1,5 +1,5 @@
 """
-K-Line Playground - 统一启动入口
+KLineStudio - 统一启动入口
 支持桌面端应用与 Web 服务两种运行模式。
 
 使用方法:
@@ -25,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="K-Line Playground - 桌面端与 Web 端双模统一入口",
+        description="KLineStudio - 桌面端与 Web 端双模统一入口",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""示例:
   python main.py                 # 启动独立桌面客户端 (默认)

@@ -1,11 +1,11 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title KLinePlayground Launcher
+title KLineStudio Launcher
 cd /d "%~dp0"
 
 echo ========================================
-echo   KLinePlayground Local Launcher
+echo   KLineStudio Local Launcher
 echo ========================================
 echo.
 
