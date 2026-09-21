@@ -211,6 +211,12 @@ node --test tests/js/*.test.js
 
 ---
 
+## 🙏 致谢与开源传承 (Acknowledgments)
+
+本项目最初基于开源项目 [fat7/KLinePlayground](https://github.com/fat7/KLinePlayground)（原作者：[@fat7](https://github.com/fat7)）进行深度重构、功能扩展与生态演进。在此向原作者的开源探索与基础架构工作致以诚挚的敬意与感谢！
+
+---
+
 ## 📄 开源许可证 (License)
 
 本项目遵循 [MIT License](LICENSE) 开源许可证。
